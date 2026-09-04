@@ -41,7 +41,7 @@ export declare class MockProvider implements LLMProvider {
 /**
  * 本地 llama.cpp 模型的預設 HF URI 與 models 目錄
  */
-export declare const DEFAULT_LLAMACPP_MODEL_URI = "hf:Qwen/Qwen2.5-1.5B-Instruct-GGUF:qwen2.5-1.5b-instruct-q4_k_m.gguf";
+export declare const DEFAULT_LLAMACPP_MODEL_URI = "hf:Qwen/Qwen3-4B-GGUF:Qwen3-4B-Q4_K_M.gguf";
 /** 預設 models 目錄：專案根目錄下的 models 資料夾 */
 export declare function getDefaultModelsDir(): string;
 /**

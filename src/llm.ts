@@ -6,7 +6,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { getLlama, LlamaChatSession, resolveModelFile } from 'node-llama-cpp';
+import { getLlama, LlamaChatSession, QwenChatWrapper, resolveModelFile } from 'node-llama-cpp';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -115,7 +115,7 @@ export class MockProvider implements LLMProvider {
  * 本地 llama.cpp 模型的預設 HF URI 與 models 目錄
  */
 export const DEFAULT_LLAMACPP_MODEL_URI =
-  'hf:Qwen/Qwen2.5-1.5B-Instruct-GGUF:qwen2.5-1.5b-instruct-q4_k_m.gguf';
+  'hf:Qwen/Qwen3-4B-GGUF:Qwen3-4B-Q4_K_M.gguf';
 
 /** 預設 models 目錄：專案根目錄下的 models 資料夾 */
 export function getDefaultModelsDir(): string {
@@ -176,6 +176,8 @@ export class LlamaCppProvider implements LLMProvider {
         const context = await model.createContext();
         const session = new LlamaChatSession({
           contextSequence: context.getSequence(),
+          // Qwen3 需明確指定 chat wrapper，auto 偵測可能失敗導致空輸出
+          chatWrapper: new QwenChatWrapper({ variation: '3', thoughts: 'discourage' }),
         });
         this.session = session;
         return session;
