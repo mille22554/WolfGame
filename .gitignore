@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# 本地 LLM 模型檔（首次啟動下載，不進 git）
+models/
+
 # opencode local config
 .opencode/
 
