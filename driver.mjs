@@ -7,12 +7,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const { createProvider, MockProvider, ensureModelDownloaded, DEFAULT_LLAMACPP_MODEL_URI, getDefaultModelsDir } = await import('./dist/llm.js');
-const { runDiscussion, runVoting, runNight } = await import('./dist/driver.js');
+const { runDiscussion, runVoting, runNight, runGame } = await import('./dist/driver.js');
 const gameStateMod = await import('./dist/game-state.js');
 const { loadState, initGame, startDay, processNight, processVotes } = gameStateMod;
 
 function usage() {
-  console.error('用法：node driver.mjs <discuss|vote|night|mock-test|model>');
+  console.error('用法：node driver.mjs <discuss|vote|night|mock-test|model|play [playerCount]>');
   process.exit(1);
 }
 
@@ -132,6 +132,19 @@ try {
       } else {
         console.log(`✅ 下載完成：${modelPath}`);
       }
+      break;
+    }
+    case 'play': {
+      // 一鍵跑完整局：從初始化一路自動進行到分出勝負
+      const rawCount = process.argv[3] ?? '9';
+      const playerCount = parseInt(rawCount, 10);
+      if (!Number.isInteger(playerCount) || playerCount < 6 || playerCount > 15) {
+        console.error(`玩家人數必須是 6-15，輸入為：${rawCount}`);
+        process.exit(1);
+      }
+      const provider = await createProvider();
+      await runGame(provider, playerCount, { verbose: true });
+      console.log('🏁 遊戲結束');
       break;
     }
     default:

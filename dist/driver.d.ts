@@ -20,4 +20,15 @@ export declare function runVoting(gameState: GameState, provider: LLMProvider): 
  * 夜間行動：狼（第一個存活狼）、預言家、守衛各自決策，組出 GMNightActions
  */
 export declare function runNight(gameState: GameState, provider: LLMProvider): Promise<GMNightActions>;
+export interface RunGameOptions {
+    /** 最多進行天數（防無限迴圈），預設 100 */
+    maxDays?: number;
+    /** 是否印出每步摘要，預設 false */
+    verbose?: boolean;
+}
+/**
+ * 一鍵跑完整局：從初始化一路自動進行到分出勝負
+ * GM（裁判）不需 AI，規則由狀態機處理；AI 只用於玩家角色決策
+ */
+export declare function runGame(provider: LLMProvider, playerCount: number, options?: RunGameOptions): Promise<GameState>;
 //# sourceMappingURL=driver.d.ts.map
