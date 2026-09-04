@@ -80,8 +80,8 @@ export function hasBeenAccused(targetId, messages, _alivePlayers) {
     return false;
 }
 export function hasDefended(helperId, targetId, messages) {
-    const defendKeywords = ['被誤會', '講的沒問題', '大家冷靜', '只是表達方式不同', '別急著錘', '邏輯自洽', '護著', '護着', '只是發言少', '沉默不等於狼', '別都衝'];
-    const defendRe = /被誤會|講的沒問題|大家冷靜|只是表達方式不同|別急著錘|邏輯自洽|護著|護着|只是發言少|沉默不等於狼|別都衝/;
+    const defendKeywords = ['被誤會', '講的沒問題', '大家冷靜', '只是表達方式不同', '別急著錘', '邏輯自洽', '護著', '只是發言少', '沉默不等於狼', '別都衝'];
+    const defendRe = /被誤會|講的沒問題|大家冷靜|只是表達方式不同|別急著錘|邏輯自洽|護著|只是發言少|沉默不等於狼|別都衝/;
     for (const m of messages) {
         if (m.playerId !== helperId)
             continue;
@@ -95,8 +95,8 @@ export function hasDefended(helperId, targetId, messages) {
             for (const kw of defendKeywords)
                 if (ctx.includes(kw))
                     return true;
-            if (/幫[^P]{0,6}拖時間|幫[^P]{0,6}打掩護|護著|護着|拖時間|打掩護/.test(ctx))
-                if (ctx.includes('拖時間') || ctx.includes('打掩護') || ctx.includes('護著') || ctx.includes('護着') || ctx.includes('幫'))
+            if (/幫[^P]{0,6}拖時間|幫[^P]{0,6}打掩護|護著|拖時間|打掩護/.test(ctx))
+                if (ctx.includes('拖時間') || ctx.includes('打掩護') || ctx.includes('護著') || ctx.includes('幫'))
                     return true;
         }
     }
@@ -144,10 +144,10 @@ export function hasStatedOn(targetId, XId, messages) {
             const idx = match.index, len = match[0].length;
             const before6 = msg.slice(Math.max(0, idx - 8), idx);
             const after8 = msg.slice(idx + len, Math.min(msg.length, idx + len + 8));
-            if ((before6.includes('沒對') || before6.includes('还没对')) && after8.includes('表過態'))
+            if ((before6.includes('沒對') || before6.includes('還沒對')) && after8.includes('表過態'))
                 continue;
-            if (/沒對\s*$/.test(before6) || /還沒對\s*$/.test(before6) || /没对\s*$/.test(before6))
-                if (after8.trim().startsWith('表過態') || after8.includes('表过态'))
+            if (/沒對\s*$/.test(before6) || /還沒對\s*$/.test(before6))
+                if (after8.trim().startsWith('表過態') || after8.includes('表過態'))
                     continue;
             if (/^\s*你\b/.test(msg.slice(idx + len, Math.min(msg.length, idx + len + 10)))) {
                 let hasDirect = false;
