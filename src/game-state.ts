@@ -10,11 +10,11 @@ import {
 import { assignRoles, createPlayers, getAlivePlayers, getAliveWerewolves, getAliveVillagers } from './assignment.js';
 import { resolveNightActions, getMediumInfoAtDawn, formatNightResult, formatSeerResult, formatGuardResult, formatMediumResult } from './night.js';
 import { checkWinCondition, formatDayStart, formatVotingResultPublic, formatVotingResultForMedium, formatDiscussionPrompt, getGameStatus } from './day.js';
-import { pickRandom } from './utils.js';
+import { pickRandom, getProjectRoot } from './utils.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
-const STATE_FILE = path.join(process.cwd(), 'game-state.json');
+const STATE_FILE = path.join(getProjectRoot(), 'game-state.json');
 
 export interface GMNightActions {
   seerCheck?: number;      // target player ID

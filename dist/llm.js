@@ -6,6 +6,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { getLlama, LlamaChatSession, QwenChatWrapper, resolveModelFile } from 'node-llama-cpp';
+import { getProjectRoot } from './utils.js';
 const DEFAULT_BASE_URL = 'http://localhost:3001/v1';
 const DEFAULT_MODEL = 'gemini-3.6-flash';
 /**
@@ -86,7 +87,7 @@ export class MockProvider {
 export const DEFAULT_LLAMACPP_MODEL_URI = 'hf:Qwen/Qwen3-4B-GGUF:Qwen3-4B-Q4_K_M.gguf';
 /** 預設 models 目錄：專案根目錄下的 models 資料夾 */
 export function getDefaultModelsDir() {
-    return path.join(process.cwd(), 'models');
+    return path.join(getProjectRoot(), 'models');
 }
 /**
  * 確保本地模型已下載（首次啟動下載，之後離線可用）

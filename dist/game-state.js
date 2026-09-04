@@ -6,9 +6,10 @@ import { Role, Phase, NightActionType, } from './types.js';
 import { createPlayers, getAlivePlayers, getAliveWerewolves } from './assignment.js';
 import { resolveNightActions, getMediumInfoAtDawn, formatMediumResult } from './night.js';
 import { checkWinCondition } from './day.js';
+import { getProjectRoot } from './utils.js';
 import * as fs from 'fs';
 import * as path from 'path';
-const STATE_FILE = path.join(process.cwd(), 'game-state.json');
+const STATE_FILE = path.join(getProjectRoot(), 'game-state.json');
 /**
  * Initialize a new game
  */

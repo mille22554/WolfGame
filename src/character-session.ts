@@ -18,6 +18,7 @@ import {
   buildPrivateKnowledge,
 } from './ai.js';
 import { getAlivePlayers } from './assignment.js';
+import { getProjectRoot } from './utils.js';
 import { LLMProvider, ChatMessage } from './llm.js';
 
 function readTextIfExists(filePath: string): string {
@@ -51,8 +52,8 @@ export class CharacterSession {
 
     // 人格 prompt 與私有記憶：只讀自己的檔案
     const personaId = player.personality?.id ?? `p${playerId}`;
-    const agentsPath = path.join(process.cwd(), 'character', personaId, 'agents.md');
-    const memoryPath = path.join(process.cwd(), 'character', personaId, 'memory.md');
+    const agentsPath = path.join(getProjectRoot(), 'character', personaId, 'agents.md');
+    const memoryPath = path.join(getProjectRoot(), 'character', personaId, 'memory.md');
     const personaPrompt = readTextIfExists(agentsPath);
     const privateMemory = readTextIfExists(memoryPath);
 

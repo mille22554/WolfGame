@@ -7,6 +7,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { getLlama, LlamaChatSession, QwenChatWrapper, resolveModelFile } from 'node-llama-cpp';
+import { getProjectRoot } from './utils.js';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -119,7 +120,7 @@ export const DEFAULT_LLAMACPP_MODEL_URI =
 
 /** 預設 models 目錄：專案根目錄下的 models 資料夾 */
 export function getDefaultModelsDir(): string {
-  return path.join(process.cwd(), 'models');
+  return path.join(getProjectRoot(), 'models');
 }
 
 /**

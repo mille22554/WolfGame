@@ -2,6 +2,11 @@
  * Utility Functions
  */
 /**
+ * 專案根目錄：以模組自身位置（src/ 或 dist/ 的上一層）定位，
+ * 而非 process.cwd()，避免從其他目錄執行時找不到資源
+ */
+export declare function getProjectRoot(): string;
+/**
  * Fisher-Yates shuffle
  */
 export declare function shuffleArray<T>(array: T[]): T[];

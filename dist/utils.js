@@ -2,6 +2,17 @@
  * Utility Functions
  */
 import * as readline from 'readline';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+/**
+ * 專案根目錄：以模組自身位置（src/ 或 dist/ 的上一層）定位，
+ * 而非 process.cwd()，避免從其他目錄執行時找不到資源
+ */
+export function getProjectRoot() {
+    return path.resolve(__dirname, '..');
+}
 /**
  * Fisher-Yates shuffle
  */
