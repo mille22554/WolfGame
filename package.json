@@ -1,0 +1,21 @@
+{
+  "name": "werewolf-game",
+  "version": "1.0.0",
+  "description": "人狼遊戲 - Text-based Werewolf simulation",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test dist/**/*.test.js"
+  },
+  "keywords": [
+    "werewolf",
+    "game",
+    "simulation"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^26.4.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}

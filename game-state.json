@@ -1,0 +1,14 @@
+{
+  "players": [],
+  "day": 0,
+  "phase": "setup",
+  "nightActions": [],
+  "votes": [],
+  "deathHistory": [],
+  "discussionLog": [],
+  "masonChatLog": [],
+  "gameOver": false,
+  "wolfKillTarget": null,
+  "seerCheckTarget": null,
+  "seerCheckResult": null
+}

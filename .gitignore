@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# opencode local config
+.opencode/
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# OS
+.DS_Store
+Thumbs.db
