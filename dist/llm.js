@@ -1,13 +1,11 @@
 /**
- * LLM Provider 抽象層
- * 支援 OpenAI 相容端點、測試用 Mock 與本地 llama.cpp 模型
+ * LLM Provider 抽象層（Phase 3 拆分後：無 node-llama-cpp）
+ * 支援 OpenAI 相容端點、測試用 Mock；本地 llama.cpp 相關已移至 llamacpp.ts
  * OpenAI 分支使用 Node 內建 fetch，不引入新依賴
  */
-import * as fs from 'fs';
 import * as path from 'path';
-import { getLlama, LlamaChatSession, QwenChatWrapper, resolveModelFile } from 'node-llama-cpp';
-import { getProjectRoot } from './utils.js';
-const DEFAULT_BASE_URL = 'http://localhost:3001/v1';
+import { getDataDir } from './utils.js';
+const DEFAULT_BASE_URL = 'http://localhost:2064/v1';
 const DEFAULT_MODEL = 'gemini-3.6-flash';
 /**
  * OpenAI 相容 Provider（預設指向本地代理 http://localhost:3001/v1）
@@ -69,126 +67,46 @@ export class MockProvider {
     async chat(messages, _config) {
         const lastUser = [...messages].reverse().find((m) => m.role === 'user');
         const text = lastUser?.content ?? '';
-        const m = text.match(/P(\d+)/);
-        const n = m ? m[1] : '1';
+        const m = text.match(/你是 P(\d+)/) ?? text.match(/P(\d+)/);
+        const n = m ? parseInt(m[1], 10) : 1;
         if (text.includes('投票')) {
-            return `P${n}：「我投 P${n}。」`;
+            return `P${n}：「我投 P${pickTarget(text, n)}。」`;
         }
         // 夜間行動提示使用「今晚」，同時相容「夜晚」
         if (text.includes('夜晚') || text.includes('今晚') || text.includes('殺害') || text.includes('查驗') || text.includes('守護') || text.includes('選擇')) {
-            return `P${n}：「我選擇 P${n}。」`;
+            return `P${n}：「我選擇 P${pickTarget(text, n)}。」`;
         }
         return `P${n}：「我認為 P${n} 值得注意。」`;
     }
+}
+/** 從 prompt 的「存活玩家：P1、P2…」選出非自己的最小編號（避免夜間/投票自選被拒） */
+function pickTarget(prompt, selfId) {
+    const ids = [];
+    const aliveMatch = prompt.match(/存活玩家：([^；\n]+)/);
+    const source = aliveMatch ? aliveMatch[1] : prompt;
+    for (const mm of source.matchAll(/P(\d+)/g)) {
+        const id = parseInt(mm[1], 10);
+        if (id !== selfId && !ids.includes(id))
+            ids.push(id);
+    }
+    if (ids.length > 0)
+        return ids.sort((a, b) => a - b)[0];
+    return selfId === 1 ? 2 : 1;
 }
 /**
  * 本地 llama.cpp 模型的預設 HF URI 與 models 目錄
  */
 export const DEFAULT_LLAMACPP_MODEL_URI = 'hf:Qwen/Qwen3-4B-GGUF:Qwen3-4B-Q4_K_M.gguf';
-/** 預設 models 目錄：專案根目錄下的 models 資料夾 */
+/** 語意化別名（llama-server 模式也用） */
+export const DEFAULT_MODEL_URI = DEFAULT_LLAMACPP_MODEL_URI;
+/** 預設 models 目錄：可寫資料目錄下的 models 資料夾 */
 export function getDefaultModelsDir() {
-    return path.join(getProjectRoot(), 'models');
-}
-/**
- * 確保本地模型已下載（首次啟動下載，之後離線可用）
- * 若模型檔已存在於 modelsDir，resolveModelFile 會直接回傳路徑而不下載
- * @returns 解析後的 modelPath（.gguf 絕對路徑）
- */
-export async function ensureModelDownloaded(modelUri, modelsDir, onProgress) {
-    // 若 models 目錄不存在則先建立
-    if (!fs.existsSync(modelsDir)) {
-        fs.mkdirSync(modelsDir, { recursive: true });
-    }
-    try {
-        const modelPath = await resolveModelFile(modelUri, {
-            directory: modelsDir,
-            cli: false, // 關閉內建 CLI 進度條，改用自訂 onProgress
-            onProgress: onProgress
-                ? (status) => {
-                    onProgress(status.downloadedSize, status.totalSize);
-                }
-                : undefined,
-        });
-        return modelPath;
-    }
-    catch (err) {
-        throw new Error(`本地模型下載失敗（${modelUri}）：${err instanceof Error ? err.message : String(err)}`);
-    }
-}
-/**
- * 本地 llama.cpp Provider：使用專案內建 GGUF 模型，離線可用
- * 惰性初始化：首次 chat 時才載入模型，之後重用同一個 session
- */
-export class LlamaCppProvider {
-    modelPath;
-    name = 'llamacpp';
-    session = null;
-    initPromise = null;
-    /** @param modelPath 已下載的 .gguf 檔案絕對路徑 */
-    constructor(modelPath) {
-        this.modelPath = modelPath;
-    }
-    /** 首次呼叫時初始化 llama 引擎並建立 chat session，之後重用 */
-    getOrCreateSession() {
-        if (this.session)
-            return Promise.resolve(this.session);
-        if (this.initPromise)
-            return this.initPromise;
-        this.initPromise = (async () => {
-            try {
-                const llama = await getLlama();
-                const model = await llama.loadModel({ modelPath: this.modelPath });
-                const context = await model.createContext({
-                    contextSize: Number(process.env.LLM_CONTEXT_SIZE ?? 8192),
-                });
-                const session = new LlamaChatSession({
-                    contextSequence: context.getSequence(),
-                    // Qwen3 需明確指定 chat wrapper，auto 偵測可能失敗導致空輸出
-                    chatWrapper: new QwenChatWrapper({ variation: '3', thoughts: 'discourage' }),
-                });
-                this.session = session;
-                return session;
-            }
-            catch (err) {
-                this.initPromise = null;
-                throw new Error(`本地模型載入失敗（${this.modelPath}）：${err instanceof Error ? err.message : String(err)}`);
-            }
-        })();
-        return this.initPromise;
-    }
-    async chat(messages, config) {
-        const session = await this.getOrCreateSession();
-        // 將 messages（含 system/user/assistant）依序拼接成單一文字 prompt，
-        // system 開頭，user/assistant 交替，確保 system prompt 有被納入
-        const prompt = messages
-            .map((m) => {
-            if (m.role === 'system')
-                return `系統：${m.content}`;
-            if (m.role === 'assistant')
-                return `助理：${m.content}`;
-            return `使用者：${m.content}`;
-        })
-            .join('\n\n');
-        try {
-            const answer = await session.prompt(prompt, {
-                temperature: config?.temperature,
-                maxTokens: config?.maxTokens,
-            });
-            const text = answer.trim();
-            if (text === '') {
-                throw new Error('模型回傳空字串');
-            }
-            return text;
-        }
-        catch (err) {
-            throw new Error(`本地模型推理失敗：${err instanceof Error ? err.message : String(err)}`);
-        }
-    }
+    return path.join(getDataDir(), 'models');
 }
 /**
  * 工廠：讀環境變數決定使用哪個 Provider
  * - LLM_PROVIDER='mock' → MockProvider
- * - LLM_PROVIDER='llamacpp' → LlamaCppProvider（自動下載本地模型）
+ * - LLM_PROVIDER='llamacpp' → LlamaCppProvider（動態 import，自動下載本地模型）
  * - 其餘（含未設定）→ OpenAICompatibleProvider
  */
 export async function createProvider() {
@@ -196,6 +114,7 @@ export async function createProvider() {
         return new MockProvider();
     }
     if (process.env.LLM_PROVIDER === 'llamacpp') {
+        const { ensureModelDownloaded, LlamaCppProvider } = await import('./llamacpp.js');
         const modelUri = process.env.LLM_MODEL_URI ?? DEFAULT_LLAMACPP_MODEL_URI;
         const modelsDir = process.env.LLM_MODELS_DIR ?? getDefaultModelsDir();
         const modelPath = await ensureModelDownloaded(modelUri, modelsDir);

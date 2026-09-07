@@ -1,0 +1,11 @@
+{
+  "pkg": {
+    "targets": ["node18-win-x64"],
+    "outputPath": "dist-pkg",
+    "assets": [
+      "public/**/*",
+      "character/**/*",
+      "package.json"
+    ]
+  }
+}

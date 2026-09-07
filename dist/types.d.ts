@@ -443,6 +443,7 @@ export type ServerToClientMessage = {
 } | {
     type: 'MODEL_STATUS';
     state: 'downloading' | 'ready' | 'error';
+    stage?: 'llama-server' | 'model';
     downloaded?: number;
     total?: number;
     error?: string;

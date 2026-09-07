@@ -4,6 +4,9 @@ node_modules/
 # 本地 LLM 模型檔（首次啟動下載，不進 git）
 models/
 
+# exe 打包產物（npm run build:pkg 可重建）
+dist-pkg/
+
 # opencode local config
 .opencode/
 

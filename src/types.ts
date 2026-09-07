@@ -435,7 +435,7 @@ export type ServerToClientMessage =
   | { type: 'JOINED'; playerId: number; token: string }
   | { type: 'JOIN_REJECTED'; reason: string }
   | { type: 'ACTION_REJECTED'; reason: string }
-  | { type: 'MODEL_STATUS'; state: 'downloading' | 'ready' | 'error'; downloaded?: number; total?: number; error?: string }
+  | { type: 'MODEL_STATUS'; state: 'downloading' | 'ready' | 'error'; stage?: 'llama-server' | 'model'; downloaded?: number; total?: number; error?: string }
   | { type: 'PING' }
   | { type: 'SHUTDOWN' };
 

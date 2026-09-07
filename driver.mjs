@@ -7,7 +7,8 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const { createProvider, MockProvider, ensureModelDownloaded, DEFAULT_LLAMACPP_MODEL_URI, getDefaultModelsDir } = await import('./dist/llm.js');
+const { createProvider, MockProvider } = await import('./dist/llm.js');
+const { ensureModelDownloaded, DEFAULT_LLAMACPP_MODEL_URI, getDefaultModelsDir } = await import('./dist/llamacpp.js');
 
 function usage() {
   console.error('用法：node driver.mjs <discuss|vote|night|mock-test|model|play [playerCount]>');

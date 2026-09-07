@@ -8,20 +8,39 @@
 import * as http from 'http';
 import * as net from 'net';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { exec } from 'child_process';
-import { pathToFileURL } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { GameEngine } from './engine.js';
 import { SpeechScheduler } from './ai-scheduler.js';
 import { WorkerDispatcher } from './worker-dispatcher.js';
 import { createGameState, buildGMSnapshot, buildPlayerSnapshot, buildSpectatorSnapshot, buildLobbySnapshot, } from './game-state.js';
-import { ensureModelDownloaded, DEFAULT_LLAMACPP_MODEL_URI, getDefaultModelsDir, } from './llm.js';
+import { DEFAULT_LLAMACPP_MODEL_URI, getDefaultModelsDir, OpenAICompatibleProvider, } from './llm.js';
+import { downloadModelFile } from './model-download.js';
+import { LlamaServerManager, ensureLlamaServer, getDefaultBinDir, DEFAULT_LLAMA_SERVER_RELEASE, DEFAULT_LLAMA_SERVER_PORT, DEFAULT_LLAMA_SERVER_HOST, } from './llama-server.js';
+import { OpenAICompatibleDispatcher, MockDispatcher } from './llm-dispatcher.js';
 import { getResourceRoot } from './utils.js';
 function envInt(name, fallback) {
     const v = Number(process.env[name]);
     return Number.isFinite(v) ? v : fallback;
+}
+function envBool(name, fallback) {
+    const v = process.env[name];
+    if (v === undefined)
+        return fallback;
+    return v !== '0' && v.toLowerCase() !== 'false' && v !== '';
+}
+export function resolveProviderMode() {
+    const v = process.env.LLM_PROVIDER;
+    if (v === 'mock')
+        return 'mock';
+    if (v === 'llamacpp')
+        return 'llamacpp';
+    if (v === 'openai')
+        return 'openai';
+    return 'llama-server'; // 預設（含未設定）
 }
 // ============================================
 // 模型檢查
@@ -458,10 +477,13 @@ export async function startServer(options = {}) {
     const publicDir = options.publicDir ?? path.join(getResourceRoot(), 'public');
     const modelsDir = options.modelsDir ?? process.env.LLM_MODELS_DIR ?? getDefaultModelsDir();
     const modelUri = options.modelUri ?? process.env.LLM_MODEL_URI ?? DEFAULT_LLAMACPP_MODEL_URI;
-    const shouldOpenBrowser = options.openBrowser ?? true;
+    const shouldOpenBrowser = options.openBrowser ?? envBool('OPEN_BROWSER', true);
     const exitProcess = options.exitProcess ?? true;
     const speechesPerDay = options.speechesPerDay ?? 6;
-    const isMock = process.env.LLM_PROVIDER === 'mock';
+    const mode = resolveProviderMode();
+    const isMock = mode === 'mock';
+    const llamaServerHost = options.llamaServerHost ?? process.env.LLAMA_SERVER_HOST ?? DEFAULT_LLAMA_SERVER_HOST;
+    const llamaServerPort = options.llamaServerPort ?? envInt('LLAMA_SERVER_PORT', DEFAULT_LLAMA_SERVER_PORT);
     let modelReady = isMock || isModelDownloaded(modelUri, modelsDir);
     let modelPath = isMock ? 'mock' : resolveModelPath(modelUri, modelsDir);
     const httpServer = http.createServer((req, res) => {
@@ -490,6 +512,7 @@ export async function startServer(options = {}) {
     let engine = null;
     let scheduler = null;
     let dispatcher = null;
+    let llamaServer = null; // doShutdown 用
     let autoCloseTimer = null;
     let shut = false;
     async function doShutdown(reason) {
@@ -509,6 +532,12 @@ export async function startServer(options = {}) {
         if (dispatcher) {
             try {
                 await dispatcher.shutdown();
+            }
+            catch { /* ignore */ }
+        }
+        if (llamaServer) {
+            try {
+                await llamaServer.stop();
             }
             catch { /* ignore */ }
         }
@@ -619,7 +648,7 @@ export async function startServer(options = {}) {
     };
     process.on('SIGINT', onSignal);
     process.on('SIGTERM', onSignal);
-    const port = portOpt === 0 ? await findAvailablePort(3000) : portOpt;
+    const port = portOpt === 0 ? await findAvailablePort(2063) : portOpt;
     await new Promise((resolve, reject) => {
         httpServer.once('error', reject);
         httpServer.listen(port, () => resolve());
@@ -632,44 +661,125 @@ export async function startServer(options = {}) {
         shutdown: (reason) => shutdownFn(reason),
         closed,
     };
-    // ---- 模型下載流程 ----
+    // ---- 模型下載流程（依 mode 切換）----
     if (!modelReady) {
         console.log(`[server] 模型未下載，背景下載中：${modelUri}`);
         if (shouldOpenBrowser)
             openBrowser(`${url}/download.html`);
         try {
-            modelPath = await ensureModelDownloaded(modelUri, modelsDir, (downloaded, total) => {
-                broadcast({ type: 'MODEL_STATUS', state: 'downloading', downloaded, total });
-            });
+            if (mode === 'llamacpp') {
+                const { ensureModelDownloaded } = await import('./llamacpp.js');
+                modelPath = await ensureModelDownloaded(modelUri, modelsDir, (downloaded, total) => {
+                    broadcast({ type: 'MODEL_STATUS', state: 'downloading', stage: 'model', downloaded, total });
+                });
+            }
+            else {
+                modelPath = await downloadModelFile(modelUri, modelsDir, (downloaded, total) => {
+                    broadcast({ type: 'MODEL_STATUS', state: 'downloading', stage: 'model', downloaded, total });
+                });
+            }
             modelReady = true;
-            broadcast({ type: 'MODEL_STATUS', state: 'ready' });
+            broadcast({ type: 'MODEL_STATUS', state: 'ready', stage: 'model' });
         }
         catch (err) {
             const error = err instanceof Error ? err.message : String(err);
-            broadcast({ type: 'MODEL_STATUS', state: 'error', error });
+            broadcast({ type: 'MODEL_STATUS', state: 'error', stage: 'model', error });
             console.error(`[server] 模型下載失敗：${error}`);
             return handle;
         }
     }
     else {
-        broadcast({ type: 'MODEL_STATUS', state: 'ready' });
+        broadcast({ type: 'MODEL_STATUS', state: 'ready', stage: 'model' });
     }
-    // ---- 啟動 LLM + 遊戲 ----
-    const factory = options.dispatcherFactory
-        ?? ((mp) => new WorkerDispatcher({ modelPath: mp }));
-    dispatcher = factory(modelPath);
+    // ---- 啟動 LLM + 遊戲（依 mode 切換）----
+    if (options.dispatcherFactory) {
+        dispatcher = options.dispatcherFactory(modelPath); // 測試 hook：跳過 sidecar
+    }
+    else if (mode === 'llama-server') {
+        // 階段宣告：讓 download.html 得知 llama-server 階段開始（即使 binary 已快取無需下載），
+        // 兩階段皆 ready 才跳轉（見 download.js）
+        broadcast({ type: 'MODEL_STATUS', state: 'downloading', stage: 'llama-server', downloaded: 0, total: 0 });
+        // 1. 確保 llama-server.exe
+        let binPath;
+        try {
+            binPath = options.llamaServerBinPath
+                ?? await ensureLlamaServer({
+                    binDir: options.llamaServerBinDir ?? process.env.LLAMA_SERVER_BIN_DIR ?? getDefaultBinDir(),
+                    release: options.llamaServerRelease ?? process.env.LLAMA_SERVER_RELEASE ?? DEFAULT_LLAMA_SERVER_RELEASE,
+                    onProgress: (downloaded, total) => broadcast({ type: 'MODEL_STATUS', state: 'downloading', stage: 'llama-server', downloaded, total }),
+                });
+        }
+        catch (err) {
+            const error = err instanceof Error ? err.message : String(err);
+            broadcast({ type: 'MODEL_STATUS', state: 'error', stage: 'llama-server', error });
+            console.error(`[server] llama-server 準備失敗：${error}`);
+            return handle;
+        }
+        // 2. 啟動 sidecar
+        llamaServer = new LlamaServerManager({
+            binPath,
+            modelPath,
+            port: llamaServerPort,
+            host: llamaServerHost,
+            ctxSize: options.llamaServerCtxSize ?? envInt('LLAMA_SERVER_CTX_SIZE', 8192),
+            threads: options.llamaServerThreads ?? envInt('LLAMA_SERVER_THREADS', os.cpus().length),
+            parallel: options.llamaServerParallel ?? envInt('LLAMA_SERVER_PARALLEL', 1),
+            idleTimeout: options.llamaServerIdleTimeout ?? envInt('LLAMA_SERVER_IDLE_TIMEOUT', 600),
+            onStatus: (status, info) => {
+                if (status === 'ready')
+                    broadcast({ type: 'MODEL_STATUS', state: 'ready', stage: 'llama-server' });
+                if (status === 'crashed')
+                    broadcast({ type: 'MODEL_STATUS', state: 'error', stage: 'llama-server', error: info ?? 'llama-server crashed' });
+            },
+        });
+        try {
+            const { port } = await llamaServer.start();
+            dispatcher = new OpenAICompatibleDispatcher(new OpenAICompatibleProvider({ baseURL: `http://${llamaServerHost}:${port}/v1`, model: 'local' }));
+        }
+        catch (err) {
+            const error = err instanceof Error ? err.message : String(err);
+            broadcast({ type: 'MODEL_STATUS', state: 'error', stage: 'llama-server', error });
+            console.error(`[server] llama-server 啟動失敗：${error}`);
+            return handle;
+        }
+    }
+    else if (mode === 'llamacpp') {
+        // exe 內 worker.js 不存在於 snapshot → new Worker 會 throw；
+        // 包 try/catch 回報明確錯誤（不靜默失敗）
+        try {
+            dispatcher = new WorkerDispatcher({ modelPath });
+        }
+        catch (err) {
+            const error = err instanceof Error ? err.message : String(err);
+            broadcast({ type: 'MODEL_STATUS', state: 'error', stage: 'model',
+                error: `packaged build 不支援 llamacpp 模式：${error}` });
+            console.error(`[server] llamacpp 模式啟動失敗：${error}`);
+            return handle;
+        }
+    }
+    else if (mode === 'openai') {
+        dispatcher = new OpenAICompatibleDispatcher(new OpenAICompatibleProvider({
+            baseURL: process.env.LLM_BASE_URL, model: process.env.LLM_MODEL, apiKey: process.env.FREELLMAPI_API_KEY
+        }));
+    }
+    else { // mock
+        dispatcher = new MockDispatcher();
+    }
     try {
         await dispatcher.start();
     }
     catch (err) {
         const error = err instanceof Error ? err.message : String(err);
-        broadcast({ type: 'MODEL_STATUS', state: 'error', error });
+        broadcast({ type: 'MODEL_STATUS', state: 'error', stage: 'model', error });
         console.error(`[server] worker 啟動失敗：${error}`);
         return handle;
     }
     // scheduler 先建（ctx 閉包延遲取用 engine），再傳入 engine options
     scheduler = new SpeechScheduler({
-        enqueue: (e) => engine.enqueue(e),
+        enqueue: (e) => {
+            engine.enqueue(e);
+            engine.drain(); // AI_SPEECH_DONE 需立即處理，否則卡在 queue（討論永不推進）
+        },
         getState: () => engine.getState(),
         llm: dispatcher,
     });
@@ -703,7 +813,7 @@ export async function startServer(options = {}) {
         openBrowser(url);
     return handle;
 }
-async function main() {
+export async function main() {
     try {
         await startServer({});
     }
@@ -711,8 +821,5 @@ async function main() {
         console.error(`[server] 啟動失敗：${err instanceof Error ? err.message : String(err)}`);
         process.exit(1);
     }
-}
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-    void main();
 }
 //# sourceMappingURL=server.js.map

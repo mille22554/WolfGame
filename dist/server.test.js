@@ -230,4 +230,85 @@ test('ping 超時 → 連線被 terminate', async () => {
         await h.shutdown('test');
     }
 });
+test('llama-server 模式整合（fake binary + 假 gguf，不用 dispatcherFactory）', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    // fake healthy binary（node 腳本；LlamaServerManager 以 process.execPath 執行 .mjs）
+    const fakeDir = mkdtempSync(join(tmpdir(), 'srv-fake-'));
+    const fakeBin = join(fakeDir, 'fake-llama.mjs');
+    writeFileSync(fakeBin, `import http from 'node:http';
+const args = process.argv.slice(2);
+const pi = args.indexOf('--port');
+const port = pi >= 0 ? Number(args[pi + 1]) : 3001;
+const hi = args.indexOf('--host');
+const host = hi >= 0 ? args[hi + 1] : '127.0.0.1';
+http.createServer((req, res) => {
+  if (req.url === '/health') { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"status":"ok"}'); }
+  else { res.writeHead(404); res.end(); }
+}).listen(port, host);
+`);
+    // modelsDir 含假 .gguf（isModelDownloaded 任一 .gguf 即視為已下載，跳過下載）
+    const modelsDir = mkdtempSync(join(tmpdir(), 'srv-models-'));
+    writeFileSync(join(modelsDir, 'fake.gguf'), 'gguf');
+    // sidecar 用獨立 free port（避免撞 web server port；撞上會等滿 healthTimeout）
+    const { createServer } = await import('node:net');
+    const probeSrv = createServer();
+    await new Promise((resolve) => probeSrv.listen(0, () => resolve()));
+    const llamaPort = probeSrv.address().port;
+    await new Promise((resolve) => probeSrv.close(() => resolve()));
+    const prev = process.env.LLM_PROVIDER;
+    delete process.env.LLM_PROVIDER; // 預設即 llama-server 模式
+    let h = null;
+    try {
+        h = await startServer({
+            port: 0,
+            playerCount: 6,
+            openBrowser: false,
+            exitProcess: false,
+            speechesPerDay: 1000,
+            modelsDir,
+            llamaServerBinPath: fakeBin,
+            llamaServerPort: llamaPort,
+            // 不提供 dispatcherFactory → 走 sidecar + OpenAICompatibleDispatcher
+        });
+        // engine 已建立：WS 連線收到 LOBBY（座位全 empty）
+        const ws = new WebSocket(`ws://localhost:${h.port}`);
+        try {
+            const lobby = await new Promise((resolve, reject) => {
+                const timer = setTimeout(() => reject(new Error('等 LOBBY 逾時')), 8000);
+                ws.on('message', (data) => {
+                    try {
+                        const msg = JSON.parse(String(data));
+                        if (msg.type === 'PING') {
+                            ws.send(JSON.stringify({ type: 'PONG' }));
+                            return;
+                        }
+                        if (msg.type === 'LOBBY' && msg.lobby) {
+                            clearTimeout(timer);
+                            resolve(msg.lobby);
+                        }
+                    }
+                    catch { /* ignore */ }
+                });
+                ws.on('error', reject);
+            });
+            assert.equal(lobby.phase, 'SETUP_WAITING_JOIN');
+        }
+        finally {
+            ws.close();
+            await new Promise((r) => setTimeout(r, 50));
+        }
+    }
+    finally {
+        if (prev === undefined)
+            delete process.env.LLM_PROVIDER;
+        else
+            process.env.LLM_PROVIDER = prev;
+        if (h)
+            await h.shutdown('test');
+        rmSync(fakeDir, { recursive: true, force: true });
+        rmSync(modelsDir, { recursive: true, force: true });
+    }
+});
 //# sourceMappingURL=server.test.js.map

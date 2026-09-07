@@ -8,14 +8,22 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { fileURLToPath } from 'url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+/**
+ * 本模組所在目錄：
+ * - ESM（tsc dev）：import.meta.url
+ * - esbuild CJS bundle（pkg exe）：import.meta 為空，改用 CJS __dirname
+ *   （typeof 守衛避免 ESM 下 ReferenceError；此處不宣告同名區域變數以免遮蔽全域）
+ */
+const moduleDir: string = (() => {
+  if (typeof __dirname === 'string') return __dirname;
+  return path.dirname(fileURLToPath(import.meta.url));
+})();
 
 /**
  * 唯讀資源根（character/ 等唯讀資源讀取用；同舊 getProjectRoot）
  */
 export function getResourceRoot(): string {
-  return path.resolve(__dirname, '..');
+  return path.resolve(moduleDir, '..');
 }
 
 /**

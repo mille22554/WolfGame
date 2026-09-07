@@ -27,6 +27,15 @@ export interface ServerOptions {
     lobbyTimeoutMs?: number;
     exitProcess?: boolean;
     onShutdown?: (reason: string) => void;
+    llamaServerPort?: number;
+    llamaServerHost?: string;
+    llamaServerCtxSize?: number;
+    llamaServerThreads?: number;
+    llamaServerParallel?: number;
+    llamaServerIdleTimeout?: number;
+    llamaServerRelease?: string;
+    llamaServerBinDir?: string;
+    llamaServerBinPath?: string;
 }
 export interface ServerHandle {
     port: number;
@@ -34,6 +43,8 @@ export interface ServerHandle {
     shutdown(reason: string): Promise<void>;
     closed: Promise<string>;
 }
+export type ProviderMode = 'llama-server' | 'llamacpp' | 'mock' | 'openai';
+export declare function resolveProviderMode(): ProviderMode;
 /** 'hf:Qwen/Qwen3-4B-GGUF:Qwen3-4B-Q4_K_M.gguf' → 'Qwen3-4B-Q4_K_M.gguf' */
 export declare function modelFileName(modelUri: string): string;
 export declare function isModelDownloaded(modelUri: string, modelsDir: string): boolean;
@@ -110,4 +121,5 @@ export declare class WebSocketRegistry implements ClientRegistry {
     private pingCheck;
 }
 export declare function startServer(options?: ServerOptions): Promise<ServerHandle>;
+export declare function main(): Promise<void>;
 //# sourceMappingURL=server.d.ts.map

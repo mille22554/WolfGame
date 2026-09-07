@@ -5,13 +5,17 @@
  * - job 佇列與 pending map；崩潰時已送出的 job 重試（≤ maxRetries）
  * - 僅 INIT 前崩潰（未 READY）視為啟動失敗：start() reject，不自動重啟
  */
-import type { LLMDispatcher, GenerationConfig } from './types.js';
+import type { LLMDispatcher, GenerationConfig, WorkerJob } from './types.js';
 export interface WorkerDispatcherOptions {
     modelPath: string;
     contextSize?: number;
     contextCount?: number;
     maxRetries?: number;
 }
+export declare const KIND_DEFAULTS: Record<WorkerJob['kind'], {
+    temperature: number;
+    maxTokens: number;
+}>;
 /** 取文字中最後一個 P{編號}；無 → throw */
 export declare function parseTargetId(text: string): number;
 export declare class WorkerDispatcher implements LLMDispatcher {
