@@ -1,8 +1,9 @@
 /**
- * Game Master CLI — 供 GM 在 opencode 對話中呼叫
- * 所有對話和決策由 GM（AI）在外部處理，此 CLI 只負責狀態管理
+ * Game Master CLI — Phase 0：GameEngine 的 CLI 包裝
+ * 用法：node dist/gm.js <init|join|state|start-day|night|speak|vote|mason-chat|reveal>
  */
-import { initGame, loadState, saveState, getStateSnapshot, startDay, processNight, addMessage, processVotes, revealRoles, } from './game-state.js';
+import { GameEngine } from './engine.js';
+import { createGameState, loadState, buildGMSnapshot, getNightActors, } from './game-state.js';
 import { Role } from './types.js';
 const args = process.argv.slice(2);
 const command = args[0];
@@ -13,95 +14,177 @@ function error(msg) {
     console.error(JSON.stringify({ error: msg }));
     process.exit(1);
 }
+/** 載入存檔並接上 engine（mode: 'gm'） */
+function loadEngine() {
+    const state = loadState();
+    if (!state) {
+        error('No game state file found. Run "node dist/gm.js init <playerCount>" first.');
+        throw new Error('unreachable');
+    }
+    return new GameEngine({ mode: 'gm' }, state);
+}
+/** 推進佇列、存檔、輸出 GMSnapshot */
+function flush(engine, message) {
+    engine.drain();
+    engine.save();
+    const snapshot = buildGMSnapshot(engine.getState());
+    engine.close();
+    if (message)
+        output({ message, state: snapshot });
+    else
+        output(snapshot);
+}
 switch (command) {
     case 'init': {
-        const playerCount = parseInt(args[1]) || 9;
-        if (playerCount < 6 || playerCount > 15) {
-            error(`Player count must be 6-15, got ${playerCount}`);
+        const playerCount = parseInt(args[1] || '9', 10);
+        if (!Number.isInteger(playerCount) || playerCount < 6 || playerCount > 15) {
+            error(`Player count must be 6-15, got ${args[1]}`);
         }
-        const state = initGame(playerCount);
-        const snapshot = getStateSnapshot(state);
+        let humans = [];
+        if (args[2]) {
+            try {
+                humans = JSON.parse(args[2]);
+            }
+            catch {
+                error(`Invalid humanPlayerIndices JSON: ${args[2]}`);
+            }
+        }
+        const engine = new GameEngine({ mode: 'gm' }, createGameState(playerCount, humans));
+        engine.save();
+        const snapshot = buildGMSnapshot(engine.getState());
+        engine.close();
         output({ message: `Game initialized with ${playerCount} players`, state: snapshot });
+        break;
+    }
+    case 'join': {
+        const name = args[1];
+        if (!name)
+            error('Usage: gm.js join <name>');
+        const engine = loadEngine();
+        engine.enqueue({ type: 'CLIENT_JOIN', name });
+        flush(engine, `Player ${name} joined`);
         break;
     }
     case 'state': {
         const state = loadState();
-        const snapshot = getStateSnapshot(state);
-        output(snapshot);
+        if (!state)
+            error('No game state file found.');
+        output(buildGMSnapshot(state));
         break;
     }
     case 'start-day': {
-        const state = loadState();
-        startDay(state);
-        const snapshot = getStateSnapshot(state);
-        output({ message: `Day ${snapshot.day} started`, state: snapshot });
+        const engine = loadEngine();
+        engine.enqueue({ type: 'START_GAME' });
+        flush(engine, 'Game started');
         break;
     }
     case 'night': {
-        const state = loadState();
-        const actions = JSON.parse(args[1] || '{}');
-        const { nightResult, state: updatedState } = processNight(state, actions);
-        const snapshot = getStateSnapshot(updatedState);
-        output({ nightResult: {
-                killed: nightResult.killedPlayerId,
-                killBlocked: nightResult.killBlocked,
-                guarded: nightResult.guardedPlayerId,
-                seerCheck: nightResult.seerCheckTargetId,
-                seerResult: nightResult.seerCheckResult,
-            }, state: snapshot });
+        // night <playerId> <targetId>：依 getNightActors 驗證覆蓋；
+        // AI → AI_NIGHT_DONE，真人 → HUMAN_NIGHT_ACTION
+        const playerId = parseInt(args[1], 10);
+        const targetId = parseInt(args[2], 10);
+        if (!Number.isInteger(playerId) || !Number.isInteger(targetId)) {
+            error('Usage: gm.js night <playerId> <targetId>');
+        }
+        const engine = loadEngine();
+        const state = engine.getState();
+        const actors = getNightActors(state);
+        if (!actors.includes(playerId)) {
+            error(`P${playerId} is not a night actor tonight (actors: ${actors.join(', ') || 'none'})`);
+        }
+        const player = state.players.find((p) => p.id === playerId);
+        if (!player)
+            error(`Unknown player P${playerId}`);
+        if (player.controlledBy === 'ai') {
+            engine.enqueue({ type: 'AI_NIGHT_DONE', playerId, targetId });
+        }
+        else {
+            engine.enqueue({ type: 'HUMAN_NIGHT_ACTION', playerId, targetId });
+        }
+        flush(engine, `Night action recorded for P${playerId}`);
         break;
     }
     case 'speak': {
-        const state = loadState();
-        const playerId = parseInt(args[1]);
-        const message = args[2];
-        if (!playerId || !message) {
+        // speak <playerId> <message>：真人 → HUMAN_SPEAK；AI → AI_SPEECH_DONE（帶當前 boardVersion）
+        const playerId = parseInt(args[1], 10);
+        const message = args.slice(2).join(' ');
+        if (!Number.isInteger(playerId) || !message) {
             error('Usage: gm.js speak <playerId> <message>');
         }
-        addMessage(state, playerId, message);
-        output({ message: `Recorded message from P${playerId}` });
+        const engine = loadEngine();
+        const player = engine.getState().players.find((p) => p.id === playerId);
+        if (!player)
+            error(`Unknown player P${playerId}`);
+        if (player.controlledBy === 'human') {
+            engine.enqueue({ type: 'HUMAN_SPEAK', playerId, text: message });
+        }
+        else {
+            engine.enqueue({
+                type: 'AI_SPEECH_DONE',
+                playerId,
+                text: message,
+                boardVersion: engine.getState().boardVersion,
+            });
+        }
+        flush(engine, `Recorded message from P${playerId}`);
         break;
     }
     case 'vote': {
-        const state = loadState();
-        const votes = JSON.parse(args[1] || '[]');
-        const { eliminatedPlayerId, eliminatedPlayerRole, state: updatedState } = processVotes(state, votes);
-        const snapshot = getStateSnapshot(updatedState);
-        output({
-            eliminated: eliminatedPlayerId,
-            eliminatedRole: eliminatedPlayerRole,
-            state: snapshot,
-        });
+        // vote <playerId> <targetId>：先 enqueue CLOSE_DISCUSSION，
+        // 再依 controlledBy 分流 AI_VOTE_DONE / HUMAN_VOTE
+        // （真人另先 HUMAN_READY_VOTE 以通過 CLOSING；若 gate 未開，投票事件會被忽略）
+        const playerId = parseInt(args[1], 10);
+        const targetId = parseInt(args[2], 10);
+        if (!Number.isInteger(playerId) || !Number.isInteger(targetId)) {
+            error('Usage: gm.js vote <playerId> <targetId>');
+        }
+        const engine = loadEngine();
+        const player = engine.getState().players.find((p) => p.id === playerId);
+        if (!player)
+            error(`Unknown player P${playerId}`);
+        engine.enqueue({ type: 'CLOSE_DISCUSSION' });
+        if (player.controlledBy === 'human') {
+            engine.enqueue({ type: 'HUMAN_READY_VOTE', playerId });
+            engine.enqueue({ type: 'HUMAN_VOTE', playerId, targetId });
+        }
+        else {
+            engine.enqueue({ type: 'AI_VOTE_DONE', playerId, targetId });
+        }
+        flush(engine, `Vote recorded: P${playerId} -> P${targetId}`);
         break;
     }
     case 'mason-chat': {
-        const state = loadState();
-        const playerId = parseInt(args[1]);
-        const message = args[2];
-        if (!playerId || !message) {
+        const playerId = parseInt(args[1], 10);
+        const message = args.slice(2).join(' ');
+        if (!Number.isInteger(playerId) || !message) {
             error('Usage: gm.js mason-chat <playerId> <message>');
         }
-        const player = state.players.find(p => p.id === playerId);
+        const engine = loadEngine();
+        const player = engine.getState().players.find((p) => p.id === playerId);
         if (!player || player.role !== Role.MASON) {
             error(`P${playerId} is not a mason`);
         }
-        state.masonChatLog.push({
-            playerId,
-            playerName: player.name,
-            message,
-            night: state.day,
-        });
-        saveState(state);
-        output({ message: `Recorded mason chat from P${playerId}` });
+        engine.enqueue({ type: 'MASON_CHAT', playerId, text: message });
+        flush(engine, `Recorded mason chat from P${playerId}`);
         break;
     }
     case 'reveal': {
         const state = loadState();
-        const roles = revealRoles(state);
-        output({ roles, winner: state.winner });
+        if (!state)
+            error('No game state file found.');
+        output({
+            roles: state.players.map((p) => ({
+                id: p.id,
+                name: p.name,
+                role: p.role,
+                team: p.team,
+                alive: p.alive,
+            })),
+            winner: state.winner,
+        });
         break;
     }
     default:
-        error(`Unknown command: ${command}. Available: init, state, start-day, night, speak, vote, reveal`);
+        error(`Unknown command: ${command}. Available: init, join, state, start-day, night, speak, vote, mason-chat, reveal`);
 }
 //# sourceMappingURL=gm.js.map

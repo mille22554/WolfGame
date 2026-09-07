@@ -1,6 +1,6 @@
 /**
- * Game Master CLI — 供 GM 在 opencode 對話中呼叫
- * 所有對話和決策由 GM（AI）在外部處理，此 CLI 只負責狀態管理
+ * Game Master CLI — Phase 0：GameEngine 的 CLI 包裝
+ * 用法：node dist/gm.js <init|join|state|start-day|night|speak|vote|mason-chat|reveal>
  */
 export {};
 //# sourceMappingURL=gm.d.ts.map

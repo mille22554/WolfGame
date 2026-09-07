@@ -2,10 +2,20 @@
  * Utility Functions
  */
 /**
+ * 唯讀資源根（character/ 等唯讀資源讀取用；同舊 getProjectRoot）
+ */
+export declare function getResourceRoot(): string;
+/**
  * 專案根目錄：以模組自身位置（src/ 或 dist/ 的上一層）定位，
  * 而非 process.cwd()，避免從其他目錄執行時找不到資源
  */
 export declare function getProjectRoot(): string;
+/**
+ * 可寫資料目錄（存檔等寫入用）
+ * - pkg 環境（`process.pkg` 存在）：exe 旁 `data/`，探測可寫性；不可寫 → fallback `%APPDATA%/WerewolfGame`
+ * - dev 環境：專案根
+ */
+export declare function getDataDir(): string;
 /**
  * Fisher-Yates shuffle
  */

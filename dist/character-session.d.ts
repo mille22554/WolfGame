@@ -1,31 +1,15 @@
 /**
- * 角色 Session 管理器
- * 每個角色擁有獨立 session：人格 prompt + 私有記憶 + 公開知識 + 自己的私有知識
- * 資訊隔離：絕不載入其他角色的私有記憶、查驗結果或同盟資訊
+ * character-session.ts — Phase 0：buildPrompt 純函式 + summarizeDay + 截斷演算法
+ *
+ * 組裝順序：角色卡（persona/agents.md + memory.md）→ 遊戲規則 →
+ * 公開知識（buildPublicKnowledge）→ 私有知識（依角色）→ 當天討論 →
+ * 歷史摘要（daySummaries）→ 任務指令（依 kind）
  */
-import { GameState, NightAction } from './types.js';
-import { LLMProvider, ChatMessage } from './llm.js';
+import type { GameState } from './types.js';
+export type PromptKind = 'speech' | 'vote' | 'night';
+export declare function buildPrompt(state: GameState, playerId: number, kind: PromptKind, budget?: number): string;
 /**
- * 單一角色的獨立 LLM session
+ * summarizeDay：啟發式摘要 — top3 指控（被最多人點名）+ 投票結果
  */
-export declare class CharacterSession {
-    readonly playerId: number;
-    private readonly provider;
-    private readonly gameState;
-    private readonly player;
-    private readonly messages;
-    constructor(playerId: number, provider: LLMProvider, gameState: GameState);
-    /** 取得目前 session 的訊息（唯讀副本，除錯用） */
-    getMessages(): ChatMessage[];
-    /** 白天發言：回傳角色的發言文字 */
-    speak(): Promise<string>;
-    /** 白天投票：回傳目標玩家編號，解析失敗回傳 -1 */
-    vote(): Promise<number>;
-    /**
-     * 夜間行動：依角色回傳 NightAction，目標必須存活且非自己，否則回傳 null
-     */
-    nightAction(): Promise<NightAction | null>;
-    /** 夜間目標必須是存活且非自己的玩家 */
-    private isValidNightTarget;
-}
+export declare function summarizeDay(state: GameState, day: number): string;
 //# sourceMappingURL=character-session.d.ts.map

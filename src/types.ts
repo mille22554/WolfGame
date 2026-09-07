@@ -1,12 +1,75 @@
 /**
- * Werewolf Game Types
- * Core type definitions for the game engine
+ * Werewolf Game Types — Phase 0 事件驅動狀態機型別層
+ *
+ * - Role / Team / SeerResult / MediumResult / NightActionType / ROLE_CONFIG 等沿用現有定義
+ * - Phase 改為扁平 string union（10 值）；GameState / Player 改為事件驅動形狀
+ * - GameState 另含 night.ts 相容欄位（nightActions / wolfKillTarget / guardProtectedTarget /
+ *   seerCheckTarget / seerCheckResult）與 masonChatLog、expectedPlayerCount（規格缺口補位，見 game-state.ts）
  */
 
 import { Personality } from './personalities.js';
 
 // ============================================
-// Role Definitions
+// Schema
+// ============================================
+
+export const SCHEMA_VERSION = 2;
+
+// ============================================
+// Phase（扁平，10 值）
+// ============================================
+
+export type Phase =
+  | 'SETUP_WAITING_JOIN'      // 等待玩家加入
+  | 'SETUP_READY'             // 人數足夠，可開始
+  | 'NIGHT_COLLECTING'        // 夜晚，收集行動
+  | 'NIGHT_RESOLVING'         // 夜晚行動結算
+  | 'DAY_DISCUSSION_OPEN'     // 白天討論開放
+  | 'DAY_DISCUSSION_CLOSING'  // 討論收尾（準備投票）
+  | 'DAY_VOTING_COLLECTING'   // 收集投票
+  | 'DAY_VOTING_RESOLVING'    // 投票結算
+  | 'DAY_RESULT_ANNOUNCING'   // 公布處決結果
+  | 'GAME_OVER_FINAL';        // 遊戲結束
+
+// ============================================
+// GameEvent（union，19 事件；規格 §2.3 標 18 為誤數，實際列出 19 個）
+// ============================================
+
+export type GameEvent =
+  | { type: 'CLIENT_JOIN'; name: string }
+  | { type: 'CLIENT_LEAVE' }
+  | { type: 'START_GAME' }
+  | { type: 'HUMAN_SPEAK'; playerId: number; text: string }
+  | { type: 'HUMAN_SKIP'; playerId: number }
+  | { type: 'HUMAN_READY_VOTE'; playerId: number }
+  | { type: 'HUMAN_UNREADY_VOTE'; playerId: number }
+  | { type: 'HUMAN_VOTE'; playerId: number; targetId: number }
+  | { type: 'HUMAN_NIGHT_ACTION'; playerId: number; targetId: number }
+  | { type: 'AI_SPEECH_DONE'; playerId: number; text: string; boardVersion: number }
+  | { type: 'AI_VOTE_DONE'; playerId: number; targetId: number }
+  | { type: 'AI_NIGHT_DONE'; playerId: number; targetId: number }
+  | { type: 'MASON_CHAT'; playerId: number; text: string }
+  | { type: 'ACTION_TIMEOUT'; gateId: string }   // gate 級，無 playerId
+  | { type: 'DISCONNECT'; playerId: number }
+  | { type: 'CLOSE_DISCUSSION' }
+  | { type: 'RESOLVE_NIGHT' }    // 內部：NIGHT_RESOLVING 結算完成
+  | { type: 'RESOLVE_VOTES' }    // 內部：DAY_VOTING_RESOLVING 結算完成
+  | { type: 'ADVANCE_DAY' };     // 內部：進入下一天
+
+// ============================================
+// PendingGate
+// ============================================
+
+export interface PendingGate {
+  kind: 'night' | 'vote';
+  required: number[];   // 需要行動的 playerId
+  done: number[];       // 已完成行動的 playerId
+  timeoutMs: number;
+  deadline: number;     // engine 在 phase entry 時設定；transition 開 gate 時為 0
+}
+
+// ============================================
+// Role Definitions（沿用現有）
 // ============================================
 
 export enum Role {
@@ -24,21 +87,10 @@ export enum Team {
   WEREWOLF = 'werewolf',           // 人狼陣營
 }
 
-export enum Phase {
-  SETUP = 'setup',
-  NIGHT = 'night',
-  DAY_DISCUSSION = 'day_discussion',
-  DAY_VOTING = 'day_voting',
-  DAY_RESULT = 'day_result',
-  GAME_OVER = 'game_over',
-}
-
 export enum NightActionType {
   WOLF_KILL = 'wolf_kill',
   SEER_CHECK = 'seer_check',
   GUARD_PROTECT = 'guard_protect',
-  // Medium has no active action - receives info passively
-  // Masons have private chat (handled separately)
 }
 
 export enum SeerResult {
@@ -56,27 +108,24 @@ export enum MediumResult {
 // ============================================
 
 export interface Player {
-  id: number;                    // 1-based player number (P1, P2, ...)
-  name: string;                  // "P1", "P2", etc.
+  id: number;
+  name: string;
   role: Role;
   team: Team;
+  controlledBy: 'human' | 'ai';   // 取代 isHuman
+  personality: string;            // Personality id（character/<id>/ 目錄名）
   alive: boolean;
-  isHuman: boolean;              // true for human player, false for AI
-  // Night action choices (set during night, resolved at dawn)
-  nightAction?: NightAction;
-  // For seer: history of checks { targetId, result, day }
+  isMasonPartner?: boolean;
+  // --- night.ts 相容欄位（夜晚結算唯一來源所需，玩家級歷史） ---
   seerChecks?: SeerCheck[];
-  // For guard: history of protects { targetId, day }
   guardProtects?: GuardProtect[];
-  // For masons: partner player id
   masonPartnerId?: number;
-  personality?: Personality;  // 玩家的人格設定
 }
 
 export interface NightAction {
   type: NightActionType;
-  targetId: number;              // Target player ID
-  actorId: number;               // Acting player ID
+  targetId: number;
+  actorId: number;
 }
 
 export interface SeerCheck {
@@ -88,7 +137,7 @@ export interface SeerCheck {
 export interface GuardProtect {
   targetId: number;
   day: number;
-  success: boolean;              // Whether protection blocked a kill
+  success: boolean;
 }
 
 export interface Vote {
@@ -100,56 +149,107 @@ export interface Vote {
 export interface DeathRecord {
   playerId: number;
   day: number;
-  cause: 'vote' | 'wolf_kill';
-  // Role is NOT public - only medium learns vote deaths
-}
-
-// ============================================
-// Game State
-// ============================================
-
-export interface GameState {
-  // Core setup
-  players: Player[];
-  day: number;                   // Current day (1-indexed)
-  phase: Phase;
-  
-  // Night tracking
-  nightActions: NightAction[];   // Actions submitted this night
-  wolfKillTarget?: number;       // Resolved wolf kill target
-  guardProtectedTarget?: number; // Resolved guard protect target
-  seerCheckTarget?: number;      // Resolved seer check target
-  seerCheckResult?: SeerResult;  // Result of seer check
-  
-  // Day tracking
-  votes: Vote[];                 // Votes cast this day
-  eliminatedPlayerId?: number;   // Player eliminated by vote
-  eliminatedPlayerRole?: Role;   // Role of eliminated (only for medium/GM)
-  
-  // History
-  deathHistory: DeathRecord[];   // All deaths in order
-  discussionLog: DiscussionEntry[]; // Public discussion
-  masonChatLog: MasonChatEntry[];   // Private mason chat
-  
-  // Win state
-  winner?: Team;
-  gameOver: boolean;
+  cause: 'vote' | 'wolf_kill' | 'suicide';
 }
 
 export interface DiscussionEntry {
   playerId: number;
-  playerName: string;
-  message: string;
+  text: string;
   day: number;
-  phase: 'discussion' | 'voting' | 'result';
 }
 
 export interface MasonChatEntry {
   playerId: number;
-  playerName: string;
-  message: string;
-  night: number;
+  text: string;
+  day: number;
 }
+
+export interface GameState {
+  schemaVersion: number;          // = SCHEMA_VERSION
+  phase: Phase;
+  day: number;
+  players: Player[];
+  humanPlayerIndices: number[];
+  discussionLog: DiscussionEntry[];
+  votes: Vote[];
+  deathHistory: DeathRecord[];
+  seerChecks: { seerId: number; targetId: number; result: Team; day: number }[];
+  guardProtects: { guardId: number; targetId: number; day: number }[];
+  winner: Team | null;
+  gameOver: boolean;
+  boardVersion: number;           // 白板版本號
+  daySummaries: string[];         // 每天摘要（截斷用）
+  voteReady: number[];            // 已準備投票的真人
+  pendingGate: PendingGate | null;
+  // --- 規格缺口補位（transition 純函式內使用，持久化） ---
+  /** 大廳目標人數：CLIENT_JOIN 達標 → SETUP_READY 的依據 */
+  expectedPlayerCount: number;
+  /** 夜晚行動暫存（NIGHT_COLLECTING 收集 → NIGHT_RESOLVING 交 night.ts 結算） */
+  nightActions: NightAction[];
+  /** 共有者夜聊（MASON_CHAT 事件儲存，僅共有者 snapshot 可見） */
+  masonChatLog: MasonChatEntry[];
+  // --- night.ts 相容欄位（resolveNightActions 讀寫） ---
+  wolfKillTarget?: number;
+  guardProtectedTarget?: number;
+  seerCheckTarget?: number;
+  seerCheckResult?: SeerResult;
+}
+
+// ============================================
+// Snapshot 型別
+// ============================================
+
+export interface PlayerSnapshot {
+  phase: Phase;
+  day: number;
+  alivePlayers: { id: number; name: string }[];
+  deadPlayers: { id: number; name: string; cause: string; day: number }[];
+  nightResult: string | null;     // 昨晚結果（由 deathHistory 最後一筆 wolf_kill 推導）
+  discussionLog: { playerId: number; text: string }[];
+  votes: { voterId: number; targetId: number }[];
+  winner: Team | null;
+  gameOver: boolean;
+  you: {
+    role: Role;
+    team: Team;
+    seerChecks?: { targetId: number; result: Team; day: number }[];
+    guardProtects?: { targetId: number; day: number }[];
+    mediumResults?: { targetId: number; team: Team; day: number }[];  // 由 deathHistory 推導
+    masonPartnerId?: number;
+    masonChatLog?: { playerId: number; text: string }[];
+    wolfAllyIds?: number[];
+  };
+}
+
+export interface GMSnapshot {
+  phase: Phase;
+  day: number;
+  players: Player[];              // 完整，含 role/team/controlledBy
+  discussionLog: { playerId: number; text: string; day: number }[];
+  votes: { voterId: number; targetId: number; day: number }[];
+  deathHistory: { playerId: number; cause: string; day: number }[];
+  boardVersion: number;
+  pendingGate: PendingGate | null;
+  voteReady: number[];
+}
+
+// ============================================
+// TransitionResult / Effect
+// ============================================
+
+export interface TransitionResult {
+  state: GameState;
+  effects: Effect[];   // engine 執行的副作用
+  accepted: boolean;   // 事件是否被接受（例如版本不符的 AI_SPEECH_DONE 被丟棄）
+  reason?: string;     // 拒絕原因
+}
+
+export type Effect =
+  | { type: 'BROADCAST' }
+  | { type: 'SAVE' }
+  | { type: 'ARM_GATE'; gate: PendingGate }
+  | { type: 'DISPATCH_LLM'; playerId: number; kind: 'speech' | 'vote' | 'night' }
+  | { type: 'ENQUEUE'; event: GameEvent };
 
 // ============================================
 // Role Configuration (from rules)
@@ -189,18 +289,16 @@ export const ROLE_TEAM: Record<Role, Team> = {
 };
 
 export const ROLE_DISPLAY: Record<Role, string> = {
-  // 守衛即獵人/狩人（顯示為「獵人」以對應官方與截圖）
   [Role.VILLAGER]: '村民 🟢',
   [Role.SEER]: '占い師 🔮',
   [Role.MEDIUM]: '靈能者 👁️',
-  [Role.GUARD]: '獵人 🛡️', // 獵人（狩人/守衛）
+  [Role.GUARD]: '獵人 🛡️',
   [Role.MASON]: '共有者 🤝',
   [Role.WEREWOLF]: '人狼 🔴',
   [Role.MADMAN]: '狂人 🤡',
 };
 
 export const ROLE_DESCRIPTION: Record<Role, string> = {
-  // 守衛即獵人/狩人
   [Role.VILLAGER]: '無特殊能力，靠推理與投票找出人狼',
   [Role.SEER]: '每夜選一名存活玩家查驗，結果為「村人」或「人狼」（狂人顯示為村人）',
   [Role.MEDIUM]: '只能得知白天被投票出局者的身分（「村人」或「人狼」），夜間被殺者無法得知',
@@ -235,11 +333,12 @@ export function isWerewolfTeam(role: Role): boolean {
 }
 
 export function seerSeesAs(targetRole: Role): SeerResult {
-  // Seer sees Werewolf as Werewolf, everything else as Villager (including Madman, Mason)
   return targetRole === Role.WEREWOLF ? SeerResult.WEREWOLF : SeerResult.VILLAGER;
 }
 
 export function mediumSeesAs(targetRole: Role): MediumResult {
-  // Medium sees Werewolf as Werewolf, everything else as Villager (cannot distinguish Madman)
   return targetRole === Role.WEREWOLF ? MediumResult.WEREWOLF : MediumResult.VILLAGER;
 }
+
+// 保留 Personality 型別再匯出，供舊引用相容
+export type { Personality };

@@ -14,11 +14,6 @@ export interface VotingResult {
     tie: boolean;
 }
 /**
- * Conduct voting phase
- * All alive players vote for someone to eliminate
- */
-export declare function conductVoting(gameState: GameState, humanVoteTargetId?: number): VotingResult;
-/**
  * Format voting result for public announcement
  * IMPORTANT: Role of eliminated player is NOT revealed publicly
  * Only the medium learns it privately

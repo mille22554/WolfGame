@@ -5,17 +5,11 @@
 
 import {
   GameState,
-  Player,
   Role,
   Team,
-  Phase,
   Vote,
-  DeathRecord,
-  DiscussionEntry,
 } from './types.js';
-import { getAlivePlayers, getAliveVillagers, getAliveWerewolves, getRoleCounts } from './assignment.js';
-import { pickRandom, findPlayerById, getMajorityThreshold, countOccurrences, randomInt } from './utils.js';
-import { AIPlayer } from './ai.js';
+import { getAlivePlayers, getAliveVillagers, getAliveWerewolves } from './assignment.js';
 
 /**
  * Result of day voting
@@ -26,121 +20,6 @@ export interface VotingResult {
   voteCounts: Map<number, number>;  // targetId -> vote count
   votes: Vote[];
   tie: boolean;
-}
-
-/**
- * Conduct voting phase
- * All alive players vote for someone to eliminate
- */
-export function conductVoting(gameState: GameState, humanVoteTargetId?: number): VotingResult {
-  const alivePlayers = getAlivePlayers(gameState.players);
-  const currentDay = gameState.day;
-  const votes: Vote[] = [];
-  const voteCounts = new Map<number, number>();
-
-  // Each alive player votes
-  for (const voter of alivePlayers) {
-    let targetId: number;
-    
-    if (voter.isHuman && humanVoteTargetId !== undefined) {
-      targetId = humanVoteTargetId;
-    } else {
-      targetId = selectVoteTarget(voter, alivePlayers, gameState);
-    }
-    
-    const vote: Vote = {
-      voterId: voter.id,
-      targetId,
-      day: currentDay,
-    };
-    votes.push(vote);
-    gameState.votes.push(vote);
-    
-    voteCounts.set(targetId, (voteCounts.get(targetId) || 0) + 1);
-  }
-
-  // Find player with most votes
-  let maxVotes = 0;
-  let eliminatedPlayerId: number | undefined;
-  let tie = false;
-
-  for (const [targetId, count] of voteCounts) {
-    if (count > maxVotes) {
-      maxVotes = count;
-      eliminatedPlayerId = targetId;
-      tie = false;
-    } else if (count === maxVotes) {
-      tie = true;
-    }
-  }
-
-  // Handle tie - no elimination (or random among tied)
-  if (tie && eliminatedPlayerId) {
-    // Get all tied players
-    const tiedPlayers = Array.from(voteCounts.entries())
-      .filter(([, count]) => count === maxVotes)
-      .map(([id]) => id);
-    
-    // Random tiebreaker
-    eliminatedPlayerId = pickRandom(tiedPlayers);
-  }
-
-  const result: VotingResult = {
-    eliminatedPlayerId,
-    voteCounts,
-    votes,
-    tie,
-  };
-
-  // Process elimination
-  if (eliminatedPlayerId) {
-    const eliminated = findPlayerById(alivePlayers, eliminatedPlayerId);
-    if (eliminated) {
-      eliminated.alive = false;
-      result.eliminatedPlayerRole = eliminated.role;
-      gameState.eliminatedPlayerId = eliminatedPlayerId;
-      gameState.eliminatedPlayerRole = eliminated.role;
-
-      // Record death
-      const deathRecord: DeathRecord = {
-        playerId: eliminatedPlayerId,
-        day: currentDay,
-        cause: 'vote',
-      };
-      gameState.deathHistory.push(deathRecord);
-    }
-  }
-
-  return result;
-}
-
-/**
- * Select vote target for a player — 基於 AIPlayer.buildReasoningContext 的 suspectRanking[0]
- * 投票邏輯與討論中的推理一致，不再僅算被提及次數
- */
-function selectVoteTarget(voter: Player, alivePlayers: Player[], gameState: GameState): number {
-  const candidates = alivePlayers.filter(p => p.id !== voter.id);
-  if (candidates.length === 0) return voter.id;
-
-  try {
-    const ai = new AIPlayer(voter, gameState);
-    const reasoning = ai.getReasoningContext();
-    if (reasoning.suspectRanking.length > 0) {
-      const top = reasoning.suspectRanking[0];
-      if (candidates.some(c => c.id === top)) {
-        return top;
-      }
-      // 若 top 非法（如已死/非候選），退回排序中第一個合法
-      for (const id of reasoning.suspectRanking) {
-        if (candidates.some(c => c.id === id)) return id;
-      }
-    }
-  } catch {
-    // 推理失敗退回隨機
-  }
-
-  // 極端回退：隨機候選（理論上不應走到此分支）
-  return pickRandom(candidates).id;
 }
 
 /**

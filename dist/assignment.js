@@ -1,10 +1,84 @@
 /**
- * Role Assignment Logic
- * Assigns roles to players based on the player count table from rules
+ * Role Assignment Logic — Phase 0
+ * 角色分配演算法沿用現有（ROLE_CONFIG 表）
  */
 import { Role, ROLE_CONFIG, Team, ROLE_TEAM, getDisplayName, getDescription } from './types.js';
 import { shuffleArray } from './utils.js';
-import { assignPersonalities } from './personalities.js';
+import { personalities, assignPersonalities } from './personalities.js';
+/** 依序取 personality id（lobby 佔位用） */
+function personalityIdForSlot(slot) {
+    return personalities[slot % personalities.length].id;
+}
+/**
+ * 建立大廳佔位玩家：全部 VILLAGER + 依序 personality，
+ * controlledBy 依 humanPlayerIndices（缺口補位：humanPlayerIndices 為選填，預設全 ai）
+ */
+export function createLobbyPlayers(playerCount, humanPlayerIndices = []) {
+    if (playerCount < 6 || playerCount > 15) {
+        throw new Error(`Player count must be between 6 and 15, got ${playerCount}`);
+    }
+    const players = [];
+    for (let i = 0; i < playerCount; i++) {
+        const id = i + 1;
+        players.push({
+            id,
+            name: `P${id}`,
+            role: Role.VILLAGER,
+            team: Team.VILLAGE,
+            controlledBy: humanPlayerIndices.includes(i) ? 'human' : 'ai',
+            personality: personalityIdForSlot(i),
+            alive: true,
+            isMasonPartner: false,
+            seerChecks: [],
+            guardProtects: [],
+        });
+    }
+    return players;
+}
+/**
+ * START_GAME 時呼叫：覆寫 role/team/isMasonPartner（並配對 masonPartnerId）
+ * 角色分配演算法沿用現有 ROLE_CONFIG：
+ * 狼人 1–3（依人數）、占卜師 1、守衛 1、靈能者（8+ 人）、共有者（13+ 人）、狂人 1、其餘村民
+ */
+export function assignRolesToPlayers(state) {
+    const roles = assignRoles(state.players.length);
+    for (let i = 0; i < state.players.length; i++) {
+        const p = state.players[i];
+        p.role = roles[i];
+        p.team = ROLE_TEAM[roles[i]];
+        p.isMasonPartner = false;
+        p.masonPartnerId = undefined;
+        p.seerChecks = [];
+        p.guardProtects = [];
+    }
+    // 共有者配對（狼人以外的 2 人；現有配置僅 13+ 人局有 MASON）
+    const masons = state.players.filter((p) => p.role === Role.MASON);
+    if (masons.length === 2) {
+        masons[0].masonPartnerId = masons[1].id;
+        masons[1].masonPartnerId = masons[0].id;
+        masons[0].isMasonPartner = true;
+        masons[1].isMasonPartner = true;
+    }
+}
+/**
+ * 相容舊介面：直接建立含角色分配的玩家（測試用）
+ */
+export function createPlayers(playerCount, humanPlayerIndices = []) {
+    const players = createLobbyPlayers(playerCount, humanPlayerIndices);
+    const roles = assignRoles(playerCount);
+    for (let i = 0; i < players.length; i++) {
+        players[i].role = roles[i];
+        players[i].team = ROLE_TEAM[roles[i]];
+    }
+    const masons = players.filter((p) => p.role === Role.MASON);
+    if (masons.length === 2) {
+        masons[0].masonPartnerId = masons[1].id;
+        masons[1].masonPartnerId = masons[0].id;
+        masons[0].isMasonPartner = true;
+        masons[1].isMasonPartner = true;
+    }
+    return players;
+}
 /**
  * Assign roles to players based on player count
  * Returns array of roles (shuffled) for the given player count
@@ -18,52 +92,15 @@ export function assignRoles(playerCount) {
         throw new Error(`No role configuration for ${playerCount} players`);
     }
     const roles = [];
-    // Add roles according to config
     for (const [role, count] of Object.entries(config)) {
         for (let i = 0; i < count; i++) {
             roles.push(role);
         }
     }
-    // Verify total matches player count
     if (roles.length !== playerCount) {
         throw new Error(`Role assignment error: ${roles.length} roles for ${playerCount} players`);
     }
-    // Shuffle roles randomly
     return shuffleArray(roles);
-}
-/**
- * Create player objects with assigned roles
- */
-export function createPlayers(playerCount, humanPlayerIndex) {
-    const roles = assignRoles(playerCount);
-    const players = [];
-    for (let i = 0; i < playerCount; i++) {
-        const playerId = i + 1;
-        const role = roles[i];
-        const isHuman = humanPlayerIndex !== undefined && humanPlayerIndex === i;
-        players.push({
-            id: playerId,
-            name: `P${playerId}`,
-            role,
-            team: ROLE_TEAM[role],
-            alive: true,
-            isHuman,
-            seerChecks: [],
-            guardProtects: [],
-        });
-    }
-    // Set up mason partners
-    const masons = players.filter(p => p.role === Role.MASON);
-    if (masons.length === 2) {
-        masons[0].masonPartnerId = masons[1].id;
-        masons[1].masonPartnerId = masons[0].id;
-    }
-    // 分配人格
-    const assignedPersonalities = assignPersonalities(playerCount);
-    for (let i = 0; i < players.length; i++) {
-        players[i].personality = assignedPersonalities[i];
-    }
-    return players;
 }
 /**
  * Get role counts for display/debugging
@@ -79,7 +116,7 @@ export function getRoleCounts(players) {
  * Get alive players of a specific role
  */
 export function getAlivePlayers(players, role) {
-    return players.filter(p => p.alive && (!role || p.role === role));
+    return players.filter((p) => p.alive && (!role || p.role === role));
 }
 /**
  * Get alive werewolves
@@ -91,13 +128,12 @@ export function getAliveWerewolves(players) {
  * Get alive villagers (village team)
  */
 export function getAliveVillagers(players) {
-    return players.filter(p => p.alive && p.team === Team.VILLAGE);
+    return players.filter((p) => p.alive && p.team === Team.VILLAGE);
 }
 /**
- * Check if seer can check (alive and has not checked this night)
- * In this implementation, seer checks once per night
+ * Check if seer can check (alive)
  */
-export function canSeerAct(player, currentDay) {
+export function canSeerAct(player, _currentDay) {
     return player.alive && player.role === Role.SEER;
 }
 /**
@@ -112,7 +148,7 @@ export function canGuardAct(player, currentDay) {
 export function getSeerChecks(player) {
     if (!player.seerChecks)
         return [];
-    return player.seerChecks.map(c => ({
+    return player.seerChecks.map((c) => ({
         targetId: c.targetId,
         result: c.result,
         day: c.day,
@@ -124,7 +160,7 @@ export function getSeerChecks(player) {
 export function getGuardProtects(player) {
     if (!player.guardProtects)
         return [];
-    return player.guardProtects.map(p => ({
+    return player.guardProtects.map((p) => ({
         targetId: p.targetId,
         day: p.day,
         success: p.success,
@@ -146,14 +182,11 @@ export function formatRoleAssignment(players) {
 export function formatPlayerRoleInfo(player) {
     let info = `你的身分是：${getDisplayName(player.role)}\n`;
     info += `${getDescription(player.role)}\n`;
-    if (player.role === Role.WEREWOLF) {
-        const wolfAllies = getAlivePlayers([], // Will be filled by game engine
-        Role.WEREWOLF);
-        // This will be set by game engine with full player list
-    }
     if (player.role === Role.MASON && player.masonPartnerId) {
         info += `你的共有者夥伴是：P${player.masonPartnerId}\n`;
     }
     return info;
 }
+// 保留再匯出，供 Phase 1 沿用
+export { assignPersonalities };
 //# sourceMappingURL=assignment.js.map

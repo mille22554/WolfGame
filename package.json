@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "test": "node --test dist/**/*.test.js"
+    "test": "node --test --test-concurrency=1 ./dist/game-state.test.js ./dist/snapshot.test.js ./dist/character-session.test.js ./dist/engine.test.js"
   },
   "keywords": [
     "werewolf",

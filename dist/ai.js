@@ -4,7 +4,7 @@ import { pickRandom, findPlayerById, randomInt } from './utils.js';
 export function buildPublicKnowledge(gameState) {
     const alivePlayers = getAlivePlayers(gameState.players);
     const deadPlayers = gameState.players.filter(p => !p.alive);
-    return { day: gameState.day, phase: gameState.phase, alivePlayers: alivePlayers.map(p => ({ ...p, role: Role.VILLAGER })), deadPlayers: deadPlayers.map(p => ({ ...p, role: Role.VILLAGER })), voteHistory: gameState.votes, discussionLog: gameState.discussionLog, publicClaims: new Map(), publicSeerResults: new Map(), publicMediumResults: new Map(), publicGuardProtects: new Map() };
+    return { day: gameState.day, phase: gameState.phase, alivePlayers: alivePlayers.map(p => ({ id: p.id, name: p.name })), deadPlayers: deadPlayers.map(p => ({ id: p.id, name: p.name })), voteHistory: gameState.votes, discussionLog: gameState.discussionLog, publicClaims: new Map(), publicSeerResults: new Map(), publicMediumResults: new Map(), publicGuardProtects: new Map() };
 }
 export function buildPrivateKnowledge(player, gameState) {
     const k = { myRole: player.role, myTeam: player.team };
@@ -59,7 +59,7 @@ export function hasPointedAt(accuserId, targetId, messages, _alivePlayers) {
     for (const m of messages) {
         if (m.playerId !== accuserId)
             continue;
-        const msg = m.message;
+        const msg = m.text;
         const re = new RegExp(`P${targetId}\\b`, 'g');
         let match;
         while ((match = re.exec(msg)) !== null)
@@ -70,7 +70,7 @@ export function hasPointedAt(accuserId, targetId, messages, _alivePlayers) {
 }
 export function hasBeenAccused(targetId, messages, _alivePlayers) {
     for (const m of messages) {
-        const msg = m.message;
+        const msg = m.text;
         const re = new RegExp(`P${targetId}\\b`, 'g');
         let match;
         while ((match = re.exec(msg)) !== null)
@@ -85,9 +85,9 @@ export function hasDefended(helperId, targetId, messages) {
     for (const m of messages) {
         if (m.playerId !== helperId)
             continue;
-        if (!defendRe.test(m.message))
+        if (!defendRe.test(m.text))
             continue;
-        const msg = m.message;
+        const msg = m.text;
         const re = new RegExp(`P${targetId}\\b`, 'g');
         let match;
         while ((match = re.exec(msg)) !== null) {
@@ -105,7 +105,7 @@ export function hasDefended(helperId, targetId, messages) {
 export function hasSaidNeutral(id, messages) {
     const pat = /中立|我還在看|我暫時不站邊|先觀察一下|不站邊|還在看|暫時觀望/;
     for (const m of messages)
-        if (m.playerId === id && pat.test(m.message))
+        if (m.playerId === id && pat.test(m.text))
             return true;
     return false;
 }
@@ -113,7 +113,7 @@ export function hasStatedOn(targetId, XId, messages) {
     for (const m of messages) {
         if (m.playerId !== targetId)
             continue;
-        let msg = m.message.replace(/「[^」]*」/g, '');
+        let msg = m.text.replace(/「[^」]*」/g, '');
         if (/你剛才說/.test(msg) && new RegExp(`P${XId}\\b`).test(msg)) {
             const youIdx = msg.indexOf('你剛才說');
             const pIdx = msg.indexOf(`P${XId}`);
@@ -170,7 +170,7 @@ export function getVoteTargetOf(id, messages) {
         const m = messages[i];
         if (m.playerId !== id)
             continue;
-        const msg = m.message;
+        const msg = m.text;
         if (/你投|你票|你剛才說|你的票|你站邊|你先把票/.test(msg))
             continue;
         if (/不站邊|還沒站邊|暫時不站邊|不投|還沒投|先不投/.test(msg))
@@ -207,16 +207,16 @@ export function computeReasoningContext(player, gameState) {
     const mentionCountFor = (targetId) => { let cnt = 0; const re = /P(\d+)/g; for (const entry of todayLog) {
         let m;
         const copy = new RegExp(re.source, 'g');
-        while ((m = copy.exec(entry.message)) !== null) {
+        while ((m = copy.exec(entry.text)) !== null) {
             if (parseInt(m[1], 10) !== targetId)
                 continue;
-            if (!isAccusatoryContext(entry.message, m.index, m[0].length))
+            if (!isAccusatoryContext(entry.text, m.index, m[0].length))
                 continue;
             cnt++;
         }
     } return cnt; };
     const lastMentionIdx = (targetId) => { for (let i = todayLog.length - 1; i >= 0; i--)
-        if (parseAccusatoryIds(todayLog[i].message, alivePlayers).includes(targetId))
+        if (parseAccusatoryIds(todayLog[i].text, alivePlayers).includes(targetId))
             return i; return -1; };
     const lastSpeakIdx = (targetId) => { let idx = -1; for (let i = 0; i < todayLog.length; i++)
         if (todayLog[i].playerId === targetId)
@@ -365,7 +365,7 @@ export class AIPlayer {
             return null;
         const claimed = new Map();
         for (const e of this.gameState.discussionLog) {
-            const msg = e.message.toLowerCase();
+            const msg = e.text.toLowerCase();
             if (msg.includes('占い師') || msg.includes('seer') || msg.includes('查驗'))
                 claimed.set(e.playerId, Role.SEER);
             else if (msg.includes('靈能者') || msg.includes('medium') || msg.includes('票死'))
@@ -449,5 +449,5 @@ export class AIPlayer {
     masonVoteStrategy(cands) { return this.villagerVoteStrategy(cands); }
     madmanVoteStrategy(cands) { return pickRandom(cands).id; }
 }
-export function createAIPlayers(gameState) { return gameState.players.filter(p => p.alive && !p.isHuman).map(p => new AIPlayer(p, gameState)); }
+export function createAIPlayers(gameState) { return gameState.players.filter(p => p.alive && p.controlledBy === 'ai').map(p => new AIPlayer(p, gameState)); }
 //# sourceMappingURL=ai.js.map

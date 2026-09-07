@@ -1,9 +1,17 @@
 /**
- * Werewolf Game Types
- * Core type definitions for the game engine
+ * Werewolf Game Types — Phase 0 事件驅動狀態機型別層
+ *
+ * - Role / Team / SeerResult / MediumResult / NightActionType / ROLE_CONFIG 等沿用現有定義
+ * - Phase 改為扁平 string union（10 值）；GameState / Player 改為事件驅動形狀
+ * - GameState 另含 night.ts 相容欄位（nightActions / wolfKillTarget / guardProtectedTarget /
+ *   seerCheckTarget / seerCheckResult）與 masonChatLog、expectedPlayerCount（規格缺口補位，見 game-state.ts）
  */
 // ============================================
-// Role Definitions
+// Schema
+// ============================================
+export const SCHEMA_VERSION = 2;
+// ============================================
+// Role Definitions（沿用現有）
 // ============================================
 export var Role;
 (function (Role) {
@@ -20,22 +28,11 @@ export var Team;
     Team["VILLAGE"] = "village";
     Team["WEREWOLF"] = "werewolf";
 })(Team || (Team = {}));
-export var Phase;
-(function (Phase) {
-    Phase["SETUP"] = "setup";
-    Phase["NIGHT"] = "night";
-    Phase["DAY_DISCUSSION"] = "day_discussion";
-    Phase["DAY_VOTING"] = "day_voting";
-    Phase["DAY_RESULT"] = "day_result";
-    Phase["GAME_OVER"] = "game_over";
-})(Phase || (Phase = {}));
 export var NightActionType;
 (function (NightActionType) {
     NightActionType["WOLF_KILL"] = "wolf_kill";
     NightActionType["SEER_CHECK"] = "seer_check";
     NightActionType["GUARD_PROTECT"] = "guard_protect";
-    // Medium has no active action - receives info passively
-    // Masons have private chat (handled separately)
 })(NightActionType || (NightActionType = {}));
 export var SeerResult;
 (function (SeerResult) {
@@ -72,17 +69,15 @@ export const ROLE_TEAM = {
     [Role.MADMAN]: Team.VILLAGE, // Madman is human team but wins with wolves
 };
 export const ROLE_DISPLAY = {
-    // 守衛即獵人/狩人（顯示為「獵人」以對應官方與截圖）
     [Role.VILLAGER]: '村民 🟢',
     [Role.SEER]: '占い師 🔮',
     [Role.MEDIUM]: '靈能者 👁️',
-    [Role.GUARD]: '獵人 🛡️', // 獵人（狩人/守衛）
+    [Role.GUARD]: '獵人 🛡️',
     [Role.MASON]: '共有者 🤝',
     [Role.WEREWOLF]: '人狼 🔴',
     [Role.MADMAN]: '狂人 🤡',
 };
 export const ROLE_DESCRIPTION = {
-    // 守衛即獵人/狩人
     [Role.VILLAGER]: '無特殊能力，靠推理與投票找出人狼',
     [Role.SEER]: '每夜選一名存活玩家查驗，結果為「村人」或「人狼」（狂人顯示為村人）',
     [Role.MEDIUM]: '只能得知白天被投票出局者的身分（「村人」或「人狼」），夜間被殺者無法得知',
@@ -110,11 +105,9 @@ export function isWerewolfTeam(role) {
     return ROLE_TEAM[role] === Team.WEREWOLF;
 }
 export function seerSeesAs(targetRole) {
-    // Seer sees Werewolf as Werewolf, everything else as Villager (including Madman, Mason)
     return targetRole === Role.WEREWOLF ? SeerResult.WEREWOLF : SeerResult.VILLAGER;
 }
 export function mediumSeesAs(targetRole) {
-    // Medium sees Werewolf as Werewolf, everything else as Villager (cannot distinguish Madman)
     return targetRole === Role.WEREWOLF ? MediumResult.WEREWOLF : MediumResult.VILLAGER;
 }
 //# sourceMappingURL=types.js.map

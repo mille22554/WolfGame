@@ -2,8 +2,14 @@ import { GameState, Player, Role, Team, Phase, NightAction, SeerResult, Vote, Di
 export interface PublicKnowledge {
     day: number;
     phase: Phase;
-    alivePlayers: Player[];
-    deadPlayers: Player[];
+    alivePlayers: {
+        id: number;
+        name: string;
+    }[];
+    deadPlayers: {
+        id: number;
+        name: string;
+    }[];
     voteHistory: Vote[];
     discussionLog: DiscussionEntry[];
     publicClaims: Map<number, {

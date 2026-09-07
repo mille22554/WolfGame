@@ -138,7 +138,9 @@ export class LlamaCppProvider {
             try {
                 const llama = await getLlama();
                 const model = await llama.loadModel({ modelPath: this.modelPath });
-                const context = await model.createContext();
+                const context = await model.createContext({
+                    contextSize: Number(process.env.LLM_CONTEXT_SIZE ?? 8192),
+                });
                 const session = new LlamaChatSession({
                     contextSequence: context.getSequence(),
                     // Qwen3 需明確指定 chat wrapper，auto 偵測可能失敗導致空輸出

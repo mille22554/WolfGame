@@ -3,15 +3,52 @@
  */
 import * as readline from 'readline';
 import * as path from 'path';
+import * as fs from 'fs';
+import * as os from 'os';
 import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+/**
+ * 唯讀資源根（character/ 等唯讀資源讀取用；同舊 getProjectRoot）
+ */
+export function getResourceRoot() {
+    return path.resolve(__dirname, '..');
+}
 /**
  * 專案根目錄：以模組自身位置（src/ 或 dist/ 的上一層）定位，
  * 而非 process.cwd()，避免從其他目錄執行時找不到資源
  */
 export function getProjectRoot() {
-    return path.resolve(__dirname, '..');
+    return getResourceRoot();
+}
+/**
+ * 可寫資料目錄（存檔等寫入用）
+ * - pkg 環境（`process.pkg` 存在）：exe 旁 `data/`，探測可寫性；不可寫 → fallback `%APPDATA%/WerewolfGame`
+ * - dev 環境：專案根
+ */
+export function getDataDir() {
+    const procAny = process;
+    if (procAny.pkg !== undefined) {
+        const exeDir = path.dirname(process.execPath);
+        const dataDir = path.join(exeDir, 'data');
+        try {
+            fs.mkdirSync(dataDir, { recursive: true });
+            fs.accessSync(dataDir, fs.constants.W_OK);
+            return dataDir;
+        }
+        catch {
+            // fallback below
+        }
+        if (process.env.APPDATA) {
+            const fb = path.join(process.env.APPDATA, 'WerewolfGame');
+            fs.mkdirSync(fb, { recursive: true });
+            return fb;
+        }
+        const fb = path.join(os.homedir(), '.werewolf-game');
+        fs.mkdirSync(fb, { recursive: true });
+        return fb;
+    }
+    return getResourceRoot();
 }
 /**
  * Fisher-Yates shuffle

@@ -1,12 +1,12 @@
 import { GameState, Player, Role, Team, Phase, NightAction, NightActionType, SeerResult, Vote, DiscussionEntry } from './types.js';
 import { getAlivePlayers, getAliveWerewolves, canGuardAct } from './assignment.js';
 import { pickRandom, findPlayerById, randomInt } from './utils.js';
-export interface PublicKnowledge { day:number; phase:Phase; alivePlayers:Player[]; deadPlayers:Player[]; voteHistory:Vote[]; discussionLog:DiscussionEntry[]; publicClaims:Map<number,{role:Role;day:number}>; publicSeerResults:Map<number,{targetId:number;result:SeerResult;day:number}>; publicMediumResults:Map<number,{playerId:number;result:'villager'|'werewolf';day:number}>; publicGuardProtects:Map<number,{targetId:number;day:number;success:boolean}>; }
+export interface PublicKnowledge { day:number; phase:Phase; alivePlayers:{id:number;name:string}[]; deadPlayers:{id:number;name:string}[]; voteHistory:Vote[]; discussionLog:DiscussionEntry[]; publicClaims:Map<number,{role:Role;day:number}>; publicSeerResults:Map<number,{targetId:number;result:SeerResult;day:number}>; publicMediumResults:Map<number,{playerId:number;result:'villager'|'werewolf';day:number}>; publicGuardProtects:Map<number,{targetId:number;day:number;success:boolean}>; }
 export interface PrivateKnowledge { myRole:Role; myTeam:Team; mySeerChecks?:{targetId:number;result:SeerResult;day:number}[]; myGuardProtects?:{targetId:number;day:number;success:boolean}[]; masonPartnerId?:number; wolfAllyIds?:number[]; }
 export function buildPublicKnowledge(gameState:GameState):PublicKnowledge{
   const alivePlayers=getAlivePlayers(gameState.players);
   const deadPlayers=gameState.players.filter(p=>!p.alive);
-  return{day:gameState.day,phase:gameState.phase,alivePlayers:alivePlayers.map(p=>({...p,role:Role.VILLAGER} as Player)),deadPlayers:deadPlayers.map(p=>({...p,role:Role.VILLAGER} as Player)),voteHistory:gameState.votes,discussionLog:gameState.discussionLog,publicClaims:new Map(),publicSeerResults:new Map(),publicMediumResults:new Map(),publicGuardProtects:new Map()};
+  return{day:gameState.day,phase:gameState.phase,alivePlayers:alivePlayers.map(p=>({id:p.id,name:p.name})),deadPlayers:deadPlayers.map(p=>({id:p.id,name:p.name})),voteHistory:gameState.votes,discussionLog:gameState.discussionLog,publicClaims:new Map(),publicSeerResults:new Map(),publicMediumResults:new Map(),publicGuardProtects:new Map()};
 }
 export function buildPrivateKnowledge(player:Player,gameState:GameState):PrivateKnowledge{
   const k:PrivateKnowledge={myRole:player.role,myTeam:player.team};
@@ -36,28 +36,28 @@ export function cleanTarget(id:number|string):string{
 }
 export function hasSpoken(id:number,messages:DiscussionEntry[]):boolean{ return messages.some(m=>m.playerId===id); }
 export function hasPointedAt(accuserId:number,targetId:number,messages:DiscussionEntry[],_alivePlayers?:Player[]):boolean{
-  for(const m of messages){ if(m.playerId!==accuserId) continue; const msg=m.message; const re=new RegExp(`P${targetId}\\b`,'g'); let match:RegExpExecArray|null; while((match=re.exec(msg))!==null) if(isAccusatoryContext(msg,match.index,match[0].length)) return true; }
+  for(const m of messages){ if(m.playerId!==accuserId) continue; const msg=m.text; const re=new RegExp(`P${targetId}\\b`,'g'); let match:RegExpExecArray|null; while((match=re.exec(msg))!==null) if(isAccusatoryContext(msg,match.index,match[0].length)) return true; }
   return false;
 }
 export function hasBeenAccused(targetId:number,messages:DiscussionEntry[],_alivePlayers?:Player[]):boolean{
-  for(const m of messages){ const msg=m.message; const re=new RegExp(`P${targetId}\\b`,'g'); let match:RegExpExecArray|null; while((match=re.exec(msg))!==null) if(isAccusatoryContext(msg,match.index,match[0].length)) return true; }
+  for(const m of messages){ const msg=m.text; const re=new RegExp(`P${targetId}\\b`,'g'); let match:RegExpExecArray|null; while((match=re.exec(msg))!==null) if(isAccusatoryContext(msg,match.index,match[0].length)) return true; }
   return false;
 }
 export function hasDefended(helperId:number,targetId:number,messages:DiscussionEntry[]):boolean{
   const defendKeywords=['被誤會','講的沒問題','大家冷靜','只是表達方式不同','別急著錘','邏輯自洽','護著','只是發言少','沉默不等於狼','別都衝'] as const;
   const defendRe=/被誤會|講的沒問題|大家冷靜|只是表達方式不同|別急著錘|邏輯自洽|護著|只是發言少|沉默不等於狼|別都衝/;
-  for(const m of messages){ if(m.playerId!==helperId) continue; if(!defendRe.test(m.message)) continue; const msg=m.message; const re=new RegExp(`P${targetId}\\b`,'g'); let match; while((match=re.exec(msg))!==null){ const ctx=msg.slice(Math.max(0,match.index-10),Math.min(msg.length,match.index+match[0].length+10)); for(const kw of defendKeywords) if(ctx.includes(kw)) return true; if(/幫[^P]{0,6}拖時間|幫[^P]{0,6}打掩護|護著|拖時間|打掩護/.test(ctx)) if(ctx.includes('拖時間')||ctx.includes('打掩護')||ctx.includes('護著')||ctx.includes('幫')) return true; } }
+  for(const m of messages){ if(m.playerId!==helperId) continue; if(!defendRe.test(m.text)) continue; const msg=m.text; const re=new RegExp(`P${targetId}\\b`,'g'); let match; while((match=re.exec(msg))!==null){ const ctx=msg.slice(Math.max(0,match.index-10),Math.min(msg.length,match.index+match[0].length+10)); for(const kw of defendKeywords) if(ctx.includes(kw)) return true; if(/幫[^P]{0,6}拖時間|幫[^P]{0,6}打掩護|護著|拖時間|打掩護/.test(ctx)) if(ctx.includes('拖時間')||ctx.includes('打掩護')||ctx.includes('護著')||ctx.includes('幫')) return true; } }
   return false;
 }
 export function hasSaidNeutral(id:number,messages:DiscussionEntry[]):boolean{
   const pat=/中立|我還在看|我暫時不站邊|先觀察一下|不站邊|還在看|暫時觀望/;
-  for(const m of messages) if(m.playerId===id&&pat.test(m.message)) return true;
+  for(const m of messages) if(m.playerId===id&&pat.test(m.text)) return true;
   return false;
 }
 export function hasStatedOn(targetId:number,XId:number,messages:DiscussionEntry[]):boolean{
   for(const m of messages){
     if(m.playerId!==targetId) continue;
-    let msg=m.message.replace(/「[^」]*」/g,'');
+    let msg=m.text.replace(/「[^」]*」/g,'');
     if(/你剛才說/.test(msg)&&new RegExp(`P${XId}\\b`).test(msg)){
       const youIdx=msg.indexOf('你剛才說'); const pIdx=msg.indexOf(`P${XId}`);
       if(pIdx>youIdx&&pIdx-youIdx<20){ if(!/我投[^P]{0,6}P/.test(msg)&&!/我的票/.test(msg)&&!/我站邊/.test(msg)){ const withoutYou=msg.replace(/你[^P]{0,15}P\d+[^。！？]*[。！？]?/g,''); if(!new RegExp(`P${XId}\\b`).test(withoutYou)) continue; } }
@@ -80,7 +80,7 @@ export function hasStatedOn(targetId:number,XId:number,messages:DiscussionEntry[
   return false;
 }
 export function getVoteTargetOf(id:number,messages:DiscussionEntry[]):number|null{
-  for(let i=messages.length-1;i>=0;i--){ const m=messages[i]; if(m.playerId!==id) continue; const msg=m.message;
+  for(let i=messages.length-1;i>=0;i--){ const m=messages[i]; if(m.playerId!==id) continue; const msg=m.text;
     if(/你投|你票|你剛才說|你的票|你站邊|你先把票/.test(msg)) continue;
     if(/不站邊|還沒站邊|暫時不站邊|不投|還沒投|先不投/.test(msg)) continue;
     const re=/P(\d+)/g; let match:RegExpExecArray|null; let lastFound:number|null=null;
@@ -97,8 +97,8 @@ export function computeReasoningContext(player:Player,gameState:GameState):Reaso
   const candidates=alivePlayers.filter(p=>p.id!==player.id);
   if(candidates.length===0) return {suspectRanking:[],confidence:0,keyEvidence:'無候選'};
   const todayLog=gameState.discussionLog.filter(d=>d.day===gameState.day);
-  const mentionCountFor=(targetId:number):number=>{ let cnt=0; const re=/P(\d+)/g; for(const entry of todayLog){ let m:RegExpExecArray|null; const copy=new RegExp(re.source,'g'); while((m=copy.exec(entry.message))!==null){ if(parseInt(m[1],10)!==targetId) continue; if(!isAccusatoryContext(entry.message,m.index,m[0].length)) continue; cnt++; } } return cnt; };
-  const lastMentionIdx=(targetId:number):number=>{ for(let i=todayLog.length-1;i>=0;i--) if(parseAccusatoryIds(todayLog[i].message,alivePlayers).includes(targetId)) return i; return -1; };
+  const mentionCountFor=(targetId:number):number=>{ let cnt=0; const re=/P(\d+)/g; for(const entry of todayLog){ let m:RegExpExecArray|null; const copy=new RegExp(re.source,'g'); while((m=copy.exec(entry.text))!==null){ if(parseInt(m[1],10)!==targetId) continue; if(!isAccusatoryContext(entry.text,m.index,m[0].length)) continue; cnt++; } } return cnt; };
+  const lastMentionIdx=(targetId:number):number=>{ for(let i=todayLog.length-1;i>=0;i--) if(parseAccusatoryIds(todayLog[i].text,alivePlayers).includes(targetId)) return i; return -1; };
   const lastSpeakIdx=(targetId:number):number=>{ let idx=-1; for(let i=0;i<todayLog.length;i++) if(todayLog[i].playerId===targetId) idx=i; return idx; };
   const speakCountFor=(targetId:number):number=>{ let c=0; for(const e of todayLog) if(e.playerId===targetId) c++; return c; };
   const isWolf=player.role===Role.WEREWOLF;
@@ -170,7 +170,7 @@ export class AIPlayer{
     const alive=getAlivePlayers(this.gameState.players); const candidates=alive.filter(p=>p.id!==this.player.id);
     if(candidates.length===0) return null;
     const claimed=new Map<number,Role>();
-    for(const e of this.gameState.discussionLog){ const msg=e.message.toLowerCase(); if(msg.includes('占い師')||msg.includes('seer')||msg.includes('查驗')) claimed.set(e.playerId,Role.SEER); else if(msg.includes('靈能者')||msg.includes('medium')||msg.includes('票死')) claimed.set(e.playerId,Role.MEDIUM); else if(msg.includes('守衛')||msg.includes('guard')||msg.includes('守護')) claimed.set(e.playerId,Role.GUARD); }
+    for(const e of this.gameState.discussionLog){ const msg=e.text.toLowerCase(); if(msg.includes('占い師')||msg.includes('seer')||msg.includes('查驗')) claimed.set(e.playerId,Role.SEER); else if(msg.includes('靈能者')||msg.includes('medium')||msg.includes('票死')) claimed.set(e.playerId,Role.MEDIUM); else if(msg.includes('守衛')||msg.includes('guard')||msg.includes('守護')) claimed.set(e.playerId,Role.GUARD); }
     const seers=Array.from(claimed.entries()).filter(([,r])=>r===Role.SEER).map(([id])=>id).filter(id=>candidates.some(c=>c.id===id));
     if(seers.length>0) return {type:NightActionType.GUARD_PROTECT,targetId:pickRandom(seers),actorId:this.player.id};
     const specials=Array.from(claimed.entries()).filter(([,r])=>r===Role.MEDIUM||r===Role.GUARD).map(([id])=>id).filter(id=>candidates.some(c=>c.id===id));
@@ -213,4 +213,4 @@ export class AIPlayer{
   private masonVoteStrategy(cands:Player[]):number{ return this.villagerVoteStrategy(cands); }
   private madmanVoteStrategy(cands:Player[]):number{ return pickRandom(cands).id; }
 }
-export function createAIPlayers(gameState:GameState):AIPlayer[]{ return gameState.players.filter(p=>p.alive&&!p.isHuman).map(p=>new AIPlayer(p,gameState)); }
+export function createAIPlayers(gameState:GameState):AIPlayer[]{ return gameState.players.filter(p=>p.alive&&p.controlledBy==='ai').map(p=>new AIPlayer(p,gameState)); }
