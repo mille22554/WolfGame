@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "test": "node --test --test-concurrency=1 ./dist/game-state.test.js ./dist/snapshot.test.js ./dist/character-session.test.js ./dist/engine.test.js"
+    "start": "node dist/server.js",
+    "test": "node --test --test-concurrency=1 ./dist/game-state.test.js ./dist/snapshot.test.js ./dist/character-session.test.js ./dist/engine.test.js ./dist/worker.test.js ./dist/ai-scheduler.test.js ./dist/server.test.js ./dist/full-game.test.js"
   },
   "keywords": [
     "werewolf",
@@ -19,6 +20,8 @@
     "typescript": "^5.0.0"
   },
   "dependencies": {
-    "node-llama-cpp": "^3.20.0"
+    "@types/ws": "^8.18.1",
+    "node-llama-cpp": "^3.20.0",
+    "ws": "^8.21.3"
   }
 }
