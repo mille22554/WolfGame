@@ -400,4 +400,57 @@ test('onPhaseEntered 非討論 phase → 取消管線回 IDLE', async () => {
   }
 });
 
+// ---------- Phase 2：全真人跳過 → 立即管線 ----------
+
+function mixedDiscussionState(): GameState {
+  const s = createGameState(9);
+  transition(s, { type: 'HUMAN_JOIN', playerId: 3, name: 'H1' });
+  transition(s, { type: 'HUMAN_JOIN', playerId: 7, name: 'H2' });
+  for (let id = 1; id <= 9; id++) {
+    if (!s.players.some((p) => p.id === id)) transition(s, { type: 'AI_JOIN', playerId: id });
+  }
+  transition(s, { type: 'START_GAME' });
+  const keep = [3, 7];
+  const alive = s.players.filter((p) => p.alive).map((p) => p.id);
+  for (const pid of getNightActors(s)) {
+    const me = s.players.find((p) => p.id === pid)!;
+    let pool = alive.filter((id) => id !== pid && !keep.includes(id));
+    if (me.role === Role.WEREWOLF) {
+      pool = pool.filter((id) => s.players.find((p) => p.id === id)!.team !== 'werewolf');
+    }
+    if (pool.length === 0) pool = alive.filter((id) => id !== pid);
+    transition(s, me.controlledBy === 'human'
+      ? { type: 'HUMAN_NIGHT_ACTION', playerId: pid, targetId: pool[0] }
+      : { type: 'AI_NIGHT_DONE', playerId: pid, targetId: pool[0] });
+  }
+  transition(s, { type: 'RESOLVE_NIGHT' });
+  assert.equal(s.phase, 'DAY_DISCUSSION_OPEN');
+  return s;
+}
+
+test('Phase 2：全真人跳過 → 立即管線（不等 quiet）；未全跳過 → 等 quiet', async () => {
+  const s = mixedDiscussionState();
+  const humans = s.players.filter((p) => p.alive && p.controlledBy === 'human').map((p) => p.id);
+  assert.ok(humans.length >= 1);
+  const llm = defaultMock();
+  const { ctx, events } = makeCtx(s, llm);
+  // CD 設大，聚焦「啟動時機」而非廣播
+  const sch = new SpeechScheduler(ctx, { quietMs: 20000, cdMs: 600000, checkIntervalMs: 1000 });
+  try {
+    sch.onPhaseEntered(s);
+    // 未跳過：tick 1s < quiet → 不啟動
+    mock.timers.tick(1000);
+    await flush();
+    assert.ok(!llm.calls.some((c) => c.kind === 'pre_speech'), '未全跳過且 quiet 未過不應啟動');
+    // 全真人跳過 → 下一個 tick 立即啟動（不等 quiet）
+    for (const h of humans) transition(s, { type: 'HUMAN_SKIP', playerId: h });
+    mock.timers.tick(1000);
+    await flush();
+    assert.ok(llm.calls.some((c) => c.kind === 'pre_speech'), '全真人跳過應立即啟動管線');
+    void events;
+  } finally {
+    sch.stop();
+  }
+});
+
 void Role;

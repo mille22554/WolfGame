@@ -3,19 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>人狼遊戲（全 AI 對戰）</title>
+<title>人狼遊戲（真人 + AI 混合對戰）</title>
 <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
 <header>
-  <h1>人狼遊戲（全 AI 對戰）</h1>
+  <h1>人狼遊戲（真人 + AI 混合對戰）</h1>
   <div id="statusbar">
     <span id="day-label">第 - 天</span>
     <span id="phase-label">連線中…</span>
     <span id="conn-label">連線中…</span>
   </div>
   <div id="header-buttons">
-    <button id="gm-toggle" type="button">GM 檢視：關</button>
+    <button id="gm-toggle" type="button" hidden>GM 檢視：關</button>
     <button id="leave-btn" type="button">離開</button>
   </div>
 </header>
@@ -23,26 +23,27 @@
   <section id="board" aria-label="白板"></section>
   <aside>
     <section id="players" aria-label="玩家列表"></section>
-    <section id="controls" aria-label="動作區（Phase 2 預留）">
+    <section id="me" aria-label="我的身分" hidden></section>
+    <section id="controls" aria-label="操作面板">
       <h2>動作</h2>
-      <div>
-        <input id="speak-input" type="text" placeholder="發言…" disabled>
-        <button id="speak-btn" type="button" disabled>發言</button>
-      </div>
-      <div>
-        <button id="skip-btn" type="button" disabled>跳過 / 準備投票</button>
-      </div>
-      <div>
-        <input id="vote-input" type="text" placeholder="投票目標 P編號" disabled>
-        <button id="vote-btn" type="button" disabled>投票</button>
-      </div>
-      <div>
-        <input id="night-input" type="text" placeholder="夜間目標 P編號" disabled>
-        <button id="night-btn" type="button" disabled>夜間行動</button>
-      </div>
+      <div id="error" class="error" hidden></div>
+      <div id="controls-body"></div>
     </section>
   </aside>
 </main>
+<div id="lobby-overlay" hidden>
+  <div id="lobby-panel">
+    <h2>大廳：選擇座位</h2>
+    <div>
+      <label>暱稱 <input id="lobby-name" type="text" placeholder="P編號預設" maxlength="12"></label>
+    </div>
+    <div id="lobby-seats"></div>
+    <div>
+      <button id="start-btn" type="button" hidden>開始遊戲</button>
+    </div>
+    <p class="hint">選座後等待開始；無人加入時 10 秒後自動全 AI 開局。</p>
+  </div>
+</div>
 <div id="disconnect-overlay" hidden>
   <div>
     <p id="disconnect-text">與伺服器斷線，重新連線中…</p>

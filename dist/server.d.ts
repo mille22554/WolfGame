@@ -7,7 +7,7 @@
  */
 import * as http from 'http';
 import { WebSocketServer } from 'ws';
-import type { GameState, LLMDispatcher, ClientRegistry, SpectatorSnapshot } from './types.js';
+import type { GameState, GameEvent, LLMDispatcher, ClientRegistry, PlayerSnapshot, SpectatorSnapshot, LobbySnapshot } from './types.js';
 export interface ServerLLM extends LLMDispatcher {
     start(): Promise<void>;
     shutdown(): Promise<void>;
@@ -24,6 +24,7 @@ export interface ServerOptions {
     pingIntervalMs?: number;
     pingTimeoutMs?: number;
     speechesPerDay?: number;
+    lobbyTimeoutMs?: number;
     exitProcess?: boolean;
     onShutdown?: (reason: string) => void;
 }
@@ -45,6 +46,38 @@ export declare function resolveModelPath(modelUri: string, modelsDir: string): s
 export declare function serveStatic(req: http.IncomingMessage, res: http.ServerResponse, publicDir: string, modelReady: boolean): void;
 export declare function findAvailablePort(start: number): Promise<number>;
 export declare function openBrowser(url: string): void;
+/** Phase 2：SeatManager（token 管理；playerId ↔ token 雙向映射） */
+export declare class SeatManager {
+    private readonly reservations;
+    private readonly tokens;
+    reserve(playerId: number): string;
+    release(playerId: number): void;
+    lookup(token: string): number | undefined;
+    isReserved(playerId: number): boolean;
+}
+/** Phase 2：registry → engine 的大廳/真人操作回呼（startServer 注入） */
+export interface RegistryActions {
+    join(playerId: number, name?: string): {
+        accepted: boolean;
+        reason?: string;
+        token?: string;
+    };
+    reconnect(token: string): {
+        accepted: boolean;
+        reason?: string;
+        playerId?: number;
+        token?: string;
+    };
+    startGame(): void;
+    humanEvent(event: GameEvent): {
+        accepted: boolean;
+        reason?: string;
+    };
+    disconnectPlayer(playerId: number): void;
+    isStarted(): boolean;
+    releaseSeat(playerId: number): void;
+    restartLobbyTimerIfEmpty(): void;
+}
 export interface WebSocketRegistryOptions {
     getState: () => GameState;
     zeroClientShutdownMs?: number;
@@ -52,6 +85,7 @@ export interface WebSocketRegistryOptions {
     pingTimeoutMs?: number;
     onZeroClientsTimeout?: () => void;
     onLastClientLeave?: () => void;
+    actions?: RegistryActions;
 }
 export declare class WebSocketRegistry implements ClientRegistry {
     private readonly opts;
@@ -60,8 +94,9 @@ export declare class WebSocketRegistry implements ClientRegistry {
     private pingTimer;
     constructor(wss: WebSocketServer, opts: WebSocketRegistryOptions);
     getConnectedPlayerIds(): number[];
-    send(): void;
+    send(playerId: number, snapshot: PlayerSnapshot): void;
     sendSpectator(snapshot: SpectatorSnapshot): void;
+    sendLobby(lobby: LobbySnapshot): void;
     hasSpectators(): boolean;
     /** 測試用：目前連線數 */
     clientCount(): number;

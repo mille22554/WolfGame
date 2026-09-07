@@ -6,7 +6,7 @@
  * - phase 變更立即 flushSave；其餘 SAVE debounce（預設 5s）
  * - gate timer 到期 → enqueue ACTION_TIMEOUT
  */
-import type { GameState, GameEvent, Phase, LLMDispatcher, ClientRegistry } from './types.js';
+import type { GameState, GameEvent, Phase, LLMDispatcher, ClientRegistry, TransitionResult } from './types.js';
 export type { LLMDispatcher, ClientRegistry } from './types.js';
 export interface EngineOptions {
     mode: 'gm' | 'web';
@@ -35,6 +35,8 @@ export declare class GameEngine {
     drain(): void;
     /** 單一事件處理（transition + effects + phase 變更收尾） */
     handleEvent(event: GameEvent): void;
+    /** Phase 2：立即處理單一事件並回傳結果（真人操作專用；跳過佇列以保即時性） */
+    tryEvent(event: GameEvent): TransitionResult;
     getState(): GameState;
     /** 立即寫檔（flushSave） */
     save(): void;

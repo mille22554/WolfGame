@@ -125,8 +125,15 @@ export function resolveNightActions(gameState: GameState): NightResolutionResult
     );
     
     if (wolfActions.length > 0) {
-      // Use first wolf's choice (they should all be same)
-      wolfKillTargetId = wolfActions[0].targetId;
+      // Phase 2 狼人會議多數決：同目標票數最高者勝；平手 → 先提交者勝（nightActions 依提交順序）
+      const tally = new Map<number, number>();
+      for (const a of wolfActions) tally.set(a.targetId, (tally.get(a.targetId) ?? 0) + 1);
+      const maxCount = Math.max(...tally.values());
+      const topTargets = Array.from(tally.entries())
+        .filter(([, c]) => c === maxCount)
+        .map(([t]) => t);
+      const first = wolfActions.find((a) => topTargets.includes(a.targetId));
+      wolfKillTargetId = first?.targetId;
     } else {
       // Wolves must kill - pick random non-wolf
       const candidates = alivePlayers.filter(p => p.team !== Team.WEREWOLF);

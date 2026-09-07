@@ -7,7 +7,7 @@
  *   seerCheckTarget / seerCheckResult）與 masonChatLog、expectedPlayerCount（規格缺口補位，見 game-state.ts）
  */
 import { Personality } from './personalities.js';
-export declare const SCHEMA_VERSION = 2;
+export declare const SCHEMA_VERSION = 3;
 export type Phase = 'SETUP_WAITING_JOIN' | 'SETUP_READY' | 'NIGHT_COLLECTING' | 'NIGHT_RESOLVING' | 'DAY_DISCUSSION_OPEN' | 'DAY_DISCUSSION_CLOSING' | 'DAY_VOTING_COLLECTING' | 'DAY_VOTING_RESOLVING' | 'DAY_RESULT_ANNOUNCING' | 'GAME_OVER_FINAL';
 export type GameEvent = {
     type: 'CLIENT_JOIN';
@@ -68,6 +68,16 @@ export type GameEvent = {
     type: 'RESOLVE_VOTES';
 } | {
     type: 'ADVANCE_DAY';
+} | {
+    type: 'HUMAN_JOIN';
+    playerId: number;
+    name?: string;
+} | {
+    type: 'AI_JOIN';
+    playerId: number;
+} | {
+    type: 'RECONNECT';
+    playerId: number;
 };
 export interface PendingGate {
     kind: 'night' | 'vote';
@@ -175,6 +185,7 @@ export interface GameState {
     boardVersion: number;
     daySummaries: string[];
     voteReady: number[];
+    skippedHumans: number[];
     pendingGate: PendingGate | null;
     /** 大廳目標人數：CLIENT_JOIN 達標 → SETUP_READY 的依據 */
     expectedPlayerCount: number;
@@ -211,6 +222,7 @@ export interface PlayerSnapshot {
     }[];
     winner: Team | null;
     gameOver: boolean;
+    gateDeadline: number | null;
     you: {
         role: Role;
         team: Team;
@@ -234,7 +246,23 @@ export interface PlayerSnapshot {
             text: string;
         }[];
         wolfAllyIds?: number[];
+        canAct?: boolean;
+        wolfMeeting?: {
+            wolfId: number;
+            targetId: number;
+        }[];
     };
+}
+/** Phase 2：大廳 snapshot（遊戲前 UI，唯一允許顯示 controlledBy 的介面，AI 永不看到） */
+export interface LobbySnapshot {
+    phase: Phase;
+    expectedPlayerCount: number;
+    seats: {
+        playerId: number;
+        name: string;
+        controlledBy: 'ai' | 'human' | 'empty';
+    }[];
+    started: boolean;
 }
 export interface GMSnapshot {
     phase: Phase;
@@ -385,6 +413,8 @@ export interface ClientRegistry {
     /** Phase 1 新增（optional）：觀戰者廣播 */
     sendSpectator?(snapshot: SpectatorSnapshot): void;
     hasSpectators?(): boolean;
+    /** Phase 2 新增（optional）：大廳廣播（SETUP 階段取代 snapshot 廣播） */
+    sendLobby?(lobby: LobbySnapshot): void;
 }
 /** SpeechScheduler 建構參數 */
 export interface SchedulerContext {
@@ -392,11 +422,24 @@ export interface SchedulerContext {
     getState(): GameState;
     llm: LLMDispatcher;
 }
-/** 前端 WS 協定：伺服器 → 客戶端 */
+/** 前端 WS 協定：伺服器 → 客戶端（Phase 2 擴充） */
 export type ServerToClientMessage = {
     type: 'SNAPSHOT';
-    snapshot: SpectatorSnapshot | GMSnapshot;
+    snapshot: PlayerSnapshot | SpectatorSnapshot | GMSnapshot;
     gmView: boolean;
+} | {
+    type: 'LOBBY';
+    lobby: LobbySnapshot;
+} | {
+    type: 'JOINED';
+    playerId: number;
+    token: string;
+} | {
+    type: 'JOIN_REJECTED';
+    reason: string;
+} | {
+    type: 'ACTION_REJECTED';
+    reason: string;
 } | {
     type: 'MODEL_STATUS';
     state: 'downloading' | 'ready' | 'error';
@@ -408,7 +451,7 @@ export type ServerToClientMessage = {
 } | {
     type: 'SHUTDOWN';
 };
-/** 前端 WS 協定：客戶端 → 伺服器 */
+/** 前端 WS 協定：客戶端 → 伺服器（Phase 2 擴充；真人操作訊息不含 playerId，伺服器由連線補上） */
 export type ClientToServerMessage = {
     type: 'PONG';
 } | {
@@ -418,5 +461,29 @@ export type ClientToServerMessage = {
     enabled: boolean;
 } | {
     type: 'LEAVE';
+} | {
+    type: 'JOIN';
+    playerId: number;
+    name?: string;
+} | {
+    type: 'RECONNECT';
+    token: string;
+} | {
+    type: 'START_GAME';
+} | {
+    type: 'HUMAN_SPEAK';
+    text: string;
+} | {
+    type: 'HUMAN_SKIP';
+} | {
+    type: 'HUMAN_READY_VOTE';
+} | {
+    type: 'HUMAN_UNREADY_VOTE';
+} | {
+    type: 'HUMAN_VOTE';
+    targetId: number;
+} | {
+    type: 'HUMAN_NIGHT_ACTION';
+    targetId: number;
 };
 //# sourceMappingURL=types.d.ts.map

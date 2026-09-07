@@ -13,7 +13,7 @@ import { Personality } from './personalities.js';
 // Schema
 // ============================================
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 // ============================================
 // Phase（扁平，10 值）
@@ -54,7 +54,10 @@ export type GameEvent =
   | { type: 'CLOSE_DISCUSSION' }
   | { type: 'RESOLVE_NIGHT' }    // 內部：NIGHT_RESOLVING 結算完成
   | { type: 'RESOLVE_VOTES' }    // 內部：DAY_VOTING_RESOLVING 結算完成
-  | { type: 'ADVANCE_DAY' };     // 內部：進入下一天
+  | { type: 'ADVANCE_DAY' }     // 內部：進入下一天
+  | { type: 'HUMAN_JOIN'; playerId: number; name?: string }   // Phase 2：真人選座（大廳）
+  | { type: 'AI_JOIN'; playerId: number }                      // Phase 2：伺服器填 AI 空位（大廳）
+  | { type: 'RECONNECT'; playerId: number };                   // Phase 2：真人重連拿回身分
 
 // ============================================
 // PendingGate
@@ -180,6 +183,7 @@ export interface GameState {
   boardVersion: number;           // 白板版本號
   daySummaries: string[];         // 每天摘要（截斷用）
   voteReady: number[];            // 已準備投票的真人
+  skippedHumans: number[];        // Phase 2：當天已跳過發言的真人 playerId（全跳過 → AI 立即發言）
   pendingGate: PendingGate | null;
   // --- 規格缺口補位（transition 純函式內使用，持久化） ---
   /** 大廳目標人數：CLIENT_JOIN 達標 → SETUP_READY 的依據 */
@@ -209,6 +213,7 @@ export interface PlayerSnapshot {
   votes: { voterId: number; targetId: number }[];
   winner: Team | null;
   gameOver: boolean;
+  gateDeadline: number | null;   // Phase 2：pendingGate?.deadline ?? null（0 = 無 timer；前端倒數用）
   you: {
     role: Role;
     team: Team;
@@ -218,7 +223,17 @@ export interface PlayerSnapshot {
     masonPartnerId?: number;
     masonChatLog?: { playerId: number; text: string }[];
     wolfAllyIds?: number[];
+    canAct?: boolean;            // Phase 2：目前是否輪到我行動：pendingGate 存在 && required 含我 && done 不含我
+    wolfMeeting?: { wolfId: number; targetId: number }[];   // Phase 2：狼人會議目前提交（僅狼；由 nightActions 推導）
   };
+}
+
+/** Phase 2：大廳 snapshot（遊戲前 UI，唯一允許顯示 controlledBy 的介面，AI 永不看到） */
+export interface LobbySnapshot {
+  phase: Phase;
+  expectedPlayerCount: number;
+  seats: { playerId: number; name: string; controlledBy: 'ai' | 'human' | 'empty' }[];
+  started: boolean;   // phase 非 SETUP_* 即 true
 }
 
 export interface GMSnapshot {
@@ -402,6 +417,8 @@ export interface ClientRegistry {
   /** Phase 1 新增（optional）：觀戰者廣播 */
   sendSpectator?(snapshot: SpectatorSnapshot): void;
   hasSpectators?(): boolean;
+  /** Phase 2 新增（optional）：大廳廣播（SETUP 階段取代 snapshot 廣播） */
+  sendLobby?(lobby: LobbySnapshot): void;
 }
 
 /** SpeechScheduler 建構參數 */
@@ -411,16 +428,29 @@ export interface SchedulerContext {
   llm: LLMDispatcher;
 }
 
-/** 前端 WS 協定：伺服器 → 客戶端 */
+/** 前端 WS 協定：伺服器 → 客戶端（Phase 2 擴充） */
 export type ServerToClientMessage =
-  | { type: 'SNAPSHOT'; snapshot: SpectatorSnapshot | GMSnapshot; gmView: boolean }
+  | { type: 'SNAPSHOT'; snapshot: PlayerSnapshot | SpectatorSnapshot | GMSnapshot; gmView: boolean }
+  | { type: 'LOBBY'; lobby: LobbySnapshot }
+  | { type: 'JOINED'; playerId: number; token: string }
+  | { type: 'JOIN_REJECTED'; reason: string }
+  | { type: 'ACTION_REJECTED'; reason: string }
   | { type: 'MODEL_STATUS'; state: 'downloading' | 'ready' | 'error'; downloaded?: number; total?: number; error?: string }
   | { type: 'PING' }
   | { type: 'SHUTDOWN' };
 
-/** 前端 WS 協定：客戶端 → 伺服器 */
+/** 前端 WS 協定：客戶端 → 伺服器（Phase 2 擴充；真人操作訊息不含 playerId，伺服器由連線補上） */
 export type ClientToServerMessage =
   | { type: 'PONG' }
   | { type: 'REQUEST_SNAPSHOT' }
   | { type: 'SET_GM_VIEW'; enabled: boolean }
-  | { type: 'LEAVE' };
+  | { type: 'LEAVE' }
+  | { type: 'JOIN'; playerId: number; name?: string }
+  | { type: 'RECONNECT'; token: string }
+  | { type: 'START_GAME' }
+  | { type: 'HUMAN_SPEAK'; text: string }
+  | { type: 'HUMAN_SKIP' }
+  | { type: 'HUMAN_READY_VOTE' }
+  | { type: 'HUMAN_UNREADY_VOTE' }
+  | { type: 'HUMAN_VOTE'; targetId: number }
+  | { type: 'HUMAN_NIGHT_ACTION'; targetId: number };

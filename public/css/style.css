@@ -61,9 +61,9 @@ aside {
 }
 #players .alive { color: #8affc1; }
 #players .dead { color: #777; text-decoration: line-through; }
-/* Phase 2 預留動作區：Phase 1 隱藏，保留結構與側欄高度 */
+/* Phase 2 動作區：真人操作面板 */
 #controls {
-  display: none;
+  display: block;
   background: #1a1e29;
   border: 1px solid #333a52;
   border-radius: 8px;
@@ -71,7 +71,85 @@ aside {
   min-height: 180px;
 }
 #controls h2 { font-size: 15px; margin: 0 0 8px; }
+#controls h3 { font-size: 14px; margin: 8px 0 4px; }
 #controls div { margin: 6px 0; }
+#controls input[type="text"] {
+  width: 100%;
+  background: #14161c;
+  color: #e8eaf0;
+  border: 1px solid #4d5878;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+#controls input[type="number"] {
+  width: 90px;
+  background: #14161c;
+  color: #e8eaf0;
+  border: 1px solid #4d5878;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+#controls .error { color: #ff9d9d; }
+#controls .msg { color: #aab2cc; }
+/* Phase 2 玩家卡片：存活綠/死亡灰/可選/已選 */
+#players .selectable { cursor: pointer; border: 1px solid transparent; border-radius: 4px; padding: 2px 4px; }
+#players .selectable:hover { border-color: #4d7cff; }
+#players .selected { border-color: #ffe08a; background: #2a2f45; }
+/* Phase 2 身分別 */
+#me {
+  background: #1a1e29;
+  border: 1px solid #4d7cff;
+  border-radius: 8px;
+  padding: 12px;
+}
+#me[hidden] { display: none; }
+#me h2 { font-size: 15px; margin: 0 0 8px; }
+#me .desc { color: #aab2cc; font-size: 13px; }
+/* Phase 2 大廳 */
+#lobby-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+}
+#lobby-overlay[hidden] { display: none; }
+#lobby-panel {
+  background: #1e2230;
+  border: 1px solid #4d5878;
+  border-radius: 8px;
+  padding: 24px 32px;
+  max-width: 560px;
+}
+#lobby-panel h2 { margin-top: 0; }
+#lobby-panel .hint { color: #aab2cc; font-size: 13px; }
+#lobby-seats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 12px 0;
+}
+#lobby-seats .seat {
+  text-align: center;
+  padding: 12px 8px;
+  border-radius: 8px;
+  border: 1px solid #4d5878;
+  background: #1a1e29;
+  color: #e8eaf0;
+}
+#lobby-seats button.seat { cursor: pointer; }
+#lobby-seats button.seat:hover { border-color: #4d7cff; background: #232842; }
+#lobby-seats .seat.ai { color: #777; }
+#lobby-seats .seat.human { border-color: #8affc1; }
+#lobby-name {
+  background: #14161c;
+  color: #e8eaf0;
+  border: 1px solid #4d5878;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
 #disconnect-overlay {
   position: fixed;
   inset: 0;

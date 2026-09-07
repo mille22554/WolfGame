@@ -93,25 +93,26 @@ test('靜態檔案：GET / → 200；CSS → 200；路徑穿越 → 404', async 
   }
 });
 
-test('WS 連線 → 收到 SNAPSHOT（觀戰視角，無角色洩漏）', async () => {
+test('WS 連線 → 收到 LOBBY（座位全 empty，無角色洩漏）', async () => {
   const h = await boot();
   try {
     const ws = new WebSocket(`ws://localhost:${h.port}`);
-    const snap = await new Promise<{ snapshot: { phase: string; alivePlayers: unknown[] } }>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('等 SNAPSHOT 逾時')), 5000);
+    const lobby = await new Promise<{ phase: string; seats: { controlledBy: string }[] }>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('等 LOBBY 逾時')), 5000);
       ws.on('message', (data) => {
         try {
-          const msg = JSON.parse(String(data)) as { type: string; snapshot?: { phase: string; alivePlayers: unknown[] } };
-          if (msg.type === 'SNAPSHOT' && msg.snapshot) {
+          const msg = JSON.parse(String(data)) as { type: string; lobby?: { phase: string; seats: { controlledBy: string }[] } };
+          if (msg.type === 'LOBBY' && msg.lobby) {
             clearTimeout(timer);
-            resolve(msg as { snapshot: { phase: string; alivePlayers: unknown[] } });
+            resolve(msg.lobby);
           }
         } catch { /* ignore */ }
       });
       ws.on('error', reject);
     });
-    assert.ok(snap.snapshot.phase);
-    assert.ok(Array.isArray(snap.snapshot.alivePlayers));
+    assert.equal(lobby.phase, 'SETUP_WAITING_JOIN');
+    assert.equal(lobby.seats.length, 6);
+    assert.ok(lobby.seats.every((s) => s.controlledBy === 'empty'));
     ws.close();
     await new Promise((r) => setTimeout(r, 50));
   } finally {
@@ -119,12 +120,13 @@ test('WS 連線 → 收到 SNAPSHOT（觀戰視角，無角色洩漏）', async 
   }
 });
 
-test('SET_GM_VIEW → 收到含角色的 snapshot', async () => {
+test('SET_GM_VIEW → 收到含角色的 snapshot（先 JOIN + START_GAME 開局）', async () => {
   const h = await boot();
   try {
     const ws = new WebSocket(`ws://localhost:${h.port}`);
     const gmSnap = await new Promise<{ players: { role: string }[] }>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('等 GM SNAPSHOT 逾時')), 5000);
+      const timer = setTimeout(() => reject(new Error('等 GM SNAPSHOT 逾時')), 8000);
+      let joined = false;
       ws.on('open', () => {
         ws.send(JSON.stringify({ type: 'SET_GM_VIEW', enabled: true }));
       });
@@ -137,7 +139,18 @@ test('SET_GM_VIEW → 收到含角色的 snapshot', async () => {
             ws.send(JSON.stringify({ type: 'PONG' }));
             return;
           }
-          // 訊息有序：SET_GM_VIEW 之後的 gmView 快照即為 GM 視角
+          if (msg.type === 'LOBBY' && !joined) {
+            joined = true;
+            ws.send(JSON.stringify({ type: 'JOIN', playerId: 1, name: 'GM' }));
+            return;
+          }
+          if (msg.type === 'JOINED') {
+            ws.send(JSON.stringify({ type: 'START_GAME' }));
+            // 重送 GM 檢視以觸發開局後的 GM 快照推送（廣播給玩家一律 gmView:false）
+            ws.send(JSON.stringify({ type: 'SET_GM_VIEW', enabled: true }));
+            return;
+          }
+          // 訊息有序：開局後 gmView 快照即為 GM 視角
           if (msg.type === 'SNAPSHOT' && msg.gmView === true && msg.snapshot?.players) {
             clearTimeout(timer);
             resolve(msg.snapshot as { players: { role: string }[] });

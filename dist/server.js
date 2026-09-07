@@ -9,13 +9,14 @@ import * as http from 'http';
 import * as net from 'net';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { exec } from 'child_process';
 import { pathToFileURL } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { GameEngine } from './engine.js';
 import { SpeechScheduler } from './ai-scheduler.js';
 import { WorkerDispatcher } from './worker-dispatcher.js';
-import { createGameState, buildGMSnapshot, buildSpectatorSnapshot, } from './game-state.js';
+import { createGameState, buildGMSnapshot, buildPlayerSnapshot, buildSpectatorSnapshot, buildLobbySnapshot, } from './game-state.js';
 import { ensureModelDownloaded, DEFAULT_LLAMACPP_MODEL_URI, getDefaultModelsDir, } from './llm.js';
 import { getResourceRoot } from './utils.js';
 function envInt(name, fallback) {
@@ -133,6 +134,32 @@ export function openBrowser(url) {
             console.log(`請手動開啟瀏覽器：${url}`);
     });
 }
+// ============================================
+// WebSocketRegistry（實作 ClientRegistry）
+// ============================================
+/** Phase 2：SeatManager（token 管理；playerId ↔ token 雙向映射） */
+export class SeatManager {
+    reservations = new Map(); // playerId → token
+    tokens = new Map(); // token → playerId
+    reserve(playerId) {
+        const token = crypto.randomUUID();
+        this.reservations.set(playerId, token);
+        this.tokens.set(token, playerId);
+        return token;
+    }
+    release(playerId) {
+        const token = this.reservations.get(playerId);
+        if (token !== undefined)
+            this.tokens.delete(token);
+        this.reservations.delete(playerId);
+    }
+    lookup(token) {
+        return this.tokens.get(token);
+    }
+    isReserved(playerId) {
+        return this.reservations.has(playerId);
+    }
+}
 export class WebSocketRegistry {
     opts;
     clients = new Set();
@@ -146,6 +173,7 @@ export class WebSocketRegistry {
             pingTimeoutMs: opts.pingTimeoutMs ?? envInt('PING_TIMEOUT_MS', 10000),
             onZeroClientsTimeout: opts.onZeroClientsTimeout,
             onLastClientLeave: opts.onLastClientLeave,
+            actions: opts.actions,
         };
         wss.on('connection', (ws) => this.onConnection(ws));
         this.pingTimer = setInterval(() => this.pingCheck(), this.opts.pingIntervalMs);
@@ -155,13 +183,25 @@ export class WebSocketRegistry {
     }
     // --- ClientRegistry ---
     getConnectedPlayerIds() {
-        return []; // Phase 1 無真人玩家
+        return [...this.clients]
+            .filter((c) => c.playerId !== undefined)
+            .map((c) => c.playerId);
     }
-    send() {
-        // Phase 1 不使用（預留 Phase 2）
+    send(playerId, snapshot) {
+        for (const c of this.clients) {
+            if (c.playerId !== playerId)
+                continue;
+            const msg = { type: 'SNAPSHOT', snapshot, gmView: false };
+            try {
+                c.ws.send(JSON.stringify(msg));
+            }
+            catch { /* 單一客戶端失敗不影響其他人 */ }
+        }
     }
     sendSpectator(snapshot) {
         for (const c of this.clients) {
+            if (c.playerId !== undefined)
+                continue; // Phase 2：只送給觀戰者（未選座）
             const msg = c.gmView
                 ? { type: 'SNAPSHOT', snapshot: buildGMSnapshot(this.opts.getState()), gmView: true }
                 : { type: 'SNAPSHOT', snapshot, gmView: false };
@@ -171,8 +211,17 @@ export class WebSocketRegistry {
             catch { /* 單一客戶端失敗不影響其他人 */ }
         }
     }
+    sendLobby(lobby) {
+        const msg = { type: 'LOBBY', lobby };
+        for (const c of this.clients) {
+            try {
+                c.ws.send(JSON.stringify(msg));
+            }
+            catch { /* 單一客戶端失敗不影響其他人 */ }
+        }
+    }
     hasSpectators() {
-        return this.clients.size > 0;
+        return [...this.clients].some((c) => c.playerId === undefined);
     }
     /** 測試用：目前連線數 */
     clientCount() {
@@ -202,9 +251,25 @@ export class WebSocketRegistry {
         this.clients.clear();
     }
     pushSnapshot(c) {
-        const msg = c.gmView
-            ? { type: 'SNAPSHOT', snapshot: buildGMSnapshot(this.opts.getState()), gmView: true }
-            : { type: 'SNAPSHOT', snapshot: buildSpectatorSnapshot(this.opts.getState()), gmView: false };
+        let msg;
+        try {
+            const state = this.opts.getState();
+            if (state.phase === 'SETUP_WAITING_JOIN' || state.phase === 'SETUP_READY') {
+                msg = { type: 'LOBBY', lobby: buildLobbySnapshot(state) };
+            }
+            else if (c.gmView) {
+                msg = { type: 'SNAPSHOT', snapshot: buildGMSnapshot(state), gmView: true };
+            }
+            else if (c.playerId !== undefined) {
+                msg = { type: 'SNAPSHOT', snapshot: buildPlayerSnapshot(state, c.playerId), gmView: false };
+            }
+            else {
+                msg = { type: 'SNAPSHOT', snapshot: buildSpectatorSnapshot(state), gmView: false };
+            }
+        }
+        catch {
+            return; // engine 尚未就緒（模型下載中）→ 略過，client 可稍後 REQUEST_SNAPSHOT
+        }
         try {
             c.ws.send(JSON.stringify(msg));
         }
@@ -230,6 +295,12 @@ export class WebSocketRegistry {
         catch {
             return;
         }
+        const send = (m) => {
+            try {
+                client.ws.send(JSON.stringify(m));
+            }
+            catch { /* ignore */ }
+        };
         switch (msg.type) {
             case 'PONG':
                 client.lastPong = Date.now();
@@ -241,6 +312,83 @@ export class WebSocketRegistry {
             case 'REQUEST_SNAPSHOT':
                 this.pushSnapshot(client);
                 break;
+            case 'JOIN': {
+                const actions = this.opts.actions;
+                if (!actions)
+                    return;
+                if (actions.isStarted()) {
+                    send({ type: 'JOIN_REJECTED', reason: 'game started' });
+                    break;
+                }
+                const r = actions.join(msg.playerId, msg.name);
+                if (!r.accepted || r.token === undefined) {
+                    send({ type: 'JOIN_REJECTED', reason: r.reason ?? 'join failed' });
+                    break;
+                }
+                client.playerId = msg.playerId;
+                client.token = r.token;
+                send({ type: 'JOINED', playerId: msg.playerId, token: r.token });
+                break;
+            }
+            case 'RECONNECT': {
+                const actions = this.opts.actions;
+                if (!actions)
+                    return;
+                const r = actions.reconnect(msg.token);
+                if (!r.accepted || r.playerId === undefined || r.token === undefined) {
+                    send({ type: 'JOIN_REJECTED', reason: r.reason ?? 'unknown token' });
+                    break;
+                }
+                client.playerId = r.playerId;
+                client.token = r.token;
+                send({ type: 'JOINED', playerId: r.playerId, token: r.token });
+                break;
+            }
+            case 'START_GAME': {
+                const actions = this.opts.actions;
+                if (!actions)
+                    return;
+                if (client.playerId !== undefined && !actions.isStarted()) {
+                    actions.startGame();
+                }
+                break;
+            }
+            case 'HUMAN_SPEAK':
+            case 'HUMAN_SKIP':
+            case 'HUMAN_READY_VOTE':
+            case 'HUMAN_UNREADY_VOTE':
+            case 'HUMAN_VOTE':
+            case 'HUMAN_NIGHT_ACTION': {
+                const actions = this.opts.actions;
+                if (!actions || client.playerId === undefined)
+                    return;
+                const pid = client.playerId;
+                let event;
+                switch (msg.type) {
+                    case 'HUMAN_SPEAK':
+                        event = { type: 'HUMAN_SPEAK', playerId: pid, text: msg.text };
+                        break;
+                    case 'HUMAN_SKIP':
+                        event = { type: 'HUMAN_SKIP', playerId: pid };
+                        break;
+                    case 'HUMAN_READY_VOTE':
+                        event = { type: 'HUMAN_READY_VOTE', playerId: pid };
+                        break;
+                    case 'HUMAN_UNREADY_VOTE':
+                        event = { type: 'HUMAN_UNREADY_VOTE', playerId: pid };
+                        break;
+                    case 'HUMAN_VOTE':
+                        event = { type: 'HUMAN_VOTE', playerId: pid, targetId: msg.targetId };
+                        break;
+                    case 'HUMAN_NIGHT_ACTION':
+                        event = { type: 'HUMAN_NIGHT_ACTION', playerId: pid, targetId: msg.targetId };
+                        break;
+                }
+                const r = actions.humanEvent(event);
+                if (!r.accepted)
+                    send({ type: 'ACTION_REJECTED', reason: r.reason ?? 'rejected' });
+                break;
+            }
             case 'LEAVE': {
                 const isLast = this.clients.size === 1 && this.clients.has(client);
                 try {
@@ -255,6 +403,21 @@ export class WebSocketRegistry {
     }
     onDisconnect(client) {
         this.clients.delete(client);
+        // Phase 2：真人座位處理（大廳 → 座位釋放；遊戲中 → AI 接管由 engine DISCONNECT 執行）
+        const actions = this.opts.actions;
+        if (actions && client.playerId !== undefined) {
+            const pid = client.playerId;
+            if (!actions.isStarted()) {
+                actions.releaseSeat(pid);
+            }
+            try {
+                actions.disconnectPlayer(pid);
+            }
+            catch { /* ignore */ }
+            if (!actions.isStarted()) {
+                actions.restartLobbyTimerIfEmpty();
+            }
+        }
         if (this.clients.size === 0 && !this.zeroTimer) {
             this.zeroTimer = setTimeout(() => {
                 this.zeroTimer = null;
@@ -336,6 +499,7 @@ export async function startServer(options = {}) {
         console.log(`[server] 關閉（${reason}）`);
         if (autoCloseTimer)
             clearInterval(autoCloseTimer);
+        clearLobbyTimer();
         try {
             engine?.save();
         }
@@ -360,6 +524,50 @@ export async function startServer(options = {}) {
         if (exitProcess)
             process.exit(0);
     }
+    // ---- Phase 2 大廳狀態 ----
+    const seats = new SeatManager();
+    let started = false;
+    let lobbyTimer = null;
+    const lobbyTimeoutMs = options.lobbyTimeoutMs ?? envInt('LOBBY_TIMEOUT_MS', 10000);
+    function clearLobbyTimer() {
+        if (lobbyTimer) {
+            clearTimeout(lobbyTimer);
+            lobbyTimer = null;
+        }
+    }
+    function hasHumanPlayers() {
+        try {
+            return engine.getState().players.some((p) => p.controlledBy === 'human');
+        }
+        catch {
+            return false;
+        }
+    }
+    function startGame() {
+        if (started || !engine)
+            return;
+        started = true;
+        clearLobbyTimer();
+        const state = engine.getState();
+        for (let id = 1; id <= state.expectedPlayerCount; id++) {
+            if (!state.players.some((p) => p.id === id)) {
+                engine.enqueue({ type: 'AI_JOIN', playerId: id });
+            }
+        }
+        engine.enqueue({ type: 'START_GAME' });
+        engine.drain();
+    }
+    function startLobbyTimer() {
+        clearLobbyTimer();
+        lobbyTimer = setTimeout(() => {
+            lobbyTimer = null;
+            if (!started && !hasHumanPlayers())
+                startGame(); // 無真人 → 全 AI 開局
+        }, lobbyTimeoutMs);
+        const t = lobbyTimer;
+        if (typeof t.unref === 'function')
+            t.unref();
+    }
     const registry = new WebSocketRegistry(wss, {
         getState: () => engine.getState(),
         zeroClientShutdownMs: options.zeroClientShutdownMs,
@@ -367,6 +575,44 @@ export async function startServer(options = {}) {
         pingTimeoutMs: options.pingTimeoutMs,
         onZeroClientsTimeout: () => void shutdownFn('no-clients'),
         onLastClientLeave: () => void shutdownFn('leave'),
+        actions: {
+            join: (playerId, name) => {
+                if (started)
+                    return { accepted: false, reason: 'game started' };
+                if (seats.isReserved(playerId))
+                    return { accepted: false, reason: 'seat reserved' };
+                const result = engine.tryEvent({ type: 'HUMAN_JOIN', playerId, name });
+                if (!result.accepted)
+                    return { accepted: false, reason: result.reason ?? 'join failed' };
+                const token = seats.reserve(playerId);
+                clearLobbyTimer(); // 有人類了，改等人按開始
+                return { accepted: true, token };
+            },
+            reconnect: (token) => {
+                const pid = seats.lookup(token);
+                if (pid === undefined)
+                    return { accepted: false, reason: 'unknown token' };
+                engine.enqueue({ type: 'RECONNECT', playerId: pid });
+                engine.drain();
+                // 死亡 → RECONNECT 被拒，client 變觀戰者，仍回 JOINED 讓其知道身分
+                return { accepted: true, playerId: pid, token };
+            },
+            startGame: () => { startGame(); },
+            humanEvent: (event) => {
+                const result = engine.tryEvent(event);
+                return { accepted: result.accepted, reason: result.reason };
+            },
+            disconnectPlayer: (playerId) => {
+                engine.enqueue({ type: 'DISCONNECT', playerId });
+                engine.drain();
+            },
+            isStarted: () => started,
+            releaseSeat: (playerId) => { seats.release(playerId); },
+            restartLobbyTimerIfEmpty: () => {
+                if (!started && !hasHumanPlayers())
+                    startLobbyTimer();
+            },
+        },
     });
     const onSignal = () => {
         void shutdownFn('signal');
@@ -428,19 +674,20 @@ export async function startServer(options = {}) {
         llm: dispatcher,
     });
     engine = new GameEngine({ mode: 'web', llm: dispatcher, scheduler, registry }, createGameState(playerCount));
-    for (let i = 0; i < playerCount; i++) {
-        engine.enqueue({ type: 'CLIENT_JOIN', name: `P${i + 1}` });
-    }
-    engine.enqueue({ type: 'START_GAME' });
-    engine.drain();
+    // ---- Phase 2：大廳流程（不再自動 CLIENT_JOIN × N + START_GAME，改由大廳驅動） ----
+    startLobbyTimer();
     // ---- 全 AI 自動推進：每日發言達標 → CLOSE_DISCUSSION（缺口補位） ----
     // 規格 §11.8 只定義 CLOSING 之後自動開投票 gate，未定義誰關閉討論；
     // 全 AI 局無真人可關閉，故由 server 定時檢查發言數達標後推進。
+    // Phase 2：有存活真人時由真人主導討論，不自動關閉。
     autoCloseTimer = setInterval(() => {
         try {
             const s = engine.getState();
             if (s.phase !== 'DAY_DISCUSSION_OPEN')
                 return;
+            const aliveHumans = s.players.filter((p) => p.alive && p.controlledBy === 'human').length;
+            if (aliveHumans > 0)
+                return; // 真人主導討論，不自動關閉
             const count = s.discussionLog.filter((d) => d.day === s.day).length;
             if (count >= speechesPerDay) {
                 engine.enqueue({ type: 'CLOSE_DISCUSSION' });

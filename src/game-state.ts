@@ -10,7 +10,7 @@
 
 import {
   GameState, Player, Role, Team, Phase, GameEvent, PendingGate,
-  PlayerSnapshot, GMSnapshot, SpectatorSnapshot, TransitionResult, Effect,
+  PlayerSnapshot, GMSnapshot, SpectatorSnapshot, LobbySnapshot, TransitionResult, Effect,
   NightAction, NightActionType, SeerResult, SCHEMA_VERSION,
 } from './types.js';
 import { assignRolesToPlayers, getAlivePlayers, getAliveWerewolves } from './assignment.js';
@@ -50,6 +50,7 @@ export function createGameState(playerCount: number, humanPlayerIndices: number[
     boardVersion: 0,
     daySummaries: [],
     voteReady: [],
+    skippedHumans: [],
     pendingGate: null,
     expectedPlayerCount: playerCount,
     nightActions: [],
@@ -75,8 +76,12 @@ function openNightGate(state: GameState, effects: Effect[]): void {
   };
   state.pendingGate = gate;
   effects.push({ type: 'ARM_GATE', gate });
+  // Phase 2：只對 AI 座位派發 LLM（真人自行行動；斷線接管時由 DISCONNECT 補派）
   for (const pid of gate.required) {
-    effects.push({ type: 'DISPATCH_LLM', playerId: pid, kind: 'night' });
+    const p = state.players.find((x) => x.id === pid);
+    if (p && p.controlledBy === 'ai') {
+      effects.push({ type: 'DISPATCH_LLM', playerId: pid, kind: 'night' });
+    }
   }
 }
 
@@ -96,6 +101,111 @@ function openVoteGate(state: GameState, effects: Effect[]): void {
       effects.push({ type: 'DISPATCH_LLM', playerId: p.id, kind: 'vote' });
     }
   }
+}
+
+/** Phase 2：建立指定座位的玩家（大廳用；players 陣列依 id 排序、保持稠密） */
+function makeSeatPlayer(state: GameState, playerId: number, name: string, controlledBy: 'ai' | 'human'): Player {
+  const p: Player = {
+    id: playerId,
+    name: name || `P${playerId}`,
+    role: Role.VILLAGER,   // 佔位，START_GAME 時重分配
+    team: Team.VILLAGE,
+    controlledBy,
+    personality: personalities[(playerId - 1) % personalities.length].id,
+    alive: true,
+    isMasonPartner: false,
+    seerChecks: [],
+    guardProtects: [],
+  };
+  state.players.push(p);
+  state.players.sort((a, b) => a.id - b.id);
+  return p;
+}
+
+/** Phase 2：座位是否已被佔（存在玩家） */
+function seatOccupied(state: GameState, playerId: number): boolean {
+  return state.players.some((p) => p.id === playerId);
+}
+
+/** Phase 2：大廳座位加入共用（成功回傳 null；失敗回傳拒絕結果） */
+function applySeatJoin(
+  state: GameState, playerId: number, name: string | undefined, controlledBy: 'ai' | 'human',
+): TransitionResult | null {
+  if (!Number.isInteger(playerId) || playerId < 1 || playerId > state.expectedPlayerCount) {
+    return { state, effects: [], accepted: false, reason: `seat P${playerId} out of range` };
+  }
+  const existing = state.players.find((p) => p.id === playerId);
+  if (existing) {
+    if (controlledBy === 'human') {
+      // 座位已被 AI 佔 → 轉換為真人（name 更新）；已被真人佔 → 拒絕
+      if (existing.controlledBy === 'human') {
+        return { state, effects: [], accepted: false, reason: 'seat taken' };
+      }
+      existing.controlledBy = 'human';
+      if (name) existing.name = name;
+      return null;
+    }
+    return { state, effects: [], accepted: false, reason: 'seat taken' };
+  }
+  if (controlledBy === 'human') {
+    // 先填補座位 1..playerId-1 的空位為 AI
+    for (let id = 1; id < playerId; id++) {
+      if (!seatOccupied(state, id)) makeSeatPlayer(state, id, '', 'ai');
+    }
+  }
+  makeSeatPlayer(state, playerId, name ?? '', controlledBy);
+  return null;
+}
+
+/** Phase 2：全存活真人皆已跳過發言（無真人 → false） */
+export function allAliveHumansSkipped(state: GameState): boolean {
+  const humans = getAlivePlayers(state.players).filter((p) => p.controlledBy === 'human');
+  return humans.length > 0 && humans.every((h) => state.skippedHumans.includes(h.id));
+}
+
+/** Phase 2：大廳 snapshot */
+export function buildLobbySnapshot(state: GameState): LobbySnapshot {
+  const seats: LobbySnapshot['seats'] = [];
+  for (let id = 1; id <= state.expectedPlayerCount; id++) {
+    const p = state.players.find((x) => x.id === id);
+    seats.push(p
+      ? { playerId: id, name: p.name, controlledBy: p.controlledBy }
+      : { playerId: id, name: '', controlledBy: 'empty' });
+  }
+  const started = state.phase !== 'SETUP_WAITING_JOIN' && state.phase !== 'SETUP_READY';
+  return { phase: state.phase, expectedPlayerCount: state.expectedPlayerCount, seats, started };
+}
+
+/** Phase 2：斷線接管共用（翻轉為 ai + 移出 voteReady/skippedHumans；gate 內未完成 → 補派 DISPATCH_LLM） */
+function applyDisconnect(state: GameState, playerId: number, effects: Effect[]): TransitionResult | null {
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) {
+    return { state, effects: [], accepted: false, reason: `unknown player P${playerId}` };
+  }
+  if (player.controlledBy === 'ai') {
+    return { state, effects, accepted: true };   // 冪等：接受但無狀態變更
+  }
+  player.controlledBy = 'ai';
+  state.voteReady = state.voteReady.filter((id) => id !== playerId);
+  state.skippedHumans = state.skippedHumans.filter((id) => id !== playerId);
+  const gate = state.pendingGate;
+  if (gate && gate.required.includes(playerId) && !gate.done.includes(playerId)) {
+    effects.push({ type: 'DISPATCH_LLM', playerId, kind: gate.kind });
+  }
+  return null;
+}
+
+/** Phase 2：重連拿回共用（僅存活；SETUP 階段拒絕） */
+function applyReconnect(state: GameState, playerId: number): TransitionResult | null {
+  if (state.phase === 'SETUP_WAITING_JOIN' || state.phase === 'SETUP_READY') {
+    return { state, effects: [], accepted: false, reason: 'not started' };
+  }
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player || !player.alive) {
+    return { state, effects: [], accepted: false, reason: 'not alive' };
+  }
+  player.controlledBy = 'human';
+  return null;
 }
 
 function makeLobbyPlayer(state: GameState, name: string): Player {
@@ -164,6 +274,9 @@ function recordNightAction(state: GameState, playerId: number, targetId: number)
   if (!target || !target.alive) {
     return { state, effects: [], accepted: false, reason: `target P${targetId} not alive` };
   }
+  if (targetId === playerId) {
+    return { state, effects: [], accepted: false, reason: `P${playerId} 不可指定自己` };
+  }
   state.nightActions = state.nightActions.filter((a) => a.actorId !== playerId);
   const action: NightAction = { type, actorId: playerId, targetId };
   state.nightActions.push(action);
@@ -220,6 +333,36 @@ export function transition(state: GameState, event: GameEvent): TransitionResult
         }
         return { state, effects, accepted: true };
       }
+      if (event.type === 'HUMAN_JOIN') {
+        const r = applySeatJoin(state, event.playerId, event.name, 'human');
+        if (r) return r;
+        const effects: Effect[] = [];
+        touch(effects);
+        if (state.players.length >= state.expectedPlayerCount) {
+          state.phase = 'SETUP_READY';
+        }
+        return { state, effects, accepted: true };
+      }
+      if (event.type === 'AI_JOIN') {
+        const r = applySeatJoin(state, event.playerId, undefined, 'ai');
+        if (r) return r;
+        const effects: Effect[] = [];
+        touch(effects);
+        if (state.players.length >= state.expectedPlayerCount) {
+          state.phase = 'SETUP_READY';
+        }
+        return { state, effects, accepted: true };
+      }
+      if (event.type === 'DISCONNECT') {
+        const idx = state.players.findIndex((p) => p.id === event.playerId);
+        if (idx < 0) {
+          return { state, effects: [], accepted: false, reason: `unknown player P${event.playerId}` };
+        }
+        state.players.splice(idx, 1);
+        const effects: Effect[] = [];
+        touch(effects);
+        return { state, effects, accepted: true };
+      }
       if (event.type === 'CLIENT_LEAVE') {
         if (state.players.length === 0) {
           return { state, effects: [], accepted: false, reason: 'lobby empty' };
@@ -245,6 +388,33 @@ export function transition(state: GameState, event: GameEvent): TransitionResult
         touch(effects);
         return { state, effects, accepted: true };
       }
+      if (event.type === 'HUMAN_JOIN') {
+        const r = applySeatJoin(state, event.playerId, event.name, 'human');
+        if (r) return r;
+        const effects: Effect[] = [];
+        touch(effects);
+        return { state, effects, accepted: true };
+      }
+      if (event.type === 'AI_JOIN') {
+        const r = applySeatJoin(state, event.playerId, undefined, 'ai');
+        if (r) return r;
+        const effects: Effect[] = [];
+        touch(effects);
+        return { state, effects, accepted: true };
+      }
+      if (event.type === 'DISCONNECT') {
+        const idx = state.players.findIndex((p) => p.id === event.playerId);
+        if (idx < 0) {
+          return { state, effects: [], accepted: false, reason: `unknown player P${event.playerId}` };
+        }
+        state.players.splice(idx, 1);
+        if (state.players.length < state.expectedPlayerCount) {
+          state.phase = 'SETUP_WAITING_JOIN';
+        }
+        const effects: Effect[] = [];
+        touch(effects);
+        return { state, effects, accepted: true };
+      }
       if (event.type === 'CLIENT_LEAVE') {
         state.players.pop();
         if (state.players.length < state.expectedPlayerCount) {
@@ -261,6 +431,8 @@ export function transition(state: GameState, event: GameEvent): TransitionResult
         assignRolesToPlayers(state);
         state.day = 1;
         state.nightActions = [];
+        state.voteReady = [];
+        state.skippedHumans = [];
         state.phase = 'NIGHT_COLLECTING';
         state.boardVersion++;
         const effects: Effect[] = [];
@@ -282,6 +454,20 @@ export function transition(state: GameState, event: GameEvent): TransitionResult
           state.phase = 'NIGHT_RESOLVING';
           effects.push({ type: 'ENQUEUE', event: { type: 'RESOLVE_NIGHT' } });
         }
+        return { state, effects, accepted: true };
+      }
+      if (event.type === 'DISCONNECT') {
+        const effects: Effect[] = [];
+        touch(effects);
+        const r = applyDisconnect(state, event.playerId, effects);
+        if (r) return r;
+        return { state, effects, accepted: true };
+      }
+      if (event.type === 'RECONNECT') {
+        const r = applyReconnect(state, event.playerId);
+        if (r) return r;
+        const effects: Effect[] = [];
+        touch(effects);
         return { state, effects, accepted: true };
       }
       if (event.type === 'ACTION_TIMEOUT') {
@@ -328,6 +514,20 @@ export function transition(state: GameState, event: GameEvent): TransitionResult
         }
         return { state, effects, accepted: true };
       }
+      if (event.type === 'DISCONNECT') {
+        const effects: Effect[] = [];
+        touch(effects);
+        const r = applyDisconnect(state, event.playerId, effects);
+        if (r) return r;
+        return { state, effects, accepted: true };
+      }
+      if (event.type === 'RECONNECT') {
+        const r = applyReconnect(state, event.playerId);
+        if (r) return r;
+        const effects: Effect[] = [];
+        touch(effects);
+        return { state, effects, accepted: true };
+      }
       return { state, effects: [], accepted: false, reason: `ignored in ${state.phase}` };
     }
 
@@ -335,6 +535,7 @@ export function transition(state: GameState, event: GameEvent): TransitionResult
       if (event.type === 'HUMAN_SPEAK') {
         const rejected = recordSpeech(state, event.playerId, event.text);
         if (rejected) return rejected;
+        state.skippedHumans = state.skippedHumans.filter((id) => id !== event.playerId);
         const effects: Effect[] = [];
         touch(effects);
         return { state, effects, accepted: true };
@@ -345,12 +546,54 @@ export function transition(state: GameState, event: GameEvent): TransitionResult
         }
         const rejected = recordSpeech(state, event.playerId, event.text);
         if (rejected) return rejected;
+        state.skippedHumans = [];
         const effects: Effect[] = [];
         touch(effects);
         return { state, effects, accepted: true };
       }
       if (event.type === 'HUMAN_SKIP') {
-        return { state, effects: [], accepted: true };
+        const player = state.players.find((p) => p.id === event.playerId);
+        if (!player || !player.alive) {
+          return { state, effects: [], accepted: false, reason: `P${event.playerId} not alive` };
+        }
+        if (!state.skippedHumans.includes(event.playerId)) state.skippedHumans.push(event.playerId);
+        const effects: Effect[] = [];
+        touch(effects);
+        return { state, effects, accepted: true };
+      }
+      if (event.type === 'HUMAN_READY_VOTE') {
+        const player = state.players.find((p) => p.id === event.playerId);
+        if (!player || !player.alive) {
+          return { state, effects: [], accepted: false, reason: `P${event.playerId} not alive` };
+        }
+        if (!state.voteReady.includes(event.playerId)) state.voteReady.push(event.playerId);
+        const effects: Effect[] = [];
+        touch(effects);
+        if (allAliveHumansReady(state)) {
+          state.phase = 'DAY_VOTING_COLLECTING';
+          openVoteGate(state, effects);
+        }
+        return { state, effects, accepted: true };
+      }
+      if (event.type === 'HUMAN_UNREADY_VOTE') {
+        state.voteReady = state.voteReady.filter((id) => id !== event.playerId);
+        const effects: Effect[] = [];
+        touch(effects);
+        return { state, effects, accepted: true };
+      }
+      if (event.type === 'DISCONNECT') {
+        const effects: Effect[] = [];
+        touch(effects);
+        const r = applyDisconnect(state, event.playerId, effects);
+        if (r) return r;
+        return { state, effects, accepted: true };
+      }
+      if (event.type === 'RECONNECT') {
+        const r = applyReconnect(state, event.playerId);
+        if (r) return r;
+        const effects: Effect[] = [];
+        touch(effects);
+        return { state, effects, accepted: true };
       }
       if (event.type === 'MASON_CHAT') {
         const player = state.players.find((p) => p.id === event.playerId);
@@ -393,6 +636,20 @@ export function transition(state: GameState, event: GameEvent): TransitionResult
         touch(effects);
         return { state, effects, accepted: true };
       }
+      if (event.type === 'DISCONNECT') {
+        const effects: Effect[] = [];
+        touch(effects);
+        const r = applyDisconnect(state, event.playerId, effects);
+        if (r) return r;
+        return { state, effects, accepted: true };
+      }
+      if (event.type === 'RECONNECT') {
+        const r = applyReconnect(state, event.playerId);
+        if (r) return r;
+        const effects: Effect[] = [];
+        touch(effects);
+        return { state, effects, accepted: true };
+      }
       return { state, effects: [], accepted: false, reason: `ignored in ${state.phase}` };
     }
 
@@ -407,6 +664,20 @@ export function transition(state: GameState, event: GameEvent): TransitionResult
           state.phase = 'DAY_VOTING_RESOLVING';
           effects.push({ type: 'ENQUEUE', event: { type: 'RESOLVE_VOTES' } });
         }
+        return { state, effects, accepted: true };
+      }
+      if (event.type === 'DISCONNECT') {
+        const effects: Effect[] = [];
+        touch(effects);
+        const r = applyDisconnect(state, event.playerId, effects);
+        if (r) return r;
+        return { state, effects, accepted: true };
+      }
+      if (event.type === 'RECONNECT') {
+        const r = applyReconnect(state, event.playerId);
+        if (r) return r;
+        const effects: Effect[] = [];
+        touch(effects);
         return { state, effects, accepted: true };
       }
       if (event.type === 'ACTION_TIMEOUT') {
@@ -458,16 +729,45 @@ export function transition(state: GameState, event: GameEvent): TransitionResult
         }
         return { state, effects, accepted: true };
       }
+      if (event.type === 'DISCONNECT') {
+        const effects: Effect[] = [];
+        touch(effects);
+        const r = applyDisconnect(state, event.playerId, effects);
+        if (r) return r;
+        return { state, effects, accepted: true };
+      }
+      if (event.type === 'RECONNECT') {
+        const r = applyReconnect(state, event.playerId);
+        if (r) return r;
+        const effects: Effect[] = [];
+        touch(effects);
+        return { state, effects, accepted: true };
+      }
       return { state, effects: [], accepted: false, reason: `ignored in ${state.phase}` };
     }
 
     case 'DAY_RESULT_ANNOUNCING': {
+      if (event.type === 'DISCONNECT') {
+        const effects: Effect[] = [];
+        touch(effects);
+        const r = applyDisconnect(state, event.playerId, effects);
+        if (r) return r;
+        return { state, effects, accepted: true };
+      }
+      if (event.type === 'RECONNECT') {
+        const r = applyReconnect(state, event.playerId);
+        if (r) return r;
+        const effects: Effect[] = [];
+        touch(effects);
+        return { state, effects, accepted: true };
+      }
       if (event.type === 'ADVANCE_DAY') {
         state.daySummaries.push(summarizeDay(state, state.day));
         state.day++;
         state.phase = 'NIGHT_COLLECTING';
         state.nightActions = [];
         state.voteReady = [];
+        state.skippedHumans = [];
         delete state.wolfKillTarget;
         delete state.guardProtectedTarget;
         delete state.seerCheckTarget;
@@ -491,13 +791,13 @@ export function transition(state: GameState, event: GameEvent): TransitionResult
 // ============================================
 
 export function getNightActors(state: GameState): number[] {
+  // Phase 2：seer（存活）+ guard（存活且 day > 1）+ 全部存活狼（狼人會議）
   const actors: number[] = [];
   const seer = state.players.find((p) => p.role === Role.SEER && p.alive);
   if (seer) actors.push(seer.id);
   const guard = state.players.find((p) => p.role === Role.GUARD && p.alive && state.day > 1);
   if (guard) actors.push(guard.id);
-  const firstWolf = getAliveWerewolves(state.players)[0];
-  if (firstWolf) actors.push(firstWolf.id);
+  for (const w of getAliveWerewolves(state.players)) actors.push(w.id);
   return actors;
 }
 
@@ -589,7 +889,18 @@ export function buildPlayerSnapshot(state: GameState, playerId: number): PlayerS
     you.wolfAllyIds = getAliveWerewolves(state.players)
       .map((w) => w.id)
       .filter((id) => id !== playerId);
+    // Phase 2：狼人會議目前提交（僅狼；內容只有 wolfId/targetId，無 controlledBy）
+    you.wolfMeeting = state.nightActions
+      .filter((a) => a.type === NightActionType.WOLF_KILL)
+      .map((a) => ({ wolfId: a.actorId, targetId: a.targetId }));
   }
+
+  // Phase 2：gate 公開資訊（無身分洩漏）
+  const gate = state.pendingGate;
+  const canAct = gate !== null
+    && gate.required.includes(playerId)
+    && !gate.done.includes(playerId);
+  you.canAct = canAct;
 
   return {
     phase: state.phase,
@@ -597,6 +908,7 @@ export function buildPlayerSnapshot(state: GameState, playerId: number): PlayerS
     ...pub,
     winner: state.winner,
     gameOver: state.gameOver,
+    gateDeadline: gate?.deadline ?? null,
     you,
   };
 }

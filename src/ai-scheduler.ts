@@ -12,6 +12,7 @@
 import type { AIScheduler } from './engine.js';
 import type { GameState, SchedulerContext } from './types.js';
 import { getAlivePlayers } from './assignment.js';
+import { allAliveHumansSkipped } from './game-state.js';
 import {
   buildPrompt, buildPreSpeechPrompt, buildJudgePrompt, buildExpandPrompt, summarizeDay,
 } from './character-session.js';
@@ -125,6 +126,11 @@ export class SpeechScheduler implements AIScheduler {
     if (state.boardVersion !== this.lastSeenBoardVersion) {
       this.lastSeenBoardVersion = state.boardVersion;
       this.lastMessageTime = Date.now();
+      return;
+    }
+    // Phase 2：全真人跳過 → 立即跑管線（不等 quiet 門檻）
+    if (allAliveHumansSkipped(state)) {
+      void this.runPipeline();
       return;
     }
     if (Date.now() - this.lastMessageTime >= this.options.quietMs) {
@@ -307,7 +313,10 @@ export class SpeechScheduler implements AIScheduler {
     text: string,
     commitVersion: number,
   ): Promise<void> {
-    const remaining = this.options.cdMs - (Date.now() - this.lastMessageTime);
+    // Phase 2：全真人跳過 → CD 解除（跳過 sleep；AI_SPEECH_DONE 被接受時清空 skippedHumans，防循環）
+    const state = this.ctx.getState();
+    const skipCd = allAliveHumansSkipped(state);
+    const remaining = skipCd ? 0 : this.options.cdMs - (Date.now() - this.lastMessageTime);
     if (remaining > 0) await sleep(remaining);
     if (token !== this.pipelineToken) return;
     if (this.ctx.getState().phase !== 'DAY_DISCUSSION_OPEN') return;

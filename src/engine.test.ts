@@ -162,3 +162,45 @@ test('ScriptedGM：啟發式完整局跑通（確定性策略）', () => {
   assert.ok(engine.getState().winner === 'village' || engine.getState().winner === 'werewolf');
   engine.close();
 });
+
+test('Phase 2：boardVersion 變更 → scheduler.onBoardUpdated 被呼叫', () => {
+  const notified: GameState[] = [];
+  const fakeScheduler = {
+    onBoardUpdated: (s: GameState) => { notified.push(s); },
+    onPhaseEntered: () => undefined,
+  };
+  const engine = new GameEngine({ mode: 'gm', scheduler: fakeScheduler }, createGameState(6));
+  for (let i = 0; i < 6; i++) engine.enqueue({ type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  engine.drain();
+  const beforeJoin = notified.length;
+  engine.enqueue({ type: 'START_GAME' });
+  engine.enqueue({ type: 'ACTION_TIMEOUT', gateId: 'night-1' });
+  engine.drain();
+  assert.equal(engine.getState().phase, 'DAY_DISCUSSION_OPEN');
+  // START_GAME / RESOLVE_NIGHT 皆 boardVersion++ → 皆通知
+  assert.ok(notified.length > beforeJoin);
+  const n0 = notified.length;
+  // HUMAN_SPEAK 被接受 → boardVersion++ → 通知
+  const speaker = aliveIds(engine.getState())[0];
+  engine.enqueue({ type: 'HUMAN_SPEAK', playerId: speaker, text: '真人發言' });
+  engine.drain();
+  assert.equal(notified.length, n0 + 1);
+  // 被拒事件（版本不符）→ 不通知
+  engine.enqueue({
+    type: 'AI_SPEECH_DONE', playerId: speaker, text: '過期', boardVersion: engine.getState().boardVersion - 1,
+  });
+  engine.drain();
+  assert.equal(notified.length, n0 + 1);
+  engine.close();
+});
+
+test('Phase 2：tryEvent 立即處理並回傳 TransitionResult', () => {
+  const engine = new GameEngine({ mode: 'gm' }, createGameState(6));
+  const r = engine.tryEvent({ type: 'HUMAN_JOIN', playerId: 1, name: 'H' });
+  assert.equal(r.accepted, true);
+  assert.ok(r.effects.some((e) => e.type === 'BROADCAST'));
+  const bad = engine.tryEvent({ type: 'HUMAN_JOIN', playerId: 1, name: 'H2' });
+  assert.equal(bad.accepted, false);
+  assert.equal(bad.reason, 'seat taken');
+  engine.close();
+});

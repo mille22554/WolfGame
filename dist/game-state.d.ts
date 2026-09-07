@@ -7,8 +7,12 @@
  * - 夜晚結算唯一來源：night.ts resolveNightActions
  * - 平票 = 無人出局（全系統唯一規則）
  */
-import { GameState, Team, Phase, GameEvent, PlayerSnapshot, GMSnapshot, SpectatorSnapshot, TransitionResult } from './types.js';
+import { GameState, Team, Phase, GameEvent, PlayerSnapshot, GMSnapshot, SpectatorSnapshot, LobbySnapshot, TransitionResult } from './types.js';
 export declare function createGameState(playerCount: number, humanPlayerIndices?: number[]): GameState;
+/** Phase 2：全存活真人皆已跳過發言（無真人 → false） */
+export declare function allAliveHumansSkipped(state: GameState): boolean;
+/** Phase 2：大廳 snapshot */
+export declare function buildLobbySnapshot(state: GameState): LobbySnapshot;
 export declare function transition(state: GameState, event: GameEvent): TransitionResult;
 export declare function getNightActors(state: GameState): number[];
 export declare function getMediumResults(state: GameState): {

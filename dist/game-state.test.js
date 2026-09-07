@@ -289,8 +289,11 @@ test('DAY_RESULT_ANNOUNCING：ADVANCE_DAY → daySummary + NIGHT_COLLECTING', ()
     const s = startedState(6);
     toVotingAllAI(s);
     const voters = [...s.pendingGate.required];
+    // 硬化（flake 修復）：鎖定非狼為票死目標，避免洗牌使首日票死最後一狼而直接結束
+    // （原寫 voters[0] 在狼為最低存活 id 時觸發 GAME_OVER；斷言意圖不變）
+    const target = voters.find((v) => s.players.find((p) => p.id === v).role !== Role.WEREWOLF) ?? voters[0];
     for (const voter of voters) {
-        transition(s, { type: 'AI_VOTE_DONE', playerId: voter, targetId: voters[0] });
+        transition(s, { type: 'AI_VOTE_DONE', playerId: voter, targetId: voter === target ? voters[0] === target ? voters[1] : voters[0] : target });
     }
     transition(s, { type: 'RESOLVE_VOTES' });
     assert.equal(s.phase, 'DAY_RESULT_ANNOUNCING');
