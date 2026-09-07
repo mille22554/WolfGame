@@ -499,13 +499,7 @@ export function getMediumResults(state) {
     }
     return results;
 }
-// ============================================
-// buildPlayerSnapshot（per-client 過濾：永不洩漏 role/team/controlledBy）
-// ============================================
-export function buildPlayerSnapshot(state, playerId) {
-    const me = state.players.find((p) => p.id === playerId);
-    if (!me)
-        throw new Error(`unknown player P${playerId}`);
+function buildPublicFields(state) {
     const alivePlayers = getAlivePlayers(state.players).map((p) => ({ id: p.id, name: p.name }));
     const deadPlayers = state.deathHistory.map((d) => {
         const pl = state.players.find((p) => p.id === d.playerId);
@@ -524,6 +518,13 @@ export function buildPlayerSnapshot(state, playerId) {
     const votes = state.votes
         .filter((v) => v.day === state.day)
         .map((v) => ({ voterId: v.voterId, targetId: v.targetId }));
+    return { alivePlayers, deadPlayers, nightResult, discussionLog, votes };
+}
+export function buildPlayerSnapshot(state, playerId) {
+    const me = state.players.find((p) => p.id === playerId);
+    if (!me)
+        throw new Error(`unknown player P${playerId}`);
+    const pub = buildPublicFields(state);
     const you = { role: me.role, team: me.team };
     if (me.role === Role.SEER) {
         you.seerChecks = state.seerChecks
@@ -550,14 +551,22 @@ export function buildPlayerSnapshot(state, playerId) {
     return {
         phase: state.phase,
         day: state.day,
-        alivePlayers,
-        deadPlayers,
-        nightResult,
-        discussionLog,
-        votes,
+        ...pub,
         winner: state.winner,
         gameOver: state.gameOver,
         you,
+    };
+}
+// ============================================
+// buildSpectatorSnapshot（觀戰者視角：公開欄位，不含 you，永不洩漏角色）
+// ============================================
+export function buildSpectatorSnapshot(state) {
+    return {
+        phase: state.phase,
+        day: state.day,
+        ...buildPublicFields(state),
+        winner: state.winner,
+        gameOver: state.gameOver,
     };
 }
 // ============================================

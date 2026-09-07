@@ -3,7 +3,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createGameState, transition, buildPlayerSnapshot, buildGMSnapshot, getNightActors } from './game-state.js';
+import { createGameState, transition, buildPlayerSnapshot, buildGMSnapshot, buildSpectatorSnapshot, getNightActors } from './game-state.js';
 import type { GameState } from './types.js';
 import { Role, Team } from './types.js';
 
@@ -108,7 +108,8 @@ test('medium 的 mediumResults 由 deathHistory 推導', () => {
   toDiscussion(s, [mediumEarly.id]); // 保靈能者首夜存活
   transition(s, { type: 'CLOSE_DISCUSSION' });
   const voters = [...s.pendingGate!.required];
-  const target = voters[0];
+  // 目標避開靈能者（否則被票死，本案例無法觀察；voters[0] 恰為靈能者約 1/8 機率）
+  const target = voters.find((v) => v !== mediumEarly.id) ?? voters[0];
   for (const voter of voters) {
     transition(s, { type: 'AI_VOTE_DONE', playerId: voter, targetId: voter === target ? voters[1] : target });
   }
@@ -187,4 +188,29 @@ test('nightResult 由最後一筆 wolf_kill 推導', () => {
   const snap = buildPlayerSnapshot(s, anyAlive);
   assert.ok(snap.nightResult);
   assert.ok(snap.nightResult!.includes(`P${victim}`));
+});
+
+test('觀戰者 snapshot：公開欄位與玩家一致、無 you、無角色洩漏', () => {
+  const s = createGameState(9);
+  joinAll(s, 9);
+  transition(s, { type: 'START_GAME' });
+  toDiscussion(s);
+  const spec = buildSpectatorSnapshot(s);
+  assert.ok(!('you' in spec));
+  assert.deepEqual(Object.keys(spec).sort(), [
+    'alivePlayers', 'day', 'deadPlayers', 'discussionLog',
+    'gameOver', 'nightResult', 'phase', 'votes', 'winner',
+  ]);
+  const dumped = JSON.stringify(spec);
+  assert.ok(!dumped.includes('controlledBy'));
+  assert.ok(!dumped.includes('"role"'));
+  assert.ok(!dumped.includes('"team"'));
+  // 公開欄位與玩家 snapshot 一致
+  const anyAlive = aliveIds(s)[0];
+  const player = buildPlayerSnapshot(s, anyAlive);
+  assert.deepEqual(spec.alivePlayers, player.alivePlayers);
+  assert.deepEqual(spec.deadPlayers, player.deadPlayers);
+  assert.equal(spec.nightResult, player.nightResult);
+  assert.deepEqual(spec.discussionLog, player.discussionLog);
+  assert.deepEqual(spec.votes, player.votes);
 });

@@ -297,4 +297,126 @@ export declare function isWerewolfTeam(role: Role): boolean;
 export declare function seerSeesAs(targetRole: Role): SeerResult;
 export declare function mediumSeesAs(targetRole: Role): MediumResult;
 export type { Personality };
+/** LLM 文字生成參數（沿用 llm.ts 語義；正典定義移至此，llm.ts 再匯出相容） */
+export interface GenerationConfig {
+    temperature?: number;
+    maxTokens?: number;
+}
+/** 觀戰者視角：與 PlayerSnapshot 公開欄位相同，不含 you（永不洩漏角色） */
+export interface SpectatorSnapshot {
+    phase: Phase;
+    day: number;
+    alivePlayers: {
+        id: number;
+        name: string;
+    }[];
+    deadPlayers: {
+        id: number;
+        name: string;
+        cause: string;
+        day: number;
+    }[];
+    nightResult: string | null;
+    discussionLog: {
+        playerId: number;
+        text: string;
+    }[];
+    votes: {
+        voterId: number;
+        targetId: number;
+    }[];
+    winner: Team | null;
+    gameOver: boolean;
+}
+/** Worker 任務（主 → worker） */
+export interface WorkerJob {
+    jobId: string;
+    kind: 'speech' | 'vote' | 'night' | 'pre_speech' | 'judge' | 'expand';
+    prompt: string;
+    temperature?: number;
+    maxTokens?: number;
+}
+export type MainToWorkerMessage = {
+    type: 'INIT';
+    modelPath: string;
+    contextSize: number;
+    contextCount: number;
+} | {
+    type: 'JOB';
+    job: WorkerJob;
+} | {
+    type: 'SHUTDOWN';
+};
+export type WorkerToMainMessage = {
+    type: 'READY';
+} | {
+    type: 'RESULT';
+    jobId: string;
+    ok: true;
+    text: string;
+} | {
+    type: 'RESULT';
+    jobId: string;
+    ok: false;
+    error: string;
+} | {
+    type: 'LOG';
+    level: 'info' | 'warn' | 'error';
+    message: string;
+};
+/** LLM 分派器（Phase 1 新增 generate，供預發言/裁判/展開用） */
+export interface LLMDispatcher {
+    requestNightAction(playerId: number, prompt: string): Promise<{
+        targetId: number;
+    }>;
+    requestVote(playerId: number, prompt: string): Promise<{
+        targetId: number;
+    }>;
+    requestSpeech(playerId: number, prompt: string): Promise<{
+        text: string;
+    }>;
+    /** Phase 1 新增：原始文字生成（預發言/裁判/展開用） */
+    generate(prompt: string, config?: GenerationConfig): Promise<string>;
+}
+/** 客戶端註冊表（Phase 1 新增觀戰者廣播，optional 保持相容） */
+export interface ClientRegistry {
+    getConnectedPlayerIds(): number[];
+    send(playerId: number, snapshot: PlayerSnapshot): void;
+    /** Phase 1 新增（optional）：觀戰者廣播 */
+    sendSpectator?(snapshot: SpectatorSnapshot): void;
+    hasSpectators?(): boolean;
+}
+/** SpeechScheduler 建構參數 */
+export interface SchedulerContext {
+    enqueue(event: GameEvent): void;
+    getState(): GameState;
+    llm: LLMDispatcher;
+}
+/** 前端 WS 協定：伺服器 → 客戶端 */
+export type ServerToClientMessage = {
+    type: 'SNAPSHOT';
+    snapshot: SpectatorSnapshot | GMSnapshot;
+    gmView: boolean;
+} | {
+    type: 'MODEL_STATUS';
+    state: 'downloading' | 'ready' | 'error';
+    downloaded?: number;
+    total?: number;
+    error?: string;
+} | {
+    type: 'PING';
+} | {
+    type: 'SHUTDOWN';
+};
+/** 前端 WS 協定：客戶端 → 伺服器 */
+export type ClientToServerMessage = {
+    type: 'PONG';
+} | {
+    type: 'REQUEST_SNAPSHOT';
+} | {
+    type: 'SET_GM_VIEW';
+    enabled: boolean;
+} | {
+    type: 'LEAVE';
+};
 //# sourceMappingURL=types.d.ts.map

@@ -6,7 +6,7 @@
  * - phase 變更立即 flushSave；其餘 SAVE debounce（預設 5s）
  * - gate timer 到期 → enqueue ACTION_TIMEOUT
  */
-import { transition, buildPlayerSnapshot, saveState, createGameState } from './game-state.js';
+import { transition, buildPlayerSnapshot, buildSpectatorSnapshot, saveState, createGameState } from './game-state.js';
 import { buildPrompt } from './character-session.js';
 function defaultTimeout(mode, kind) {
     if (mode === 'gm')
@@ -151,6 +151,14 @@ export class GameEngine {
             }
             catch {
                 // 單一客戶端失敗不影響其他人
+            }
+        }
+        if (registry.hasSpectators?.()) {
+            try {
+                registry.sendSpectator?.(buildSpectatorSnapshot(this.state));
+            }
+            catch {
+                // 觀戰廣播失敗不影響遊戲
             }
         }
     }

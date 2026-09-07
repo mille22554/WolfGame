@@ -3,7 +3,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPrompt, summarizeDay } from './character-session.js';
+import { buildPrompt, summarizeDay, buildPreSpeechPrompt, buildJudgePrompt, buildExpandPrompt, PRE_SPEECH_BUDGET } from './character-session.js';
 import { createGameState, transition, getNightActors } from './game-state.js';
 import type { GameState } from './types.js';
 import { Role } from './types.js';
@@ -83,4 +83,42 @@ test('summarizeDay 格式：top3 指控 + 投票結果', () => {
   const summary = summarizeDay(s, s.day);
   assert.ok(summary.includes(`第${s.day}天摘要`));
   assert.ok(summary.includes(`P${b}`));
+});
+
+test('buildPreSpeechPrompt：輕量段落齊全、≤ 3000 字元', () => {
+  const s = discussionState();
+  const speaker = aliveIds(s)[0];
+  transition(s, { type: 'HUMAN_SPEAK', playerId: speaker, text: '大家早安，今天多聽聽' });
+  s.daySummaries.push('第0天摘要標記');
+  const prompt = buildPreSpeechPrompt(s, speaker);
+  assert.ok(prompt.includes('人格設定'));
+  assert.ok(prompt.includes('你的角色資訊'));
+  assert.ok(prompt.includes('當天摘要'));
+  assert.ok(prompt.includes('第0天摘要標記'));
+  assert.ok(prompt.includes('最近討論'));
+  assert.ok(prompt.includes('大家早安'));
+  assert.ok(prompt.includes('預發言草稿'));
+  assert.ok(prompt.length <= PRE_SPEECH_BUDGET, `預發言 prompt ${prompt.length} 字元應 ≤ ${PRE_SPEECH_BUDGET}`);
+});
+
+test('buildJudgePrompt：全盲（打亂匿名、不含 P 編號）+ 評分指令', () => {
+  const prompt = buildJudgePrompt('第1天摘要標記', [
+    { slot: 1, text: '今天氣氛有點緊張' },
+    { slot: 2, text: '多聽聽大家的說法' },
+  ]);
+  assert.ok(prompt.includes('第1天摘要標記'));
+  assert.ok(prompt.includes('1. 今天氣氛有點緊張'));
+  assert.ok(prompt.includes('2. 多聽聽大家的說法'));
+  assert.ok(prompt.includes('裁判任務'));
+  assert.ok(!/P\d+/.test(prompt), '裁判 prompt 不得含 P 編號');
+});
+
+test('buildExpandPrompt：標準 speech prompt + 草稿附加', () => {
+  const s = discussionState();
+  const speaker = aliveIds(s)[0];
+  const draft = 'P9：「我比較在意沉默的人。」';
+  const prompt = buildExpandPrompt(s, speaker, draft);
+  assert.ok(prompt.includes('任務'), '應含標準 speech 任務指令');
+  assert.ok(prompt.includes('你的預發言草稿'));
+  assert.ok(prompt.includes(draft));
 });

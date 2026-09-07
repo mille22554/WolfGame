@@ -7,7 +7,7 @@
  * - 夜晚結算唯一來源：night.ts resolveNightActions
  * - 平票 = 無人出局（全系統唯一規則）
  */
-import { GameState, Team, Phase, GameEvent, PlayerSnapshot, GMSnapshot, TransitionResult } from './types.js';
+import { GameState, Team, Phase, GameEvent, PlayerSnapshot, GMSnapshot, SpectatorSnapshot, TransitionResult } from './types.js';
 export declare function createGameState(playerCount: number, humanPlayerIndices?: number[]): GameState;
 export declare function transition(state: GameState, event: GameEvent): TransitionResult;
 export declare function getNightActors(state: GameState): number[];
@@ -17,6 +17,7 @@ export declare function getMediumResults(state: GameState): {
     day: number;
 }[];
 export declare function buildPlayerSnapshot(state: GameState, playerId: number): PlayerSnapshot;
+export declare function buildSpectatorSnapshot(state: GameState): SpectatorSnapshot;
 export declare function buildGMSnapshot(state: GameState): GMSnapshot;
 export declare function saveState(state: GameState): void;
 export declare function loadState(): GameState | null;

@@ -6,7 +6,8 @@
  * - phase 變更立即 flushSave；其餘 SAVE debounce（預設 5s）
  * - gate timer 到期 → enqueue ACTION_TIMEOUT
  */
-import type { GameState, GameEvent, PlayerSnapshot, Phase } from './types.js';
+import type { GameState, GameEvent, Phase, LLMDispatcher, ClientRegistry } from './types.js';
+export type { LLMDispatcher, ClientRegistry } from './types.js';
 export interface EngineOptions {
     mode: 'gm' | 'web';
     nightTimeoutMs?: number;
@@ -17,24 +18,9 @@ export interface EngineOptions {
     registry?: ClientRegistry;
     saveDebounceMs?: number;
 }
-export interface LLMDispatcher {
-    requestNightAction(playerId: number, prompt: string): Promise<{
-        targetId: number;
-    }>;
-    requestVote(playerId: number, prompt: string): Promise<{
-        targetId: number;
-    }>;
-    requestSpeech(playerId: number, prompt: string): Promise<{
-        text: string;
-    }>;
-}
 export interface AIScheduler {
     onBoardUpdated(state: GameState): void;
     onPhaseEntered(state: GameState): void;
-}
-export interface ClientRegistry {
-    getConnectedPlayerIds(): number[];
-    send(playerId: number, snapshot: PlayerSnapshot): void;
 }
 export declare class GameEngine {
     private state;

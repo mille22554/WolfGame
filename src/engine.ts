@@ -7,9 +7,15 @@
  * - gate timer 到期 → enqueue ACTION_TIMEOUT
  */
 
-import type { GameState, GameEvent, PlayerSnapshot, PendingGate, Phase } from './types.js';
-import { transition, buildPlayerSnapshot, saveState, createGameState } from './game-state.js';
+import type {
+  GameState, GameEvent, PlayerSnapshot, PendingGate, Phase,
+  LLMDispatcher, ClientRegistry,
+} from './types.js';
+import { transition, buildPlayerSnapshot, buildSpectatorSnapshot, saveState, createGameState } from './game-state.js';
 import { buildPrompt } from './character-session.js';
+
+// 正典定義已移至 types.ts；此處再匯出以保持舊引用相容
+export type { LLMDispatcher, ClientRegistry } from './types.js';
 
 export interface EngineOptions {
   mode: 'gm' | 'web';
@@ -22,20 +28,9 @@ export interface EngineOptions {
   saveDebounceMs?: number;    // 存檔 debounce，預設 5000（測試可調小）
 }
 
-export interface LLMDispatcher {
-  requestNightAction(playerId: number, prompt: string): Promise<{ targetId: number }>;
-  requestVote(playerId: number, prompt: string): Promise<{ targetId: number }>;
-  requestSpeech(playerId: number, prompt: string): Promise<{ text: string }>;
-}
-
 export interface AIScheduler {
   onBoardUpdated(state: GameState): void;   // Phase 1：發言選擇機制
   onPhaseEntered(state: GameState): void;
-}
-
-export interface ClientRegistry {
-  getConnectedPlayerIds(): number[];
-  send(playerId: number, snapshot: PlayerSnapshot): void;
 }
 
 function defaultTimeout(mode: 'gm' | 'web', kind: 'night' | 'vote' | 'closing'): number {
@@ -184,6 +179,13 @@ export class GameEngine {
         registry.send(pid, buildPlayerSnapshot(this.state, pid));
       } catch {
         // 單一客戶端失敗不影響其他人
+      }
+    }
+    if (registry.hasSpectators?.()) {
+      try {
+        registry.sendSpectator?.(buildSpectatorSnapshot(this.state));
+      } catch {
+        // 觀戰廣播失敗不影響遊戲
       }
     }
   }

@@ -169,4 +169,66 @@ export function summarizeDay(state, day) {
     }
     return parts.join('；');
 }
+// ============================================
+// Phase 1：預發言 / 裁判 / 展開 prompt
+// ============================================
+export const PRE_SPEECH_BUDGET = 3000; // 字元預算
+export const PRE_SPEECH_RECENT = 5; // 最近幾則
+export const PRE_SPEECH_PERSONA_MAX = 500; // 人格精簡上限
+/**
+ * buildPreSpeechPrompt（輕量，2-3K tokens）：
+ * 人格（前 500 字）→ 私有知識 → 當天摘要（最後一則）→ 最近 5 則討論 → 任務指令
+ */
+export function buildPreSpeechPrompt(state, playerId) {
+    const player = state.players.find((p) => p.id === playerId);
+    if (!player)
+        throw new Error(`找不到玩家 P${playerId}`);
+    const personaId = player.personality || `p${playerId}`;
+    const personaFull = readTextIfExists(path.join(getResourceRoot(), 'character', personaId, 'agents.md'));
+    const persona = personaFull.slice(0, PRE_SPEECH_PERSONA_MAX);
+    const privateLines = privateKnowledgeLines(state, playerId);
+    const lastSummary = state.daySummaries.length > 0
+        ? state.daySummaries[state.daySummaries.length - 1]
+        : '尚無摘要';
+    const recent = state.discussionLog
+        .filter((d) => d.day === state.day)
+        .slice(-PRE_SPEECH_RECENT)
+        .map((d) => `P${d.playerId}：${d.text}`);
+    const parts = [
+        persona ? `【人格設定】\n${persona}` : '【人格設定】（無）',
+        `【你的角色資訊】\n${privateLines.join('\n')}`,
+        `【當天摘要】\n${lastSummary}`,
+        `【最近討論】\n${recent.length > 0 ? recent.join('\n') : '（尚無發言）'}`,
+        `【任務】你是 P${playerId}，請寫一句 20-40 字的預發言草稿（不超過 40 字）。\n這是候選草稿，稍後可能被選中展開。圍繞當前局勢，提出一個值得討論的點。\n格式：P${playerId}：「你的草稿」`,
+    ];
+    let prompt = parts.join('\n\n');
+    // 超預算：先丟最近討論最舊條目（固定部分保留）
+    while (prompt.length > PRE_SPEECH_BUDGET && recent.length > 1) {
+        recent.shift();
+        parts[3] = `【最近討論】\n${recent.join('\n')}`;
+        prompt = parts.join('\n\n');
+    }
+    return prompt;
+}
+/**
+ * buildJudgePrompt（裁判，全盲）：
+ * 當天摘要 + 打亂匿名預發言（slot 1..N，不含 P 編號）+ 評分指令
+ */
+export function buildJudgePrompt(daySummary, preSpeeches) {
+    const lines = preSpeeches.map((p) => `${p.slot}. ${p.text}`);
+    const formatExample = preSpeeches.map((p) => `${p.slot}: 分數`).join('\n');
+    return [
+        `【當天摘要】\n${daySummary}`,
+        `【候選發言】\n${lines.join('\n')}`,
+        `【裁判任務】以下是 ${preSpeeches.length} 位玩家的候選發言（順序已打亂，匿名）。\n請針對每一則以 0-10 整數評分，考量三個面向：\n- 新資訊：是否帶來討論中尚未出現的資訊\n- 相關性：是否緊扣當前局勢\n- 推進力：是否能推動討論前進\n輸出格式（每行一則，嚴格遵守）：\n${formatExample}`,
+    ].join('\n\n');
+}
+/**
+ * buildExpandPrompt（展開完整發言）：
+ * buildPrompt(state, playerId, 'speech') + 預發言草稿附加
+ */
+export function buildExpandPrompt(state, playerId, preSpeech) {
+    const base = buildPrompt(state, playerId, 'speech');
+    return `${base}\n\n【你的預發言草稿】${preSpeech}\n你可以沿用或修改這則草稿，展開成完整發言（30-60 字）。`;
+}
 //# sourceMappingURL=character-session.js.map

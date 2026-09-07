@@ -1,0 +1,110 @@
+/* 人狼遊戲 Phase 1 觀戰介面共用樣式 */
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Microsoft JhengHei", "Noto Sans TC", sans-serif;
+  background: #14161c;
+  color: #e8eaf0;
+}
+header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  background: #1e2230;
+  border-bottom: 1px solid #333a52;
+}
+header h1 { font-size: 18px; margin: 0; }
+#statusbar { display: flex; gap: 12px; font-size: 14px; color: #aab2cc; }
+#header-buttons { margin-left: auto; display: flex; gap: 8px; }
+button {
+  background: #39415e;
+  color: #fff;
+  border: 1px solid #4d5878;
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+button:disabled { opacity: 0.4; cursor: default; }
+main {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  height: calc(100vh - 57px);
+}
+#board {
+  flex: 1;
+  overflow-y: auto;
+  background: #1a1e29;
+  border: 1px solid #333a52;
+  border-radius: 8px;
+  padding: 12px;
+}
+#board .msg { margin: 6px 0; line-height: 1.5; }
+#board .night { color: #9db4ff; }
+#board .death { color: #ff9d9d; }
+#board .vote { color: #ffe08a; }
+#board .result { color: #8affc1; font-weight: bold; }
+aside {
+  width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+#players {
+  background: #1a1e29;
+  border: 1px solid #333a52;
+  border-radius: 8px;
+  padding: 12px;
+  overflow-y: auto;
+  max-height: 60%;
+}
+#players .alive { color: #8affc1; }
+#players .dead { color: #777; text-decoration: line-through; }
+/* Phase 2 預留動作區：Phase 1 隱藏，保留結構與側欄高度 */
+#controls {
+  display: none;
+  background: #1a1e29;
+  border: 1px solid #333a52;
+  border-radius: 8px;
+  padding: 12px;
+  min-height: 180px;
+}
+#controls h2 { font-size: 15px; margin: 0 0 8px; }
+#controls div { margin: 6px 0; }
+#disconnect-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+#disconnect-overlay[hidden] { display: none; }
+#disconnect-overlay div {
+  background: #1e2230;
+  border: 1px solid #4d5878;
+  border-radius: 8px;
+  padding: 24px 32px;
+}
+#download-page {
+  max-width: 560px;
+  margin: 80px auto;
+  text-align: center;
+  display: block;
+  height: auto;
+}
+#progress-wrap {
+  background: #1a1e29;
+  border: 1px solid #333a52;
+  border-radius: 8px;
+  height: 24px;
+  overflow: hidden;
+  margin: 16px 0;
+}
+#progress-bar {
+  height: 100%;
+  width: 0%;
+  background: #4d7cff;
+}

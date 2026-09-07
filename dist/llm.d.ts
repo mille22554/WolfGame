@@ -3,13 +3,11 @@
  * 支援 OpenAI 相容端點、測試用 Mock 與本地 llama.cpp 模型
  * OpenAI 分支使用 Node 內建 fetch，不引入新依賴
  */
+import type { GenerationConfig } from './types.js';
+export type { GenerationConfig } from './types.js';
 export interface ChatMessage {
     role: 'system' | 'user' | 'assistant';
     content: string;
-}
-export interface GenerationConfig {
-    temperature?: number;
-    maxTokens?: number;
 }
 export interface LLMProvider {
     chat(messages: ChatMessage[], config?: GenerationConfig): Promise<string>;

@@ -10,7 +10,7 @@
 
 import {
   GameState, Player, Role, Team, Phase, GameEvent, PendingGate,
-  PlayerSnapshot, GMSnapshot, TransitionResult, Effect,
+  PlayerSnapshot, GMSnapshot, SpectatorSnapshot, TransitionResult, Effect,
   NightAction, NightActionType, SeerResult, SCHEMA_VERSION,
 } from './types.js';
 import { assignRolesToPlayers, getAlivePlayers, getAliveWerewolves } from './assignment.js';
@@ -524,10 +524,19 @@ export function getMediumResults(state: GameState): { targetId: number; team: Te
 // buildPlayerSnapshot（per-client 過濾：永不洩漏 role/team/controlledBy）
 // ============================================
 
-export function buildPlayerSnapshot(state: GameState, playerId: number): PlayerSnapshot {
-  const me = state.players.find((p) => p.id === playerId);
-  if (!me) throw new Error(`unknown player P${playerId}`);
+// ============================================
+// 公開欄位（buildPlayerSnapshot / buildSpectatorSnapshot 共用；永不含 role/team/controlledBy）
+// ============================================
 
+interface PublicSnapshotFields {
+  alivePlayers: { id: number; name: string }[];
+  deadPlayers: { id: number; name: string; cause: string; day: number }[];
+  nightResult: string | null;
+  discussionLog: { playerId: number; text: string }[];
+  votes: { voterId: number; targetId: number }[];
+}
+
+function buildPublicFields(state: GameState): PublicSnapshotFields {
   const alivePlayers = getAlivePlayers(state.players).map((p) => ({ id: p.id, name: p.name }));
   const deadPlayers = state.deathHistory.map((d) => {
     const pl = state.players.find((p) => p.id === d.playerId);
@@ -548,6 +557,15 @@ export function buildPlayerSnapshot(state: GameState, playerId: number): PlayerS
   const votes = state.votes
     .filter((v) => v.day === state.day)
     .map((v) => ({ voterId: v.voterId, targetId: v.targetId }));
+
+  return { alivePlayers, deadPlayers, nightResult, discussionLog, votes };
+}
+
+export function buildPlayerSnapshot(state: GameState, playerId: number): PlayerSnapshot {
+  const me = state.players.find((p) => p.id === playerId);
+  if (!me) throw new Error(`unknown player P${playerId}`);
+
+  const pub = buildPublicFields(state);
 
   const you: PlayerSnapshot['you'] = { role: me.role, team: me.team };
   if (me.role === Role.SEER) {
@@ -576,14 +594,24 @@ export function buildPlayerSnapshot(state: GameState, playerId: number): PlayerS
   return {
     phase: state.phase,
     day: state.day,
-    alivePlayers,
-    deadPlayers,
-    nightResult,
-    discussionLog,
-    votes,
+    ...pub,
     winner: state.winner,
     gameOver: state.gameOver,
     you,
+  };
+}
+
+// ============================================
+// buildSpectatorSnapshot（觀戰者視角：公開欄位，不含 you，永不洩漏角色）
+// ============================================
+
+export function buildSpectatorSnapshot(state: GameState): SpectatorSnapshot {
+  return {
+    phase: state.phase,
+    day: state.day,
+    ...buildPublicFields(state),
+    winner: state.winner,
+    gameOver: state.gameOver,
   };
 }
 

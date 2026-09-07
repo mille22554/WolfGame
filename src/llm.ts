@@ -8,15 +8,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getLlama, LlamaChatSession, QwenChatWrapper, resolveModelFile } from 'node-llama-cpp';
 import { getProjectRoot } from './utils.js';
+import type { GenerationConfig } from './types.js';
+
+export type { GenerationConfig } from './types.js';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
-}
-
-export interface GenerationConfig {
-  temperature?: number;
-  maxTokens?: number;
 }
 
 export interface LLMProvider {
