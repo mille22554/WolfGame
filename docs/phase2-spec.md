@@ -28,7 +28,7 @@ Phase 2 完成的定義（全部滿足）：
 3. 斷線重連驗證：真人斷線 → AI 接管 → 重連 → 拿回身分（含 gate 內行動續作）
 4. 狼人會議驗證：真人狼 + AI 狼混合 → 全部提交 → 多數決決定目標
 5. 身分扁平化驗證：GM 檢視以外，任何 snapshot / AI prompt 不含 `controlledBy`；白板無身分標記
-6. 無真人加入時：`LOBBY_TIMEOUT_MS` 後自動全 AI 開局（Phase 1 行為保留）
+6. 開局唯一入口：大廳 [開始遊戲] 鈕（host 按下；無人入座時即開純 AI 局；無自動開局）
 
 ---
 
@@ -39,20 +39,18 @@ Phase 2 完成的定義（全部滿足）：
 ```
 server 啟動（模型就緒後）
   → createGameState(playerCount)（空大廳，SETUP_WAITING_JOIN）
-  → 啟動 LOBBY_TIMEOUT_MS（預設 10s）timer
   → 瀏覽器開 / → 顯示大廳（座位 1..N）
 
 真人連線 → 收到 LOBBY → 點座位 → 送 JOIN { playerId, name }
   → 伺服器 enqueue HUMAN_JOIN → 座位變真人 → 回 JOINED { playerId, token }
-  → 取消 LOBBY_TIMEOUT timer（有人類了，改等人按開始）
 
-[開始遊戲]（任一真人）或 LOBBY_TIMEOUT 到期（無真人）
+[開始遊戲]（僅 host；入座與否皆可按，無人入座即開純 AI 局）
   → 伺服器對每個空位 enqueue AI_JOIN → enqueue START_GAME → drain
   → 遊戲開始（NIGHT_COLLECTING）
 ```
 
 - **座位保留**：真人選座後，該座位由 token 保留。遊戲開始後斷線 → 座位仍保留（AI 臨時接管）；大廳階段斷線 → 座位釋放（可被他人選走）。
-- **開始條件**：只有兩種——真人按 [開始遊戲]，或 LOBBY_TIMEOUT 到期且無真人。**不會**因座位全滿自動開始（符合「等待遊戲開始」）。
+- **開始條件**：只有一種——host 按 [開始遊戲]（入座與否皆可；無人入座即純 AI 局）。**不會**自動開始（無 timer），也不會因座位全滿自動開始。
 
 ### 1.2 身分扁平化（核心原則）
 
@@ -545,7 +543,7 @@ private async broadcastAfterCd(token, playerId, text, commitVersion): Promise<vo
 
 | 變數 | 預設 | 說明 |
 |---|---|---|
-| LOBBY_TIMEOUT_MS | 10000 | 無真人加入時自動全 AI 開局的等待時間 |
+| LOBBY_TIMEOUT_MS | （已移除） | 自動開局已取消，開局唯一入口為開始鈕 |
 | SPEECHES_PER_DAY | 6 | 沿用（僅在無存活真人時自動關閉討論） |
 
 ### 8.2 SeatManager（token 管理）
@@ -613,8 +611,7 @@ if (client.playerId !== undefined) {
   if (!started) {
     seats.release(client.playerId);          // 大廳斷線 → 座位釋放
   }
-  enqueue DISCONNECT { playerId } + drain;   // 遊戲中 → AI 接管；大廳 → 移除玩家
-  if (!started && 大廳已無真人玩家) → 重啟 LOBBY_TIMEOUT timer
+  enqueue DISPATCH_LLM { playerId } + drain;   // 遊戲中 → AI 接管；大廳 → 座位保留＋AI 託管（不斷開局，無 timer）
 }
 /* 既有：零連線兜底 timer */
 ```
@@ -623,44 +620,25 @@ if (client.playerId !== undefined) {
 
 ```typescript
 let started = false;
-let lobbyTimer: ReturnType<typeof setTimeout> | null = null;
+let starting = false;
 
-function startLobbyTimer(): void {
-  clearLobbyTimer();
-  lobbyTimer = setTimeout(() => {
-    lobbyTimer = null;
-    if (!started && 無真人玩家) startGame();   // 無真人 → 全 AI 開局
-  }, options.lobbyTimeoutMs ?? envInt('LOBBY_TIMEOUT_MS', 10000));
-  // unref()
-}
+// 開局唯一入口：host 按 [開始遊戲] → runStartGame()（無自動開局 timer）
+// async runStartGame()：await heavy → resolveCount 建 engine → 灌 HUMAN_JOIN/AI_JOIN → START_GAME → drain
+```
 
 function startGame(): void {
-  if (started) return;
-  started = true;
-  clearLobbyTimer();
-  const state = engine!.getState();
-  for (let id = 1; id <= state.expectedPlayerCount; id++) {
-    if (!state.players.some((p) => p.id === id)) {
-      engine!.enqueue({ type: 'AI_JOIN', playerId: id });
-    }
-  }
-  engine!.enqueue({ type: 'START_GAME' });
-  engine!.drain();
-  broadcast LOBBY（started=true）→ 之後由 engine 廣播 snapshot
+  // 已改為 async runStartGame()（見上）：await heavy → resolveCount 建 engine → 灌座位 → START_GAME
+  // 開局唯一入口：host 按 [開始遊戲]；無自動開局 timer
 }
 
 onJoin(client, playerId, name):
   if (started) → JOIN_REJECTED 'game started'
-  if (seats.isReserved(playerId)) → JOIN_REJECTED 'seat reserved'
-  const result = engine!.tryEvent({ type: 'HUMAN_JOIN', playerId, name });
-  if (!result.accepted) → JOIN_REJECTED result.reason
-  const token = seats.reserve(playerId);
+  lobby.join(playerId, name) → 佔座＋token（座位被佔 → JOIN_REJECTED）
   client.playerId = playerId; client.token = token;
-  clearLobbyTimer();                       // 有人類了，改等人按開始
-  send JOINED { playerId, token };
+  send JOINED { playerId, token }; 廣播 LOBBY
 ```
 
-- 啟動流程：模型就緒 → 建立 engine + scheduler + registry → `startLobbyTimer()` → 開瀏覽器。**不再**自動 CLIENT_JOIN × N + START_GAME（改由大廳流程驅動）。
+- 啟動流程：模型就緒 → heavy（dispatcher＋scheduler）→ 開瀏覽器。大廳等人按 [開始遊戲] 才建 engine 開局（無自動開局）。**不再**自動 CLIENT_JOIN × N + START_GAME（改由大廳流程驅動）。
 
 ### 8.6 autoCloseTimer 修改（真人主導討論）
 
@@ -829,7 +807,7 @@ renderControls(snapshot):
 - 兩 client 搶同一座位 → 第二個 JOIN_REJECTED
 - 斷線 → 引擎狀態 controlledBy 'ai' → 新 WS 送 RECONNECT { token } → JOINED → 拿回身分
 - 未 JOIN 的 client → 觀戰 snapshot（無 `you`）
-- 無真人 → LOBBY_TIMEOUT（測試設短）後自動全 AI 開局
+- 無人入座＋host 按開始 → 純 AI 開局（無自動開局）
 - 遊戲開始後 JOIN → JOIN_REJECTED 'game started'
 
 ### 10.7 既有測試更新
@@ -854,7 +832,7 @@ renderControls(snapshot):
 | 6 | server.ts | server-human.test.ts 全綠；既有 server.test.ts 不破 |
 | 7 | public/ | 手動驗證：大廳選座 → [開始遊戲] → 混合局發言/跳過/準備投票/投票/夜間行動/狼人會議全程可用；斷線重連拿回身分 |
 | 8 | mixed-game.test.ts | 混合局完整局跑通（含斷線接管） |
-| 9 | 收尾 | npm test 全綠（14 檔）；`npm start` 手動完整驗證（含無真人自動全 AI 開局） |
+| 9 | 收尾 | npm test 全綠（14 檔）；`npm start` 手動完整驗證（含 host 按開始開純 AI 局） |
 
 ---
 

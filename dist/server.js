@@ -810,7 +810,6 @@ export async function startServer(options = {}) {
         console.log(`[server] 關閉（${reason}）`);
         if (autoCloseTimer)
             clearInterval(autoCloseTimer);
-        clearLobbyTimer();
         try {
             engine?.save();
         }
@@ -842,28 +841,9 @@ export async function startServer(options = {}) {
             process.exit(0);
     }
     // ---- 等候大廳流程（大廳先於引擎存在；engine 延到 START_GAME 才建立） ----
+    // 開局唯一入口：大廳開始遊戲鈕（host 按下）；無自動開局 timer
     let started = false;
     let starting = false;
-    let lobbyTimer = null;
-    const lobbyTimeoutMs = options.lobbyTimeoutMs ?? envInt('LOBBY_TIMEOUT_MS', 10000);
-    function clearLobbyTimer() {
-        if (lobbyTimer) {
-            clearTimeout(lobbyTimer);
-            lobbyTimer = null;
-        }
-    }
-    function startLobbyTimer() {
-        clearLobbyTimer();
-        lobbyTimer = setTimeout(() => {
-            lobbyTimer = null;
-            // 無已連線真人 → 全 AI 開局（engine 未就緒時 runStartGame 內部等待 heavy）
-            if (!started && !lobby.hasHumanSeats())
-                void runStartGame();
-        }, lobbyTimeoutMs);
-        const t = lobbyTimer;
-        if (typeof t.unref === 'function')
-            t.unref();
-    }
     // 開局：heavy（dispatcher）就緒後，用當下大廳人數建 engine 並灌入座位
     async function runStartGame() {
         if ((started && engine) || starting)
@@ -890,7 +870,6 @@ export async function startServer(options = {}) {
                         engine.enqueue({ type: 'AI_JOIN', playerId: s.playerId });
                     }
                 }
-                clearLobbyTimer();
                 started = true;
                 engine.enqueue({ type: 'START_GAME' });
                 engine.drain();
@@ -921,12 +900,9 @@ export async function startServer(options = {}) {
         ensureReady: () => ensureEngineReady(),
         getLobbySnapshot: () => lobby.snapshot(),
         onLobbySignal: (clientId) => {
-            const first = lobbyClients.size === 0;
             lobbyClients.add(clientId);
             if (lobby.hostClientId === undefined)
                 lobby.setHost(clientId);
-            if (first)
-                startLobbyTimer(); // 大廳開啟即計時（首個遊戲頁訊號，不再等引擎就緒）
         },
         onClientLeave: (clientId, playerId) => {
             lobbyClients.delete(clientId);
@@ -939,8 +915,6 @@ export async function startServer(options = {}) {
             if (playerId !== undefined && !started) {
                 lobby.markDisconnected(playerId); // 座位保留＋AI 託管
                 registry.sendLobby(lobby.snapshot());
-                if (!lobby.hasHumanSeats())
-                    startLobbyTimer();
             }
         },
         actions: {
@@ -950,7 +924,6 @@ export async function startServer(options = {}) {
                 try {
                     const { token } = lobby.join(playerId, name);
                     lobby.removeSpectator(clientId);
-                    clearLobbyTimer(); // 有人類了，改等人按開始
                     registry.sendLobby(lobby.snapshot());
                     return { accepted: true, token };
                 }
@@ -996,7 +969,6 @@ export async function startServer(options = {}) {
                 catch (err) {
                     return { accepted: false, reason: err instanceof Error ? err.message : 'bad count' };
                 }
-                startLobbyTimer();
                 registry.sendLobby(lobby.snapshot());
                 return { accepted: true };
             },
@@ -1007,7 +979,6 @@ export async function startServer(options = {}) {
                 if (started || engine)
                     return { accepted: false, reason: 'game started' };
                 lobby.setRandomCount(enabled);
-                startLobbyTimer();
                 registry.sendLobby(lobby.snapshot());
                 return { accepted: true };
             },
@@ -1032,7 +1003,6 @@ export async function startServer(options = {}) {
                 if (h !== undefined && h !== clientId)
                     return { accepted: false, reason: 'only host' };
                 started = true;
-                clearLobbyTimer();
                 void runStartGame();
                 return { accepted: true };
             },
@@ -1114,7 +1084,7 @@ export async function startServer(options = {}) {
                 ctxSize: options.llamaServerCtxSize ?? envInt('LLAMA_SERVER_CTX_SIZE', 8192),
                 threads: options.llamaServerThreads ?? envInt('LLAMA_SERVER_THREADS', os.cpus().length),
                 parallel: options.llamaServerParallel ?? envInt('LLAMA_SERVER_PARALLEL', 1),
-                idleTimeout: options.llamaServerIdleTimeout ?? envInt('LLAMA_SERVER_IDLE_TIMEOUT', 600),
+                idleTimeout: options.llamaServerIdleTimeout ?? envInt('LLAMA_SERVER_IDLE_TIMEOUT', 600), // 已棄用：b10361 不支援，不轉 flag
                 // 2.38GB 模型載入動輒數分鐘：健康等待放寬至 300s（可用 env 覆寫），避免誤殺
                 healthTimeoutMs: envInt('LLAMA_SERVER_HEALTH_TIMEOUT_MS', 300000),
                 onStatus: (status, info) => {

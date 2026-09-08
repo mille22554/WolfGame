@@ -111,8 +111,8 @@ exe 啟動 → entry.ts → startServer()
   → 檢查 llama-server.exe → 無 → 下載+解壓（MODEL_STATUS stage='llama-server'）
   → 檢查模型 → 無 → 下載（MODEL_STATUS stage='model'）
   → spawn llama-server → /health 就緒
-  → 建立 OpenAICompatibleDispatcher → engine + scheduler + registry
-  → startLobbyTimer() → 開瀏覽器 /
+  → 建立 OpenAICompatibleDispatcher → scheduler + registry（engine 延到 START_GAME 才建）
+  → 開瀏覽器 /（大廳等人按開始，無自動開局）
 ```
 
 ---

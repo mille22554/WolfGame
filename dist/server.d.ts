@@ -24,7 +24,6 @@ export interface ServerOptions {
     pingIntervalMs?: number;
     pingTimeoutMs?: number;
     speechesPerDay?: number;
-    lobbyTimeoutMs?: number;
     exitProcess?: boolean;
     onShutdown?: (reason: string) => void;
     llamaServerPort?: number;

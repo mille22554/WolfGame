@@ -57,7 +57,6 @@ export interface ServerOptions {
   pingIntervalMs?: number;          // env PING_INTERVAL_MS，預設 30000
   pingTimeoutMs?: number;           // env PING_TIMEOUT_MS，預設 10000
   speechesPerDay?: number;          // 缺口補位：全 AI 局每日發言達標後自動 CLOSE_DISCUSSION，預設 6
-  lobbyTimeoutMs?: number;          // Phase 2：env LOBBY_TIMEOUT_MS，無真人加入時自動全 AI 開局，預設 10000
   exitProcess?: boolean;            // 預設 true；測試設 false
   onShutdown?: (reason: string) => void;
   llamaServerPort?: number;        // env LLAMA_SERVER_PORT，預設 3001
@@ -879,7 +878,6 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
     shut = true;
     console.log(`[server] 關閉（${reason}）`);
     if (autoCloseTimer) clearInterval(autoCloseTimer);
-    clearLobbyTimer();
     try {
       engine?.save();
     } catch { /* ignore */ }
@@ -908,28 +906,9 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
   }
 
   // ---- 等候大廳流程（大廳先於引擎存在；engine 延到 START_GAME 才建立） ----
+  // 開局唯一入口：大廳開始遊戲鈕（host 按下）；無自動開局 timer
   let started = false;
   let starting = false;
-  let lobbyTimer: ReturnType<typeof setTimeout> | null = null;
-  const lobbyTimeoutMs = options.lobbyTimeoutMs ?? envInt('LOBBY_TIMEOUT_MS', 10000);
-
-  function clearLobbyTimer(): void {
-    if (lobbyTimer) {
-      clearTimeout(lobbyTimer);
-      lobbyTimer = null;
-    }
-  }
-
-  function startLobbyTimer(): void {
-    clearLobbyTimer();
-    lobbyTimer = setTimeout(() => {
-      lobbyTimer = null;
-      // 無已連線真人 → 全 AI 開局（engine 未就緒時 runStartGame 內部等待 heavy）
-      if (!started && !lobby.hasHumanSeats()) void runStartGame();
-    }, lobbyTimeoutMs);
-    const t = lobbyTimer as unknown as { unref?: () => void };
-    if (typeof t.unref === 'function') t.unref();
-  }
 
   // 開局：heavy（dispatcher）就緒後，用當下大廳人數建 engine 並灌入座位
   async function runStartGame(): Promise<void> {
@@ -958,9 +937,8 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
             engine.enqueue({ type: 'AI_JOIN', playerId: s.playerId });
           }
         }
-        clearLobbyTimer();
-        started = true;
-        engine.enqueue({ type: 'START_GAME' });
+      started = true;
+      engine.enqueue({ type: 'START_GAME' });
         engine.drain();
       } catch (err) {
         // 建 engine／灌座位失敗：退回未開始（避免 started=true＋engine 半殘的永久死鎖）
@@ -987,10 +965,8 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
     ensureReady: () => ensureEngineReady(),
     getLobbySnapshot: () => lobby.snapshot(),
     onLobbySignal: (clientId) => {
-      const first = lobbyClients.size === 0;
       lobbyClients.add(clientId);
       if (lobby.hostClientId === undefined) lobby.setHost(clientId);
-      if (first) startLobbyTimer();   // 大廳開啟即計時（首個遊戲頁訊號，不再等引擎就緒）
     },
     onClientLeave: (clientId, playerId) => {
       lobbyClients.delete(clientId);
@@ -1002,7 +978,6 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
       if (playerId !== undefined && !started) {
         lobby.markDisconnected(playerId);   // 座位保留＋AI 託管
         registry.sendLobby(lobby.snapshot());
-        if (!lobby.hasHumanSeats()) startLobbyTimer();
       }
     },
     actions: {
@@ -1011,7 +986,6 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
         try {
           const { token } = lobby.join(playerId, name);
           lobby.removeSpectator(clientId);
-          clearLobbyTimer();   // 有人類了，改等人按開始
           registry.sendLobby(lobby.snapshot());
           return { accepted: true, token };
         } catch (err) {
@@ -1050,7 +1024,6 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
         } catch (err) {
           return { accepted: false, reason: err instanceof Error ? err.message : 'bad count' };
         }
-        startLobbyTimer();
         registry.sendLobby(lobby.snapshot());
         return { accepted: true };
       },
@@ -1059,7 +1032,6 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
         if (h !== undefined && h !== clientId) return { accepted: false, reason: 'only host' };
         if (started || engine) return { accepted: false, reason: 'game started' };
         lobby.setRandomCount(enabled);
-        startLobbyTimer();
         registry.sendLobby(lobby.snapshot());
         return { accepted: true };
       },
@@ -1080,7 +1052,6 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
         const h = lobby.hostClientId;
         if (h !== undefined && h !== clientId) return { accepted: false, reason: 'only host' };
         started = true;
-        clearLobbyTimer();
         void runStartGame();
         return { accepted: true };
       },

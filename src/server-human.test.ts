@@ -258,15 +258,19 @@ test('未 JOIN 的 client → 觀戰 snapshot（無 you）', async () => {
   }
 });
 
-test('無真人 → LOBBY_TIMEOUT 後自動全 AI 開局', async () => {
-  const h = await boot({ lobbyTimeoutMs: 150 });
+test('純 AI 局：無人入座，host 按開始遊戲 → 全 AI 開局（無自動開局）', async () => {
+  const h = await boot();
   try {
-    const ws = await connect(h.port);
+    const ws = await connect(h.port); // 首連線＝host；connect 自動送 REQUEST_SNAPSHOT
     await waitFor(ws, (m) => m.type === 'LOBBY');
-    // 不 JOIN → 等自動開局（觀戰 snapshot 非 SETUP）
+    await new Promise((r) => setTimeout(r, 400)); // 不按開始 → 不開局
+    const buf = (ws as BufferedWS).__buf ?? [];
+    assert.ok(!buf.some((m) => m.type === 'SNAPSHOT'), '未按開始前不該收到 SNAPSHOT');
+    send(ws, { type: 'START_GAME' });
     const snap = await waitFor(ws, (m) =>
       m.type === 'SNAPSHOT' && !!m.snapshot && !['SETUP_WAITING_JOIN', 'SETUP_READY'].includes(m.snapshot.phase), 8000);
     assert.ok(snap.snapshot!.phase);
+    assert.ok(!('you' in snap.snapshot!)); // 純 AI：觀戰視角無 you
     ws.close();
     await new Promise((r) => setTimeout(r, 50));
   } finally {
@@ -435,8 +439,8 @@ test('開局時斷線未歸 → 座位轉 AI（不斷真人 gate）', async () =
   }
 });
 
-test('timer/host 只認遊戲頁訊號：純 WS 連線不觸發自動開局', async () => {
-  const h = await boot({ lobbyTimeoutMs: 150 });
+test('timer/host 只認遊戲頁訊號：純 WS 連線無 host、無開局', async () => {
+  const h = await boot();
   try {
     // 原始連線：不發任何遊戲訊息（模擬模型管理頁只監聽）
     // 建構當下立即掛訊息監聽，避免連線 LOBBY 在 open 前遺失
@@ -457,11 +461,11 @@ test('timer/host 只認遊戲頁訊號：純 WS 連線不觸發自動開局', as
       raw.on('open', () => { clearTimeout(timer); resolve(); });
       raw.on('error', reject);
     });
-    await new Promise((r) => setTimeout(r, 400)); // 超過 150ms timer
+    await new Promise((r) => setTimeout(r, 400));
     assert.ok(seen.length > 0, '應收到連線 LOBBY');
     assert.ok(seen.every((m) => m.type === 'LOBBY'), '純連線不應觸發開局（只該有 LOBBY）');
-    // 補發遊戲訊息 → timer 啟動 → 自動全 AI 開局
-    raw.send(JSON.stringify({ type: 'REQUEST_SNAPSHOT' }));
+    // 首個遊戲訊號決定 host（raw）→ host 按開始 → 全 AI 開局（無自動開局）
+    raw.send(JSON.stringify({ type: 'START_GAME' }));
     const snap = await new Promise<WSMsg>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('等開局逾時')), 8000);
       const onMsg = (data: unknown): void => {

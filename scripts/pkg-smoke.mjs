@@ -118,9 +118,11 @@ await new Promise((resolve, reject) => {
     }
     const ws = new WebSocket(`ws://localhost:${port}`);
     leaveWs = ws;
-    // fix-1 後：engine 延遲建立（收到第一則遊戲訊息才啟動），比照前端 main.js 先送 REQUEST_SNAPSHOT
+    // engine 延遲建立（收到第一則遊戲訊息才啟動），比照前端 main.js 先送 REQUEST_SNAPSHOT；
+    // 開局唯一入口是開始鈕（無自動開局）：smoke 作為唯一連線即 host，直接按開始（純 AI 局）
     ws.on('open', () => {
       ws.send(JSON.stringify({ type: 'REQUEST_SNAPSHOT' }));
+      ws.send(JSON.stringify({ type: 'START_GAME' }));
     });
     ws.on('message', (data) => {
       try {
