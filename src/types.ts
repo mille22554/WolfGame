@@ -229,11 +229,31 @@ export interface PlayerSnapshot {
 }
 
 /** Phase 2：大廳 snapshot（遊戲前 UI，唯一允許顯示 controlledBy 的介面，AI 永不看到） */
+/** 等候大廳：引擎狀態（大廳 loading 角落＋LOBBY 內嵌，語意同 MODEL_STATUS） */
+export interface EngineStatus {
+  state: 'idle' | 'downloading' | 'starting' | 'ready' | 'error';
+  stage?: 'llama-server' | 'model';
+  downloaded?: number;
+  total?: number;
+  info?: string;
+  error?: string;
+}
+
 export interface LobbySnapshot {
   phase: Phase;
   expectedPlayerCount: number;
-  seats: { playerId: number; name: string; controlledBy: 'ai' | 'human' | 'empty' }[];
+  seats: { playerId: number; name: string; controlledBy: 'ai' | 'human' | 'empty'; disconnected?: boolean }[];
   started: boolean;   // phase 非 SETUP_* 即 true
+  /** 等候大廳擴充：目前座位格數（randomCount 時仍為格數，實際人數開局才擲出） */
+  playerCount: number;
+  /** 等候大廳擴充：人數隨機旗標 */
+  randomCount: boolean;
+  /** 等候大廳擴充：觀戰者名單 */
+  spectators: { clientId: string; name: string }[];
+  /** 等候大廳擴充：引擎狀態（loading 角落初始渲染用，即時更新走 MODEL_STATUS 廣播） */
+  engineStatus: EngineStatus;
+  /** 等候大廳擴充：host clientId（缺席時前端退回舊行為） */
+  hostClientId?: string;
 }
 
 export interface GMSnapshot {
@@ -438,7 +458,8 @@ export type ServerToClientMessage =
   | { type: 'MODEL_STATUS'; state: 'downloading' | 'starting' | 'ready' | 'error'; stage?: 'llama-server' | 'model'; downloaded?: number; total?: number; info?: string; error?: string }
   | { type: 'ERROR'; message: string }
   | { type: 'PING' }
-  | { type: 'SHUTDOWN' };
+  | { type: 'SHUTDOWN' }
+  | { type: 'CHAT_MESSAGE'; from: string; text: string; ts: number };
 
 /** 前端 WS 協定：客戶端 → 伺服器（Phase 2 擴充；真人操作訊息不含 playerId，伺服器由連線補上） */
 export type ClientToServerMessage =
@@ -449,6 +470,10 @@ export type ClientToServerMessage =
   | { type: 'JOIN'; playerId: number; name?: string }
   | { type: 'RECONNECT'; token: string }
   | { type: 'START_GAME' }
+  | { type: 'SPECTATE' }
+  | { type: 'SET_PLAYER_COUNT'; count: number }
+  | { type: 'SET_RANDOM_COUNT'; enabled: boolean }
+  | { type: 'CHAT_SEND'; text: string }
   | { type: 'HUMAN_SPEAK'; text: string }
   | { type: 'HUMAN_SKIP' }
   | { type: 'HUMAN_READY_VOTE' }

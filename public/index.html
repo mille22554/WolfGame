@@ -33,15 +33,56 @@
 </main>
 <div id="lobby-overlay" hidden>
   <div id="lobby-panel">
-    <h2>大廳：選擇座位</h2>
-    <div>
-      <label>暱稱 <input id="lobby-name" type="text" placeholder="P編號預設" maxlength="12"></label>
+    <h2>等候大廳</h2>
+    <div id="lobby-error" class="error" hidden></div>
+    <div class="lobby-grid">
+      <section class="lobby-zone" aria-label="參戰區">
+        <h3>⚔️ 參戰區 <span id="lobby-count" class="lobby-count"></span></h3>
+        <div class="lobby-nick-row">
+          <label for="lobby-name">暱稱</label>
+          <input id="lobby-name" type="text" placeholder="不填就用 P編號" maxlength="12" autocomplete="off">
+        </div>
+        <div id="lobby-seats"></div>
+        <p class="hint">點空位立刻加入參戰；想休息就按自己座位的「離座」去觀戰，隨時點空位回來。</p>
+      </section>
+      <section class="lobby-zone" aria-label="觀戰區">
+        <h3>👀 觀戰區 <span id="lobby-spec-count" class="lobby-count"></span></h3>
+        <div id="lobby-spectators" class="lobby-spectators"></div>
+        <div id="lobby-spectate-row">
+          <button id="spectate-btn" type="button" class="btn-ghost btn-small" hidden>轉為觀戰</button>
+          <span id="lobby-watch-hint" class="hint">點左方空位就能加入參戰。</span>
+        </div>
+        <div class="lobby-chat">
+          <h4>💬 大廳聊天</h4>
+          <div id="lobby-chat-log" aria-live="polite"></div>
+          <div class="lobby-chat-row">
+            <input id="lobby-chat-input" type="text" placeholder="打招呼或聊戰術…（Enter 發送，上限 500 字）" maxlength="500" autocomplete="off">
+            <button id="lobby-chat-send" type="button" class="btn-small">發送</button>
+          </div>
+          <div id="lobby-chat-count" class="hint">0 / 500</div>
+        </div>
+      </section>
+      <section class="lobby-zone lobby-control" aria-label="控制列">
+        <h3>⚙️ 開局設定</h3>
+        <div id="lobby-host-controls">
+          <div class="lobby-count-row">
+            <label for="lobby-player-count">遊玩人數</label>
+            <select id="lobby-player-count"></select>
+            <label class="lobby-random"><input id="lobby-random" type="checkbox"> 隨機人數</label>
+          </div>
+          <div class="lobby-start-row">
+            <button id="start-btn" type="button" class="btn-primary">開始遊戲</button>
+            <span id="lobby-start-hint" class="hint"></span>
+          </div>
+        </div>
+        <div id="lobby-guest-note" class="hint" hidden>房主正在設定人數，坐好準備開打！</div>
+        <div id="lobby-engine" class="lobby-engine">
+          <span id="lobby-engine-dot" class="engine-dot" aria-hidden="true"></span>
+          <span id="lobby-engine-text">引擎準備中…</span>
+        </div>
+      </section>
     </div>
-    <div id="lobby-seats"></div>
-    <div>
-      <button id="start-btn" type="button" hidden>開始遊戲</button>
-    </div>
-    <p class="hint">選座後等待開始；無人加入時 10 秒後自動全 AI 開局。</p>
+    <p class="hint">選座後等待開局；都沒人加入時 10 秒後自動全 AI 開局。</p>
   </div>
 </div>
 <div id="disconnect-overlay" hidden>

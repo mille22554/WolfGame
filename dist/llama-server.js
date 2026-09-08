@@ -102,6 +102,7 @@ export class LlamaServerManager {
     options;
     child = null;
     spawnedByUs = false;
+    stopRequested = false; // 背景啟動中遇到 shutdown：不再 spawn/等待，直接丟掉飛行中 child
     actualPort;
     logTail = [];
     constructor(options) {
@@ -132,6 +133,8 @@ export class LlamaServerManager {
     }
     /** 健康檢查通過即 resolve；回傳實際 port 與是否重用既有實例 */
     async start() {
+        if (this.stopRequested)
+            throw new Error('llama-server stopped');
         const base = this.options.port;
         this.options.onStatus?.('starting');
         for (let port = base; port <= base + 10; port++) {
@@ -173,9 +176,16 @@ export class LlamaServerManager {
     async tryPort(port) {
         let restarts = 0;
         for (;;) {
+            if (this.stopRequested)
+                throw new Error('llama-server stopped');
             const child = this.spawnChild(port);
             const result = await this.waitReady(child, port);
             if (result === 'ready') {
+                // stop() 可能在 probe 成功後、賦值前到達（fetch 等待期間）：丟掉並報停
+                if (this.stopRequested) {
+                    this.killSync(child);
+                    throw new Error('llama-server stopped');
+                }
                 this.child = child;
                 return 'ready';
             }
@@ -234,6 +244,11 @@ export class LlamaServerManager {
         const start = Date.now();
         let beats = 0; // 已發送的心跳次數（迴圈區域變數，return 即清理，無殘留 timer）
         for (;;) {
+            // shutdown 優先：背景啟動中被 stop → 殺掉飛行中 child 並報停（不留孤兒進程）
+            if (this.stopRequested) {
+                this.killSync(child);
+                throw new Error('llama-server stopped');
+            }
             if (await this.probeHealth(port))
                 return 'ready';
             if (isDead(child))
@@ -305,6 +320,7 @@ export class LlamaServerManager {
     }
     /** 僅當由本實例 spawn 才殺 child；重用實例為 no-op */
     async stop() {
+        this.stopRequested = true;
         const child = this.child;
         this.child = null;
         if (!this.spawnedByUs || !child) {

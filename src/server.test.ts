@@ -150,7 +150,11 @@ test('SET_GM_VIEW → 收到含角色的 snapshot（先 JOIN + START_GAME 開局
           }
           if (msg.type === 'JOINED') {
             ws.send(JSON.stringify({ type: 'START_GAME' }));
-            // 重送 GM 檢視以觸發開局後的 GM 快照推送（廣播給玩家一律 gmView:false）
+            return;
+          }
+          // 開局完成（收到遊戲快照）後再重送 GM 檢視：
+          // START_GAME 為非同步（大廳先回），立即重送會打在引擎建立前
+          if (msg.type === 'SNAPSHOT' && !msg.gmView && msg.snapshot) {
             ws.send(JSON.stringify({ type: 'SET_GM_VIEW', enabled: true }));
             return;
           }
@@ -370,7 +374,7 @@ http.createServer((req, res) => {
     try {
       const states = await new Promise<string[]>((resolve, reject) => {
         const seen: string[] = [];
-        const timer = setTimeout(() => reject(new Error('等 LOBBY 逾時')), 15000);
+        const timer = setTimeout(() => reject(new Error('等 ready 逾時')), 15000);
         ws.on('open', () => {
           ws.send(JSON.stringify({ type: 'REQUEST_SNAPSHOT' }));
         });
@@ -382,7 +386,8 @@ http.createServer((req, res) => {
               return;
             }
             if (msg.type === 'MODEL_STATUS' && msg.state) seen.push(msg.state);
-            if (msg.type === 'LOBBY' && msg.lobby) {
+            // lobby-first：LOBBY 即時送達，不再作為啟動完成的信號；改等 ready
+            if (msg.type === 'MODEL_STATUS' && msg.state === 'ready' && seen.includes('starting')) {
               clearTimeout(timer);
               resolve(seen);
             }

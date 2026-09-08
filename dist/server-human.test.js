@@ -196,7 +196,8 @@ test('斷線 → controlledBy ai → RECONNECT → JOINED 拿回身分', async (
         send(a, { type: 'JOIN', playerId: 3, name: 'TA' });
         const joined = await waitFor(a, (m) => m.type === 'JOINED');
         const token = joined.token;
-        send(a, { type: 'START_GAME' });
+        // host 規則：首連線（gm 觀察者）才是 host，由 host 按開始
+        send(gm, { type: 'START_GAME' });
         await waitFor(a, (m) => m.type === 'SNAPSHOT' && !!m.snapshot?.you, 8000);
         // A 斷線 → GM 應看到 P3 變 ai
         a.close();
@@ -272,6 +273,197 @@ test('遊戲開始後 JOIN → JOIN_REJECTED game started', async () => {
         assert.equal(rej.reason, 'game started');
         a.close();
         b.close();
+        await new Promise((r) => setTimeout(r, 50));
+    }
+    finally {
+        await h.shutdown('test');
+    }
+});
+test('SPECTATE 往返：離座→空位＋觀戰者，再 JOIN 回來', async () => {
+    const h = await boot();
+    try {
+        const ws = await connect(h.port);
+        await waitFor(ws, (m) => m.type === 'LOBBY');
+        send(ws, { type: 'JOIN', playerId: 1, name: 'S1' });
+        await waitFor(ws, (m) => m.type === 'JOINED');
+        send(ws, { type: 'SPECTATE' });
+        const lobby = await waitFor(ws, (m) => m.type === 'LOBBY' && m.lobby.seats[0].controlledBy === 'empty');
+        assert.equal(lobby.lobby.seats[0].controlledBy, 'empty');
+        send(ws, { type: 'JOIN', playerId: 1, name: 'S1' });
+        const back = await waitFor(ws, (m) => m.type === 'JOINED');
+        assert.equal(back.playerId, 1);
+        assert.ok(back.token);
+        ws.close();
+        await new Promise((r) => setTimeout(r, 50));
+    }
+    finally {
+        await h.shutdown('test');
+    }
+});
+test('host 權限：非 host 改人數 → ACTION_REJECTED only host；host 改 → LOBBY 更新', async () => {
+    const h = await boot();
+    try {
+        const a = await connect(h.port); // 首連線＝host
+        await waitFor(a, (m) => m.type === 'LOBBY');
+        const b = await connect(h.port);
+        await waitFor(b, (m) => m.type === 'LOBBY');
+        send(b, { type: 'SET_PLAYER_COUNT', count: 8 });
+        const rej = await waitFor(b, (m) => m.type === 'ACTION_REJECTED');
+        assert.equal(rej.reason, 'only host');
+        send(a, { type: 'SET_PLAYER_COUNT', count: 8 });
+        const lobby = await waitFor(a, (m) => m.type === 'LOBBY' && m.lobby.playerCount === 8);
+        assert.equal(lobby.lobby.seats.length, 8);
+        send(a, { type: 'SET_PLAYER_COUNT', count: 5 });
+        const rej2 = await waitFor(a, (m) => m.type === 'ACTION_REJECTED');
+        assert.ok(rej2.reason);
+        a.close();
+        b.close();
+        await new Promise((r) => setTimeout(r, 50));
+    }
+    finally {
+        await h.shutdown('test');
+    }
+});
+test('隨機旗標＋LOBBY 含 engineStatus（mock 為 idle）', async () => {
+    const h = await boot();
+    try {
+        const ws = await connect(h.port);
+        const first = await waitFor(ws, (m) => m.type === 'LOBBY');
+        assert.equal(first.lobby.engineStatus.state, 'idle');
+        send(ws, { type: 'SET_RANDOM_COUNT', enabled: true });
+        const lobby = await waitFor(ws, (m) => m.type === 'LOBBY' && m.lobby.randomCount === true);
+        assert.equal(lobby.lobby.randomCount, true);
+        send(ws, { type: 'JOIN', playerId: 1, name: 'R1' });
+        await waitFor(ws, (m) => m.type === 'JOINED');
+        send(ws, { type: 'START_GAME' });
+        const snap = await waitFor(ws, (m) => m.type === 'SNAPSHOT' && !!m.snapshot?.you, 8000);
+        assert.ok(snap.snapshot.you.role);
+        ws.close();
+        await new Promise((r) => setTimeout(r, 50));
+    }
+    finally {
+        await h.shutdown('test');
+    }
+});
+test('大廳內斷線 → 同 token 重連拿回座位', async () => {
+    const h = await boot();
+    try {
+        const a = await connect(h.port);
+        await waitFor(a, (m) => m.type === 'LOBBY');
+        send(a, { type: 'JOIN', playerId: 2, name: 'RC' });
+        const joined = await waitFor(a, (m) => m.type === 'JOINED');
+        const token = joined.token;
+        a.close(); // 未開局斷線 → 座位保留
+        await new Promise((r) => setTimeout(r, 100));
+        const c = await connect(h.port);
+        await waitFor(c, (m) => m.type === 'LOBBY');
+        send(c, { type: 'RECONNECT', token });
+        const back = await waitFor(c, (m) => m.type === 'JOINED');
+        assert.equal(back.playerId, 2);
+        c.close();
+        await new Promise((r) => setTimeout(r, 50));
+    }
+    finally {
+        await h.shutdown('test');
+    }
+});
+test('大廳聊天：CHAT_SEND → 雙方收到 CHAT_MESSAGE', async () => {
+    const h = await boot();
+    try {
+        const a = await connect(h.port);
+        await waitFor(a, (m) => m.type === 'LOBBY');
+        send(a, { type: 'JOIN', playerId: 1, name: 'CA' });
+        await waitFor(a, (m) => m.type === 'JOINED');
+        const b = await connect(h.port);
+        await waitFor(b, (m) => m.type === 'LOBBY');
+        send(b, { type: 'CHAT_SEND', text: 'hi' });
+        const gotA = await waitFor(a, (m) => m.type === 'CHAT_MESSAGE' && m.text === 'hi');
+        assert.ok(gotA.from);
+        assert.ok(typeof gotA.ts === 'number');
+        send(a, { type: 'CHAT_SEND', text: 'yo' });
+        const gotB = await waitFor(b, (m) => m.type === 'CHAT_MESSAGE' && m.text === 'yo');
+        assert.equal(gotB.from, 'CA');
+        a.close();
+        b.close();
+        await new Promise((r) => setTimeout(r, 50));
+    }
+    finally {
+        await h.shutdown('test');
+    }
+});
+test('開局時斷線未歸 → 座位轉 AI（不斷真人 gate）', async () => {
+    const h = await boot();
+    try {
+        const a = await connect(h.port);
+        await waitFor(a, (m) => m.type === 'LOBBY');
+        send(a, { type: 'JOIN', playerId: 1, name: 'DA' });
+        await waitFor(a, (m) => m.type === 'JOINED');
+        a.close(); // 未開局斷線 → 座位保留＋AI 託管
+        await new Promise((r) => setTimeout(r, 100));
+        const b = await connect(h.port); // 後進＝host（a 已離開）
+        await waitFor(b, (m) => m.type === 'LOBBY');
+        send(b, { type: 'START_GAME' });
+        // b 未入座 → 開局後拿觀戰 snapshot
+        await waitFor(b, (m) => m.type === 'SNAPSHOT' && !!m.snapshot && !['SETUP_WAITING_JOIN', 'SETUP_READY'].includes(m.snapshot.phase), 8000);
+        send(b, { type: 'SET_GM_VIEW', enabled: true });
+        const gm = await waitFor(b, (m) => m.type === 'SNAPSHOT' && m.gmView === true
+            && !!m.snapshot?.players?.some((p) => p.id === 1 && p.controlledBy === 'ai'), 8000);
+        assert.ok(gm.snapshot.players.some((p) => p.id === 1 && p.controlledBy === 'ai'));
+        b.close();
+        await new Promise((r) => setTimeout(r, 50));
+    }
+    finally {
+        await h.shutdown('test');
+    }
+});
+test('timer/host 只認遊戲頁訊號：純 WS 連線不觸發自動開局', async () => {
+    const h = await boot({ lobbyTimeoutMs: 150 });
+    try {
+        // 原始連線：不發任何遊戲訊息（模擬模型管理頁只監聽）
+        // 建構當下立即掛訊息監聽，避免連線 LOBBY 在 open 前遺失
+        const raw = new WebSocket(`ws://localhost:${h.port}`);
+        const seen = [];
+        raw.on('message', (data) => {
+            try {
+                const msg = JSON.parse(String(data));
+                if (msg.type === 'PING') {
+                    try {
+                        raw.send(JSON.stringify({ type: 'PONG' }));
+                    }
+                    catch { /* ignore */ }
+                    return;
+                }
+                seen.push(msg);
+            }
+            catch { /* ignore */ }
+        });
+        await new Promise((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error('連線逾時')), 5000);
+            raw.on('open', () => { clearTimeout(timer); resolve(); });
+            raw.on('error', reject);
+        });
+        await new Promise((r) => setTimeout(r, 400)); // 超過 150ms timer
+        assert.ok(seen.length > 0, '應收到連線 LOBBY');
+        assert.ok(seen.every((m) => m.type === 'LOBBY'), '純連線不應觸發開局（只該有 LOBBY）');
+        // 補發遊戲訊息 → timer 啟動 → 自動全 AI 開局
+        raw.send(JSON.stringify({ type: 'REQUEST_SNAPSHOT' }));
+        const snap = await new Promise((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error('等開局逾時')), 8000);
+            const onMsg = (data) => {
+                try {
+                    const msg = JSON.parse(String(data));
+                    if (msg.type === 'SNAPSHOT' && !!msg.snapshot && !['SETUP_WAITING_JOIN', 'SETUP_READY'].includes(msg.snapshot.phase)) {
+                        clearTimeout(timer);
+                        raw.off('message', onMsg);
+                        resolve(msg);
+                    }
+                }
+                catch { /* ignore */ }
+            };
+            raw.on('message', onMsg);
+        });
+        assert.ok(snap.snapshot.phase);
+        raw.close();
         await new Promise((r) => setTimeout(r, 50));
     }
     finally {

@@ -65,37 +65,45 @@ export declare function pickPreferredModel(names: string[]): string | null;
 export declare function serveStatic(req: http.IncomingMessage, res: http.ServerResponse, publicDir: string, _modelReady?: boolean): void;
 export declare function findAvailablePort(start: number): Promise<number>;
 export declare function openBrowser(url: string): void;
-/** Phase 2：SeatManager（token 管理；playerId ↔ token 雙向映射） */
-export declare class SeatManager {
-    private readonly reservations;
-    private readonly tokens;
-    reserve(playerId: number): string;
-    release(playerId: number): void;
-    lookup(token: string): number | undefined;
-    isReserved(playerId: number): boolean;
-}
-/** Phase 2：registry → engine 的大廳/真人操作回呼（startServer 注入） */
+/** Phase 2：registry → engine/大廳的操作回呼（startServer 注入；大廳先於引擎存在） */
 export interface RegistryActions {
-    join(playerId: number, name?: string): {
+    join(clientId: string, playerId: number, name?: string): {
         accepted: boolean;
         reason?: string;
         token?: string;
     };
-    reconnect(token: string): {
+    reconnect(clientId: string, token: string): {
         accepted: boolean;
         reason?: string;
         playerId?: number;
         token?: string;
     };
-    startGame(): void;
+    spectate(clientId: string, playerId: number): {
+        accepted: boolean;
+        reason?: string;
+    };
+    setPlayerCount(clientId: string, count: number): {
+        accepted: boolean;
+        reason?: string;
+    };
+    setRandomCount(clientId: string, enabled: boolean): {
+        accepted: boolean;
+        reason?: string;
+    };
+    chat(clientId: string, playerId: number | undefined, text: string): {
+        accepted: boolean;
+        reason?: string;
+    };
+    startLobbyGame(clientId: string): {
+        accepted: boolean;
+        reason?: string;
+    };
     humanEvent(event: GameEvent): {
         accepted: boolean;
         reason?: string;
     };
     disconnectPlayer(playerId: number): void;
     isStarted(): boolean;
-    releaseSeat(playerId: number): void;
-    restartLobbyTimerIfEmpty(): void;
 }
 export interface WebSocketRegistryOptions {
     getState: () => GameState;
@@ -106,10 +114,14 @@ export interface WebSocketRegistryOptions {
     onLastClientLeave?: () => void;
     actions?: RegistryActions;
     ensureReady?: () => Promise<boolean>;
+    getLobbySnapshot?: () => LobbySnapshot;
+    onLobbySignal?: (clientId: string) => void;
+    onClientLeave?: (clientId: string, playerId?: number) => void;
 }
 export declare class WebSocketRegistry implements ClientRegistry {
     private readonly opts;
     private readonly clients;
+    private clientSeq;
     private zeroTimer;
     private pingTimer;
     constructor(wss: WebSocketServer, opts: WebSocketRegistryOptions);

@@ -11,7 +11,6 @@ import * as net from 'net';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import * as crypto from 'crypto';
 import { exec } from 'child_process';
 import { WebSocketServer, WebSocket } from 'ws';
 import { GameEngine } from './engine.js';
@@ -31,6 +30,7 @@ import {
 } from './llama-server.js';
 import { OpenAICompatibleDispatcher, MockDispatcher } from './llm-dispatcher.js';
 import { getResourceRoot } from './utils.js';
+import { LobbyManager } from './lobby.js';
 import type {
   GameState, GameEvent, LLMDispatcher, ClientRegistry, PlayerSnapshot, SpectatorSnapshot,
   LobbySnapshot, ServerToClientMessage, ClientToServerMessage,
@@ -262,43 +262,18 @@ export function openBrowser(url: string): void {
 // WebSocketRegistry（實作 ClientRegistry）
 // ============================================
 
-/** Phase 2：SeatManager（token 管理；playerId ↔ token 雙向映射） */
-export class SeatManager {
-  private readonly reservations = new Map<number, string>();  // playerId → token
-  private readonly tokens = new Map<string, number>();        // token → playerId
-
-  reserve(playerId: number): string {
-    const token = crypto.randomUUID();
-    this.reservations.set(playerId, token);
-    this.tokens.set(token, playerId);
-    return token;
-  }
-
-  release(playerId: number): void {
-    const token = this.reservations.get(playerId);
-    if (token !== undefined) this.tokens.delete(token);
-    this.reservations.delete(playerId);
-  }
-
-  lookup(token: string): number | undefined {
-    return this.tokens.get(token);
-  }
-
-  isReserved(playerId: number): boolean {
-    return this.reservations.has(playerId);
-  }
-}
-
-/** Phase 2：registry → engine 的大廳/真人操作回呼（startServer 注入） */
+/** Phase 2：registry → engine/大廳的操作回呼（startServer 注入；大廳先於引擎存在） */
 export interface RegistryActions {
-  join(playerId: number, name?: string): { accepted: boolean; reason?: string; token?: string };
-  reconnect(token: string): { accepted: boolean; reason?: string; playerId?: number; token?: string };
-  startGame(): void;
+  join(clientId: string, playerId: number, name?: string): { accepted: boolean; reason?: string; token?: string };
+  reconnect(clientId: string, token: string): { accepted: boolean; reason?: string; playerId?: number; token?: string };
+  spectate(clientId: string, playerId: number): { accepted: boolean; reason?: string };
+  setPlayerCount(clientId: string, count: number): { accepted: boolean; reason?: string };
+  setRandomCount(clientId: string, enabled: boolean): { accepted: boolean; reason?: string };
+  chat(clientId: string, playerId: number | undefined, text: string): { accepted: boolean; reason?: string };
+  startLobbyGame(clientId: string): { accepted: boolean; reason?: string };
   humanEvent(event: GameEvent): { accepted: boolean; reason?: string };
   disconnectPlayer(playerId: number): void;
   isStarted(): boolean;
-  releaseSeat(playerId: number): void;
-  restartLobbyTimerIfEmpty(): void;
 }
 
 export interface WebSocketRegistryOptions {
@@ -310,10 +285,14 @@ export interface WebSocketRegistryOptions {
   onLastClientLeave?: () => void;
   actions?: RegistryActions;   // Phase 2：未提供時為純觀戰模式（Phase 1 相容）
   ensureReady?: () => Promise<boolean>;  // WS 連線時確保 engine/llama-server 就緒；false → 回 ERROR
+  getLobbySnapshot?: () => LobbySnapshot;  // 等候大廳：engine 未就緒/SETUP 時的快照來源
+  onLobbySignal?: (clientId: string) => void;  // 首個遊戲頁訊號：決定 host＋啟動自動開局 timer
+  onClientLeave?: (clientId: string, playerId?: number) => void;
 }
 
 interface TrackedClient {
   ws: WebSocket;
+  clientId: string;    // 等候大廳：連線身分（host/觀戰者追蹤用，registry 指派 c1、c2…）
   gmView: boolean;
   lastPong: number;
   playerId?: number;   // Phase 2：真人座位（JOIN/RECONNECT 後設定）
@@ -321,9 +300,10 @@ interface TrackedClient {
 }
 
 export class WebSocketRegistry implements ClientRegistry {
-  private readonly opts: Required<Omit<WebSocketRegistryOptions, 'onZeroClientsTimeout' | 'onLastClientLeave' | 'actions' | 'ensureReady'>>
-    & Pick<WebSocketRegistryOptions, 'onZeroClientsTimeout' | 'onLastClientLeave' | 'actions' | 'ensureReady'>;
+  private readonly opts: Required<Omit<WebSocketRegistryOptions, 'onZeroClientsTimeout' | 'onLastClientLeave' | 'actions' | 'ensureReady' | 'getLobbySnapshot' | 'onLobbySignal' | 'onClientLeave'>>
+    & Pick<WebSocketRegistryOptions, 'onZeroClientsTimeout' | 'onLastClientLeave' | 'actions' | 'ensureReady' | 'getLobbySnapshot' | 'onLobbySignal' | 'onClientLeave'>;
   private readonly clients = new Set<TrackedClient>();
+  private clientSeq = 0;
   private zeroTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -337,6 +317,9 @@ export class WebSocketRegistry implements ClientRegistry {
       onLastClientLeave: opts.onLastClientLeave,
       actions: opts.actions,
       ensureReady: opts.ensureReady,
+      getLobbySnapshot: opts.getLobbySnapshot,
+      onLobbySignal: opts.onLobbySignal,
+      onClientLeave: opts.onClientLeave,
     };
     wss.on('connection', (ws) => void this.onConnection(ws));
     this.pingTimer = setInterval(() => this.pingCheck(), this.opts.pingIntervalMs);
@@ -417,7 +400,10 @@ export class WebSocketRegistry implements ClientRegistry {
     try {
       const state = this.opts.getState();
       if (state.phase === 'SETUP_WAITING_JOIN' || state.phase === 'SETUP_READY') {
-        msg = { type: 'LOBBY', lobby: buildLobbySnapshot(state) };
+        // 大廳階段一律送大廳快照（等候大廳先於引擎存在）
+        const lobby = this.opts.getLobbySnapshot?.();
+        if (!lobby) return;
+        msg = { type: 'LOBBY', lobby };
       } else if (c.gmView) {
         msg = { type: 'SNAPSHOT', snapshot: buildGMSnapshot(state), gmView: true };
       } else if (c.playerId !== undefined) {
@@ -426,7 +412,10 @@ export class WebSocketRegistry implements ClientRegistry {
         msg = { type: 'SNAPSHOT', snapshot: buildSpectatorSnapshot(state), gmView: false };
       }
     } catch {
-      return;   // engine 尚未就緒（模型下載中）→ 略過，client 可稍後 REQUEST_SNAPSHOT
+      // engine 尚未就緒 → 大廳快照（等候大廳先於引擎存在）；無提供者則略過
+      const lobby = this.opts.getLobbySnapshot?.();
+      if (!lobby) return;
+      msg = { type: 'LOBBY', lobby };
     }
     try {
       c.ws.send(JSON.stringify(msg));
@@ -434,11 +423,10 @@ export class WebSocketRegistry implements ClientRegistry {
   }
 
   // 注意：連線時不觸發 ensureReady（模型管理頁也會連 WS 監聽 MODEL_STATUS，
-  // 若連線即啟動會被誤觸發）。只有收到遊戲訊息（handleClientMessage）才延遲啟動
-  // llama-server + 建立 engine。連線當下 engine 若已就緒則推送快照，否則略過
-  // （client 發遊戲訊息後會觸發 ensure 並補送 LOBBY）。
+  // 若連線即啟動會被誤觸發）。等候大廳先於引擎存在：連線當下即推送大廳快照；
+  // REQUEST_SNAPSHOT 在背景觸發引擎啟動（不等待），START_GAME 才同步等待引擎。
   private onConnection(ws: WebSocket): void {
-    const client: TrackedClient = { ws, gmView: false, lastPong: Date.now() };
+    const client: TrackedClient = { ws, clientId: `c${++this.clientSeq}`, gmView: false, lastPong: Date.now() };
     this.clients.add(client);
     if (this.zeroTimer) {
       clearTimeout(this.zeroTimer);
@@ -466,9 +454,38 @@ export class WebSocketRegistry implements ClientRegistry {
         client.ws.send(JSON.stringify(m));
       } catch { /* ignore */ }
     };
+    // 大廳訊號：首個遊戲頁訊息決定 host＋啟動自動開局 timer。
+    // 純 WS 連線（模型管理／下載頁只監聽 MODEL_STATUS 不發訊）不觸發。
+    if (msg.type === 'REQUEST_SNAPSHOT' || msg.type === 'RECONNECT' || msg.type === 'JOIN'
+      || msg.type === 'SPECTATE' || msg.type === 'SET_PLAYER_COUNT' || msg.type === 'SET_RANDOM_COUNT'
+      || msg.type === 'CHAT_SEND' || msg.type === 'START_GAME' || msg.type === 'SET_GM_VIEW') {
+      this.opts.onLobbySignal?.(client.clientId);
+    }
+    // 等候大廳優先：快照請求立即回大廳快照，引擎在背景啟動（不等待、不阻塞）
+    if (msg.type === 'REQUEST_SNAPSHOT') {
+      if (this.opts.ensureReady) {
+        let needEnsure = false;
+        try {
+          this.opts.getState();
+        } catch {
+          needEnsure = true;
+        }
+        if (needEnsure) {
+          void this.opts.ensureReady().then((ok) => {
+            if (!ok) send({ type: 'ERROR', message: '模型未就緒' });
+          });
+        }
+      }
+      this.pushSnapshot(client);
+      return;
+    }
     // 延遲初始化重試：先前因模型未就緒而連線的 client，下載完成後無需重連，
-    // 任意訊息（除 PONG/LEAVE）都可觸發 ensure，成功後繼續處理本次訊息。
-    if (this.opts.ensureReady && msg.type !== 'PONG' && msg.type !== 'LEAVE') {
+    // 任意遊戲訊息（除 PONG/LEAVE/大廳訊息）都可觸發 ensure，成功後繼續處理本次訊息。
+    // 大廳訊息（JOIN/SPECTATE/人數/隨機/聊天/GM 檢視）不觸發引擎：等候大廳先於引擎存在。
+    const lobbyOnly = msg.type === 'JOIN' || msg.type === 'SPECTATE'
+      || msg.type === 'SET_PLAYER_COUNT' || msg.type === 'SET_RANDOM_COUNT'
+      || msg.type === 'CHAT_SEND' || msg.type === 'SET_GM_VIEW';
+    if (this.opts.ensureReady && msg.type !== 'PONG' && msg.type !== 'LEAVE' && !lobbyOnly) {
       let needEnsure = false;
       try {
         this.opts.getState();
@@ -486,10 +503,6 @@ export class WebSocketRegistry implements ClientRegistry {
           send({ type: 'ERROR', message: '模型未就緒' });
           return;
         }
-        if (msg.type === 'REQUEST_SNAPSHOT') {
-          this.pushSnapshot(client);
-          return;
-        }
       }
     }
     switch (msg.type) {
@@ -500,9 +513,6 @@ export class WebSocketRegistry implements ClientRegistry {
         client.gmView = msg.enabled;
         this.pushSnapshot(client);
         break;
-      case 'REQUEST_SNAPSHOT':
-        this.pushSnapshot(client);
-        break;
       case 'JOIN': {
         const actions = this.opts.actions;
         if (!actions) return;
@@ -510,7 +520,11 @@ export class WebSocketRegistry implements ClientRegistry {
           send({ type: 'JOIN_REJECTED', reason: 'game started' });
           break;
         }
-        const r = actions.join(msg.playerId, msg.name);
+        if (typeof msg.playerId !== 'number') {
+          send({ type: 'JOIN_REJECTED', reason: 'bad seat' });
+          break;
+        }
+        const r = actions.join(client.clientId, msg.playerId, msg.name);
         if (!r.accepted || r.token === undefined) {
           send({ type: 'JOIN_REJECTED', reason: r.reason ?? 'join failed' });
           break;
@@ -523,7 +537,11 @@ export class WebSocketRegistry implements ClientRegistry {
       case 'RECONNECT': {
         const actions = this.opts.actions;
         if (!actions) return;
-        const r = actions.reconnect(msg.token);
+        if (typeof msg.token !== 'string') {
+          send({ type: 'JOIN_REJECTED', reason: 'bad token' });
+          break;
+        }
+        const r = actions.reconnect(client.clientId, msg.token);
         if (!r.accepted || r.playerId === undefined || r.token === undefined) {
           send({ type: 'JOIN_REJECTED', reason: r.reason ?? 'unknown token' });
           break;
@@ -536,9 +554,49 @@ export class WebSocketRegistry implements ClientRegistry {
       case 'START_GAME': {
         const actions = this.opts.actions;
         if (!actions) return;
-        if (client.playerId !== undefined && !actions.isStarted()) {
-          actions.startGame();
+        const r = actions.startLobbyGame(client.clientId);
+        if (!r.accepted) send({ type: 'ACTION_REJECTED', reason: r.reason ?? 'rejected' });
+        break;
+      }
+      case 'SPECTATE': {
+        const actions = this.opts.actions;
+        if (!actions || client.playerId === undefined) return;
+        const r = actions.spectate(client.clientId, client.playerId);
+        if (!r.accepted) {
+          send({ type: 'ACTION_REJECTED', reason: r.reason ?? 'rejected' });
+          break;
         }
+        client.playerId = undefined;
+        break;
+      }
+      case 'SET_PLAYER_COUNT': {
+        const actions = this.opts.actions;
+        if (!actions) return;
+        if (typeof msg.count !== 'number') {
+          send({ type: 'ACTION_REJECTED', reason: 'bad count' });
+          break;
+        }
+        const r = actions.setPlayerCount(client.clientId, msg.count);
+        if (!r.accepted) send({ type: 'ACTION_REJECTED', reason: r.reason ?? 'rejected' });
+        break;
+      }
+      case 'SET_RANDOM_COUNT': {
+        const actions = this.opts.actions;
+        if (!actions) return;
+        if (typeof msg.enabled !== 'boolean') {
+          send({ type: 'ACTION_REJECTED', reason: 'bad flag' });
+          break;
+        }
+        const r = actions.setRandomCount(client.clientId, msg.enabled);
+        if (!r.accepted) send({ type: 'ACTION_REJECTED', reason: r.reason ?? 'rejected' });
+        break;
+      }
+      case 'CHAT_SEND': {
+        const actions = this.opts.actions;
+        if (!actions) return;
+        if (typeof msg.text !== 'string') return;
+        const r = actions.chat(client.clientId, client.playerId, msg.text);
+        if (!r.accepted) send({ type: 'ACTION_REJECTED', reason: r.reason ?? 'rejected' });
         break;
       }
       case 'HUMAN_SPEAK':
@@ -576,20 +634,14 @@ export class WebSocketRegistry implements ClientRegistry {
 
   private onDisconnect(client: TrackedClient): void {
     this.clients.delete(client);
-    // Phase 2：真人座位處理（大廳 → 座位釋放；遊戲中 → AI 接管由 engine DISCONNECT 執行）
+    // 遊戲中斷線 → engine AI 接管；大廳斷線 → server hook（座位保留＋AI 託管＋host 遞補）
     const actions = this.opts.actions;
-    if (actions && client.playerId !== undefined) {
-      const pid = client.playerId;
-      if (!actions.isStarted()) {
-        actions.releaseSeat(pid);
-      }
+    if (actions && client.playerId !== undefined && actions.isStarted()) {
       try {
-        actions.disconnectPlayer(pid);
+        actions.disconnectPlayer(client.playerId);
       } catch { /* ignore */ }
-      if (!actions.isStarted()) {
-        actions.restartLobbyTimerIfEmpty();
-      }
     }
+    this.opts.onClientLeave?.(client.clientId, client.playerId);
     this.armZeroTimerIfEmpty();
   }
 
@@ -637,6 +689,10 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
   if (!Number.isInteger(playerCount) || playerCount < 6 || playerCount > 15) {
     throw new Error(`玩家人數必須是 6-15，輸入為：${playerCount}`);
   }
+
+  // ---- 等候大廳（先於引擎存在；server 側唯一資料源） ----
+  const lobby = new LobbyManager(playerCount);
+  const lobbyClients = new Set<string>();
   const publicDir = options.publicDir ?? path.join(getResourceRoot(), 'public');
   const modelsDir = options.modelsDir ?? process.env.LLM_MODELS_DIR ?? getDefaultModelsDir();
   const modelUri = options.modelUri ?? process.env.LLM_MODEL_URI ?? DEFAULT_LLAMACPP_MODEL_URI;
@@ -681,6 +737,10 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
   const wss = new WebSocketServer({ server: httpServer });
 
   const broadcast = (msg: ServerToClientMessage): void => {
+    // MODEL_STATUS 同步寫入大廳 engineStatus（LOBBY 內嵌初始值用；即時更新仍走廣播）
+    if (msg.type === 'MODEL_STATUS') {
+      lobby.setEngineStatus({ state: msg.state, stage: msg.stage, downloaded: msg.downloaded, total: msg.total, info: msg.info, error: msg.error });
+    }
     for (const client of wss.clients) {
       if (client.readyState === WebSocket.OPEN) {
         try {
@@ -847,9 +907,9 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
     if (exitProcess) process.exit(0);
   }
 
-  // ---- Phase 2 大廳狀態 ----
-  const seats = new SeatManager();
+  // ---- 等候大廳流程（大廳先於引擎存在；engine 延到 START_GAME 才建立） ----
   let started = false;
+  let starting = false;
   let lobbyTimer: ReturnType<typeof setTimeout> | null = null;
   const lobbyTimeoutMs = options.lobbyTimeoutMs ?? envInt('LOBBY_TIMEOUT_MS', 10000);
 
@@ -860,36 +920,58 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
     }
   }
 
-  function hasHumanPlayers(): boolean {
-    try {
-      return engine!.getState().players.some((p) => p.controlledBy === 'human');
-    } catch {
-      return false;
-    }
-  }
-
-  function startGame(): void {
-    if (started || !engine) return;
-    started = true;
-    clearLobbyTimer();
-    const state = engine.getState();
-    for (let id = 1; id <= state.expectedPlayerCount; id++) {
-      if (!state.players.some((p) => p.id === id)) {
-        engine.enqueue({ type: 'AI_JOIN', playerId: id });
-      }
-    }
-    engine.enqueue({ type: 'START_GAME' });
-    engine.drain();
-  }
-
   function startLobbyTimer(): void {
     clearLobbyTimer();
     lobbyTimer = setTimeout(() => {
       lobbyTimer = null;
-      if (!started && !hasHumanPlayers()) startGame();   // 無真人 → 全 AI 開局
+      // 無已連線真人 → 全 AI 開局（engine 未就緒時 runStartGame 內部等待 heavy）
+      if (!started && !lobby.hasHumanSeats()) void runStartGame();
     }, lobbyTimeoutMs);
     const t = lobbyTimer as unknown as { unref?: () => void };
     if (typeof t.unref === 'function') t.unref();
+  }
+
+  // 開局：heavy（dispatcher）就緒後，用當下大廳人數建 engine 並灌入座位
+  async function runStartGame(): Promise<void> {
+    if ((started && engine) || starting) return;
+    starting = true;
+    try {
+      const ok = await ensureEngineReady();
+      if (!ok || !dispatcher || !scheduler) {
+        // heavy 失敗（例如模型未就緒）：退回未開始，大廳重推（開始鈕恢復可用）
+        started = false;
+        registry.sendLobby(lobby.snapshot());
+        return;
+      }
+      const count = lobby.resolveCount();
+      // 斷線未歸的真人座位先轉 AI（否則 HUMAN_JOIN 進遊戲，gate 等無連線者卡死）
+      lobby.fillDisconnectedAsAi();
+      try {
+        engine = new GameEngine(
+          { mode: 'web', llm: dispatcher, scheduler, registry },
+          createGameState(count),
+        );
+        for (const s of lobby.seatsForStart()) {
+          if (s.controlledBy === 'human') {
+            engine.enqueue({ type: 'HUMAN_JOIN', playerId: s.playerId, name: s.name === '' ? undefined : s.name });
+          } else {
+            engine.enqueue({ type: 'AI_JOIN', playerId: s.playerId });
+          }
+        }
+        clearLobbyTimer();
+        started = true;
+        engine.enqueue({ type: 'START_GAME' });
+        engine.drain();
+      } catch (err) {
+        // 建 engine／灌座位失敗：退回未開始（避免 started=true＋engine 半殘的永久死鎖）
+        console.error(`[server] runStartGame 建引擎失敗：${err instanceof Error ? err.message : String(err)}`);
+        engine = null;
+        started = false;
+        registry.sendLobby(lobby.snapshot());
+      }
+    } finally {
+      starting = false;
+    }
   }
 
   const registry = new WebSocketRegistry(wss, {
@@ -903,27 +985,105 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
     onZeroClientsTimeout: () => void shutdownFn('no-clients'),
     onLastClientLeave: () => void shutdownFn('leave'),
     ensureReady: () => ensureEngineReady(),
+    getLobbySnapshot: () => lobby.snapshot(),
+    onLobbySignal: (clientId) => {
+      const first = lobbyClients.size === 0;
+      lobbyClients.add(clientId);
+      if (lobby.hostClientId === undefined) lobby.setHost(clientId);
+      if (first) startLobbyTimer();   // 大廳開啟即計時（首個遊戲頁訊號，不再等引擎就緒）
+    },
+    onClientLeave: (clientId, playerId) => {
+      lobbyClients.delete(clientId);
+      lobby.removeSpectator(clientId);
+      if (lobby.clearHostIf(clientId)) {
+        const next = [...lobbyClients][0];
+        if (next !== undefined) lobby.setHost(next);
+      }
+      if (playerId !== undefined && !started) {
+        lobby.markDisconnected(playerId);   // 座位保留＋AI 託管
+        registry.sendLobby(lobby.snapshot());
+        if (!lobby.hasHumanSeats()) startLobbyTimer();
+      }
+    },
     actions: {
-      join: (playerId, name) => {
-        if (started) return { accepted: false, reason: 'game started' };
-        if (!engine) return { accepted: false, reason: 'engine not ready' };
-        if (seats.isReserved(playerId)) return { accepted: false, reason: 'seat reserved' };
-        const result = engine.tryEvent({ type: 'HUMAN_JOIN', playerId, name });
-        if (!result.accepted) return { accepted: false, reason: result.reason ?? 'join failed' };
-        const token = seats.reserve(playerId);
-        clearLobbyTimer();   // 有人類了，改等人按開始
-        return { accepted: true, token };
+      join: (clientId, playerId, name) => {
+        if (started || engine) return { accepted: false, reason: 'game started' };
+        try {
+          const { token } = lobby.join(playerId, name);
+          lobby.removeSpectator(clientId);
+          clearLobbyTimer();   // 有人類了，改等人按開始
+          registry.sendLobby(lobby.snapshot());
+          return { accepted: true, token };
+        } catch (err) {
+          return { accepted: false, reason: err instanceof Error ? err.message : 'join failed' };
+        }
       },
-      reconnect: (token) => {
-        const pid = seats.lookup(token);
+      reconnect: (clientId, token) => {
+        if (!started || !engine) {
+          // 大廳內重連：拿回座位（斷線保留／limbo）
+          const back = lobby.reclaim(token);
+          if (!back) return { accepted: false, reason: 'unknown token' };
+          lobby.removeSpectator(clientId);
+          registry.sendLobby(lobby.snapshot());
+          return { accepted: true, playerId: back.playerId, token };
+        }
+        const pid = lobby.lookupToken(token);
         if (pid === undefined) return { accepted: false, reason: 'unknown token' };
-        if (!engine) return { accepted: false, reason: 'engine not ready' };
         engine.enqueue({ type: 'RECONNECT', playerId: pid });
         engine.drain();
         // 死亡 → RECONNECT 被拒，client 變觀戰者，仍回 JOINED 讓其知道身分
         return { accepted: true, playerId: pid, token };
       },
-      startGame: () => { startGame(); },
+      spectate: (clientId, playerId) => {
+        if (started || engine) return { accepted: false, reason: 'game started' };
+        lobby.leave(playerId);
+        lobby.addSpectator(clientId);
+        registry.sendLobby(lobby.snapshot());
+        return { accepted: true };
+      },
+      setPlayerCount: (clientId, count) => {
+        const h = lobby.hostClientId;
+        if (h !== undefined && h !== clientId) return { accepted: false, reason: 'only host' };
+        if (started || engine) return { accepted: false, reason: 'game started' };
+        try {
+          lobby.setPlayerCount(count);
+        } catch (err) {
+          return { accepted: false, reason: err instanceof Error ? err.message : 'bad count' };
+        }
+        startLobbyTimer();
+        registry.sendLobby(lobby.snapshot());
+        return { accepted: true };
+      },
+      setRandomCount: (clientId, enabled) => {
+        const h = lobby.hostClientId;
+        if (h !== undefined && h !== clientId) return { accepted: false, reason: 'only host' };
+        if (started || engine) return { accepted: false, reason: 'game started' };
+        lobby.setRandomCount(enabled);
+        startLobbyTimer();
+        registry.sendLobby(lobby.snapshot());
+        return { accepted: true };
+      },
+      chat: (clientId, playerId, text) => {
+        if (started || engine) return { accepted: false, reason: 'game started' };
+        const from = (playerId !== undefined ? lobby.seatName(playerId) : undefined)
+          ?? lobby.addSpectator(clientId).name;
+        try {
+          const entry = lobby.addChat(from, text);
+          broadcast({ type: 'CHAT_MESSAGE', from: entry.from, text: entry.text, ts: entry.ts });
+        } catch (err) {
+          return { accepted: false, reason: err instanceof Error ? err.message : 'chat failed' };
+        }
+        return { accepted: true };
+      },
+      startLobbyGame: (clientId) => {
+        if (started || engine) return { accepted: false, reason: 'game started' };
+        const h = lobby.hostClientId;
+        if (h !== undefined && h !== clientId) return { accepted: false, reason: 'only host' };
+        started = true;
+        clearLobbyTimer();
+        void runStartGame();
+        return { accepted: true };
+      },
       humanEvent: (event) => {
         if (!engine) return { accepted: false, reason: 'engine not ready' };
         const result = engine.tryEvent(event);
@@ -935,10 +1095,6 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
         engine.drain();
       },
       isStarted: () => started,
-      releaseSeat: (playerId) => { seats.release(playerId); },
-      restartLobbyTimerIfEmpty: () => {
-        if (!started && !hasHumanPlayers()) startLobbyTimer();
-      },
     },
   });
 
@@ -954,7 +1110,7 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
       } catch {
         return false;
       }
-      return engine !== null;
+      return dispatcher !== null;
     }
     // 測試 hook 直接注入 dispatcher，跳過模型檢查與 sidecar
     if (!options.dispatcherFactory && (mode === 'llama-server' || mode === 'llamacpp') && !modelReady) {
@@ -967,7 +1123,9 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
       initPromise = null;
       return false;
     }
-    return engine !== null;
+    // 注意：engine 本體延到 START_GAME 才建（大廳先於引擎存在）；
+    //此處回傳 heavy（dispatcher）是否就緒。
+    return dispatcher !== null;
   }
 
   async function initGame(): Promise<void> {
@@ -1045,7 +1203,7 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
       throw err;
     }
 
-    // scheduler 先建（ctx 閉包延遲取用 engine），再傳入 engine options
+    // scheduler 先建（ctx 閉包延遲取用 engine；engine 本體延到 START_GAME 才建）
     scheduler = new SpeechScheduler({
       enqueue: (e) => {
         engine!.enqueue(e);
@@ -1054,13 +1212,6 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
       getState: () => engine!.getState(),
       llm: dispatcher,
     });
-    engine = new GameEngine(
-      { mode: 'web', llm: dispatcher, scheduler, registry },
-      createGameState(playerCount),
-    );
-
-    // ---- Phase 2：大廳流程（不再自動 CLIENT_JOIN × N + START_GAME，改由大廳驅動） ----
-    startLobbyTimer();
 
     // ---- 全 AI 自動推進：每日發言達標 → CLOSE_DISCUSSION（缺口補位） ----
     if (!autoCloseTimer) {
@@ -1081,9 +1232,9 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
       if (typeof act.unref === 'function') act.unref();
     }
 
-    // 先前因模型未就緒而連線的 client：補送 LOBBY，無需重連
+    // heavy 就緒後重推一次大廳（含最新 engineStatus），各 client 無需重連
     try {
-      registry.sendLobby(buildLobbySnapshot(engine.getState()));
+      registry.sendLobby(lobby.snapshot());
     } catch { /* ignore */ }
   }
 

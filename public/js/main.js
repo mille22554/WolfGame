@@ -46,9 +46,13 @@
     mode: 'lobby',        // 'lobby' | 'player' | 'spectator'
     playerId: null,
     token: null,
+    clientId: null,       // 等候大廳契約：hostClientId 比對用（JOINED / LOBBY 攜帶時記下）
     selectedTarget: null,
     readySent: false,     // 本機追蹤準備投票（snapshot 無 voteReady）
     lastPhase: null,
+    lobby: null,          // 最近一次 LOBBY snapshot（等候大廳三區渲染用）
+    engine: null,         // 最近一次 engineStatus（lobby.engineStatus 或 MODEL_STATUS 轉換）
+    chatLog: [],          // 大廳聊天 [{ from, text, ts, mine }]
   };
   try {
     state.token = localStorage.getItem(TOKEN_KEY);
@@ -68,8 +72,28 @@
   var lobbySeats = document.getElementById('lobby-seats');
   var lobbyName = document.getElementById('lobby-name');
   var startBtn = document.getElementById('start-btn');
+  var lobbyError = document.getElementById('lobby-error');
+  var lobbyCount = document.getElementById('lobby-count');
+  var lobbySpecCount = document.getElementById('lobby-spec-count');
+  var lobbySpectators = document.getElementById('lobby-spectators');
+  var spectateBtn = document.getElementById('spectate-btn');
+  var lobbyWatchHint = document.getElementById('lobby-watch-hint');
+  var chatLog = document.getElementById('lobby-chat-log');
+  var chatInput = document.getElementById('lobby-chat-input');
+  var chatSend = document.getElementById('lobby-chat-send');
+  var chatCount = document.getElementById('lobby-chat-count');
+  var playerCountSel = document.getElementById('lobby-player-count');
+  var randomCheck = document.getElementById('lobby-random');
+  var startHint = document.getElementById('lobby-start-hint');
+  var hostControls = document.getElementById('lobby-host-controls');
+  var guestNote = document.getElementById('lobby-guest-note');
+  var engineDot = document.getElementById('lobby-engine-dot');
+  var engineText = document.getElementById('lobby-engine-text');
   var gmBtn = document.getElementById('gm-toggle');
   var leaveBtn = document.getElementById('leave-btn');
+  var lobbyErrorTimer = null;
+  var suppressCountEvent = false;
+  var suppressRandomEvent = false;
 
   function esc(s) {
     return String(s).replace(/[&<>"']/g, function (c) {
@@ -101,6 +125,36 @@
     }
   }
 
+  function showLobbyError(text) {
+    if (!lobbyError) {
+      showError(text);
+      return;
+    }
+    lobbyError.textContent = text;
+    lobbyError.hidden = false;
+    if (lobbyErrorTimer) clearTimeout(lobbyErrorTimer);
+    lobbyErrorTimer = setTimeout(function () {
+      lobbyError.hidden = true;
+    }, 4000);
+  }
+
+  function rememberClientId(msg) {
+    // 新契約的 JOINED / LOBBY 可能攜帶自身 clientId，欄位名容錯多收幾種
+    var cand = (msg && (msg.clientId || msg.clientID || msg.cid || msg.selfId))
+      || (msg && msg.lobby && (msg.lobby.clientId || msg.lobby.selfId || msg.lobby.myClientId))
+      || (msg && (msg.you && (msg.you.clientId || msg.you.id)));
+    if (cand !== undefined && cand !== null && cand !== '') {
+      state.clientId = String(cand);
+      try {
+        localStorage.setItem('ww-client-id', state.clientId);
+      } catch (e) { /* ignore */ }
+    }
+  }
+  try {
+    var savedCid = localStorage.getItem('ww-client-id');
+    if (savedCid) state.clientId = String(savedCid);
+  } catch (e) { /* ignore */ }
+
   function connect() {
     if (left) return;
     ws = new WebSocket('ws://' + location.host);
@@ -122,18 +176,30 @@
         return;
       }
       if (msg.type === 'LOBBY') {
-        renderLobby(msg.lobby);
+        rememberClientId(msg);
+        renderLobby(msg.lobby || {});
       } else if (msg.type === 'JOINED') {
-        state.playerId = msg.playerId;
-        state.token = msg.token;
-        state.mode = 'player';
+        rememberClientId(msg);
+        if (msg.playerId !== undefined && msg.playerId !== null) {
+          state.playerId = msg.playerId;
+          state.mode = 'player';
+        }
+        if (msg.token) {
+          state.token = msg.token;
+          try {
+            localStorage.setItem(TOKEN_KEY, msg.token);
+          } catch (e) { /* ignore */ }
+        }
         state.selectedTarget = null;
-        try {
-          localStorage.setItem(TOKEN_KEY, msg.token);
-        } catch (e) { /* ignore */ }
         send({ type: 'REQUEST_SNAPSHOT' });
-      } else if (msg.type === 'JOIN_REJECTED' || msg.type === 'ACTION_REJECTED') {
-        showError(msg.reason || '操作被拒絕');
+      } else if (msg.type === 'JOIN_REJECTED') {
+        showLobbyError(friendlyReason(msg.reason));
+        showError(friendlyReason(msg.reason));
+      } else if (msg.type === 'ACTION_REJECTED') {
+        showLobbyError(friendlyReason(msg.reason));
+        showError(friendlyReason(msg.reason));
+      } else if (msg.type === 'CHAT_MESSAGE') {
+        pushChatMessage(msg);
       } else if (msg.type === 'SNAPSHOT') {
         if (msg.snapshot && msg.snapshot.you) {
           state.mode = 'player';
@@ -147,7 +213,17 @@
         phaseEl.textContent = '啟動失敗';
         showError(msg.message || '啟動失敗');
       } else if (msg.type === 'MODEL_STATUS') {
-        // 引擎準備進度（模型 / llama-server 下載中）：顯示在狀態列，避免空白等待
+        // 新契約同時走 lobby.engineStatus；舊版只有 MODEL_STATUS，轉成 engineStatus 餵給大廳角落
+        state.engine = {
+          state: msg.state,
+          stage: msg.stage,
+          downloaded: msg.downloaded,
+          total: msg.total,
+          info: msg.info,
+          error: msg.error,
+        };
+        renderEngineCorner();
+        // 遊戲狀態列也同步，避免空白等待
         if (msg.state === 'downloading') {
           var prog = msg.total > 0
             ? Math.floor((msg.downloaded / msg.total) * 100) + '%（' + fmtMB1(msg.downloaded / 1048576) + ' / ' + fmtMB1(msg.total / 1048576) + ' MB）'
@@ -160,6 +236,8 @@
         } else if (msg.state === 'error') {
           phaseEl.textContent = '啟動失敗';
           showError('啟動失敗：' + (msg.error || '未知錯誤'));
+        } else if (msg.state === 'idle') {
+          phaseEl.textContent = '引擎準備中…';
         }
       } else if (msg.type === 'PING') {
         send({ type: 'PONG' });
@@ -183,32 +261,359 @@
 
   // ---------- 大廳 ----------
 
+  // ---------- 大廳（三段式：參戰 / 觀戰+聊天 / 控制列） ----------
+
+  function friendlyReason(reason) {
+    var r = String(reason || '操作被拒絕');
+    if (/only host/i.test(r) || /host/.test(r)) return '只有房主可以操作喔';
+    if (/game started/i.test(r)) return '遊戲已經開打了，乖乖觀戰吧';
+    if (/seat taken|occupied|taken/i.test(r)) return '這位置剛被搶走，換個空位吧';
+    if (/unknown token/i.test(r)) return '連線身分過期，請重新選座';
+    return r;
+  }
+
+  function lobbyPlayerCount(lobby) {
+    if (typeof lobby.playerCount === 'number') return lobby.playerCount;
+    if (typeof lobby.expectedPlayerCount === 'number') return lobby.expectedPlayerCount;
+    return (lobby.seats || []).length || 6;
+  }
+
+  function lobbyRandomEnabled(lobby) {
+    var v = lobby.randomCount;
+    if (typeof v === 'boolean') return v;
+    if (typeof v === 'number') return v > 0;
+    if (typeof lobby.randomEnabled === 'boolean') return lobby.randomEnabled;
+    return false;
+  }
+
+  function mySeat(lobby) {
+    if (state.playerId === null || !lobby.seats) return null;
+    for (var i = 0; i < lobby.seats.length; i++) {
+      if (lobby.seats[i].playerId === state.playerId) return lobby.seats[i];
+    }
+    return null;
+  }
+
+  function isSeated(lobby) {
+    var s = mySeat(lobby);
+    return !!(s && s.controlledBy === 'human');
+  }
+
+  function isHost(lobby) {
+    var host = lobby.hostClientId;
+    if (host === undefined || host === null || host === '') {
+      // 舊後端無 host 概念：有座位的真人即視為可開局（相容舊行為）
+      return isSeated(lobby) || state.playerId !== null;
+    }
+    if (state.clientId === null) return false;
+    return String(host) === String(state.clientId);
+  }
+
+  function engineReady() {
+    // 無 engine 資訊（舊後端）→ 視為就緒，不擋開局
+    if (!state.engine) return true;
+    return state.engine.state === 'ready';
+  }
+
+  function selfNames() {
+    var names = [];
+    try {
+      var v = lobbyName && lobbyName.value ? lobbyName.value.trim() : '';
+      if (v) names.push(v);
+    } catch (e) { /* ignore */ }
+    var seat = state.lobby ? mySeat(state.lobby) : null;
+    if (seat && seat.name) names.push(String(seat.name));
+    return names;
+  }
+
+  function pushChatMessage(msg) {
+    var from = msg.from;
+    if (from && typeof from === 'object') from = from.name || from.clientId || '路人';
+    from = from === undefined || from === null || from === '' ? '路人' : String(from);
+    var text = String(msg.text === undefined || msg.text === null ? '' : msg.text).slice(0, 500);
+    if (!text) return;
+    var names = selfNames();
+    var mine = false;
+    for (var i = 0; i < names.length; i++) {
+      if (names[i] && from === names[i]) {
+        mine = true;
+        break;
+      }
+    }
+    state.chatLog.push({ from: from, text: text, ts: msg.ts || Date.now(), mine: mine });
+    if (state.chatLog.length > 100) state.chatLog.splice(0, state.chatLog.length - 100);
+    renderChatLog();
+  }
+
+  function fmtChatTime(ts) {
+    try {
+      var d = new Date(Number(ts));
+      if (isNaN(d.getTime())) return '';
+      var hh = String(d.getHours());
+      if (hh.length < 2) hh = '0' + hh;
+      var mm = String(d.getMinutes());
+      if (mm.length < 2) mm = '0' + mm;
+      return hh + ':' + mm;
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function renderChatLog() {
+    if (!chatLog) return;
+    if (state.chatLog.length === 0) {
+      chatLog.innerHTML = '<div class="chat-empty">還沒人講話，先打聲招呼吧！</div>';
+      return;
+    }
+    var html = '';
+    for (var i = 0; i < state.chatLog.length; i++) {
+      var m = state.chatLog[i];
+      html += '<div class="chat-msg' + (m.mine ? ' mine' : '') + '">'
+        + '<span class="chat-from">' + esc(m.from) + (m.mine ? '（我）' : '') + '</span>'
+        + '<span class="chat-text">' + esc(m.text) + '</span>'
+        + '<span class="chat-time">' + esc(fmtChatTime(m.ts)) + '</span>'
+        + '</div>';
+    }
+    chatLog.innerHTML = html;
+    chatLog.scrollTop = chatLog.scrollHeight;
+  }
+
+  function sendChat() {
+    if (!chatInput) return;
+    var text = chatInput.value.trim().slice(0, 500);
+    if (!text) return;
+    send({ type: 'CHAT_SEND', text: text });
+    chatInput.value = '';
+    if (chatCount) chatCount.textContent = '0 / 500';
+  }
+
+  function renderEngineCorner() {
+    if (!engineText || !engineDot) return;
+    var eng = state.engine;
+    var box = document.getElementById('lobby-engine');
+    engineDot.className = 'engine-dot';
+    if (box) box.classList.remove('is-ready', 'is-error', 'is-busy');
+    if (!eng) {
+      engineText.textContent = '引擎準備中…';
+      engineDot.classList.add('pulse');
+      if (box) box.classList.add('is-busy');
+      updateStartButton();
+      return;
+    }
+    var pct = '';
+    if (typeof eng.downloaded === 'number' && typeof eng.total === 'number' && eng.total > 0) {
+      pct = Math.floor((eng.downloaded / eng.total) * 100) + '%（'
+        + fmtMB1(eng.downloaded / 1048576) + ' / ' + fmtMB1(eng.total / 1048576) + ' MB）';
+    } else if (typeof eng.downloaded === 'number' && eng.downloaded > 0) {
+      pct = fmtMB1(eng.downloaded / 1048576) + ' MB';
+    }
+    var info = eng.info ? '（' + eng.info + '）' : '';
+    if (eng.state === 'downloading') {
+      var isEnv = eng.stage === 'llama-server';
+      var looksUnzip = /解壓|unzip|extract/i.test(String(eng.info || '') + String(eng.stage || ''));
+      engineText.textContent = looksUnzip
+        ? '解壓中…' + info
+        : (isEnv ? '下載執行環境…' : '模型下載中…') + pct;
+      engineDot.classList.add('pulse');
+      if (box) box.classList.add('is-busy');
+    } else if (eng.state === 'starting') {
+      engineText.textContent = '啟動執行環境中…' + info;
+      engineDot.classList.add('pulse');
+      if (box) box.classList.add('is-busy');
+    } else if (eng.state === 'idle') {
+      engineText.textContent = '載入中心跳…' + info;
+      engineDot.classList.add('pulse');
+      if (box) box.classList.add('is-busy');
+    } else if (eng.state === 'ready') {
+      engineText.textContent = '引擎就緒 ✅';
+      engineDot.classList.add('ok');
+      if (box) box.classList.add('is-ready');
+    } else if (eng.state === 'error') {
+      engineText.textContent = '啟動失敗：' + (eng.error || '未知錯誤');
+      engineDot.classList.add('bad');
+      if (box) box.classList.add('is-error');
+    } else {
+      engineText.textContent = '引擎準備中…';
+      engineDot.classList.add('pulse');
+      if (box) box.classList.add('is-busy');
+    }
+    updateStartButton();
+  }
+
+  function spectatorNames(lobby) {
+    var list = lobby.spectators;
+    if (!Array.isArray(list)) return [];
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var s = list[i];
+      if (s === null || s === undefined) continue;
+      if (typeof s === 'string') {
+        if (s) out.push(s);
+      } else if (typeof s === 'object') {
+        var n = s.name || s.nick || s.clientId || s.id;
+        if (n !== undefined && n !== null && String(n) !== '') out.push(String(n));
+      }
+    }
+    return out;
+  }
+
+  function updateStartButton() {
+    if (!startBtn) return;
+    var lobby = state.lobby;
+    if (!lobby) return;
+    var host = isHost(lobby);
+    var ready = engineReady();
+    startBtn.disabled = !host || !ready;
+    if (startHint) {
+      if (!host) {
+        startHint.textContent = '';
+      } else if (!ready) {
+        startHint.textContent = '引擎啟動中…就緒後才能開打';
+      } else {
+        var n = lobbyPlayerCount(lobby);
+        startHint.textContent = '你是房主，' + n + ' 人局，隨時可以開打！';
+      }
+    }
+  }
+
   function renderLobby(lobby) {
-    state.mode = state.playerId !== null ? 'player' : 'lobby';
-    phaseEl.textContent = PHASE_LABELS[lobby.phase] || lobby.phase;
+    lobby = lobby || {};
+    if (!Array.isArray(lobby.seats)) lobby.seats = [];
+    state.lobby = lobby;
+    if (lobby.engineStatus && typeof lobby.engineStatus === 'object') {
+      state.engine = lobby.engineStatus;
+    }
+    if (lobby.phase) {
+      phaseEl.textContent = PHASE_LABELS[lobby.phase] || lobby.phase;
+    }
+
+    // 開打後把大廳收起來，交給 snapshot 流程
+    if (lobby.started) {
+      hideLobby();
+      return;
+    }
+    state.mode = isSeated(lobby) ? 'player' : 'lobby';
     lobbyOverlay.hidden = false;
+
+    renderSeats(lobby);
+    renderSpectatorZone(lobby);
+    renderHostControls(lobby);
+    renderEngineCorner();
+    renderChatLog();
+  }
+
+  function renderSeats(lobby) {
+    var seated = isSeated(lobby);
+    var humans = 0;
+    for (var s = 0; s < lobby.seats.length; s++) {
+      if (lobby.seats[s].controlledBy === 'human') humans++;
+    }
+    if (lobbyCount) {
+      lobbyCount.textContent = '（' + humans + ' / ' + lobbyPlayerCount(lobby) + ' 人參戰）';
+    }
     var html = '';
     for (var i = 0; i < lobby.seats.length; i++) {
       var seat = lobby.seats[i];
+      var pid = seat.playerId;
+      var isMine = state.playerId !== null && pid === state.playerId && seat.controlledBy === 'human';
       if (seat.controlledBy === 'empty') {
-        html += '<button type="button" class="seat empty" data-seat="' + seat.playerId + '">P' + seat.playerId + '<br>空位</button>';
+        html += '<button type="button" class="seat empty" data-seat="' + pid + '">'
+          + '<span class="seat-id">P' + pid + '</span>'
+          + '<span class="seat-sub">＋ 加入</span></button>';
       } else if (seat.controlledBy === 'ai') {
-        html += '<div class="seat ai">P' + seat.playerId + '<br>AI</div>';
+        html += '<div class="seat ai"><span class="seat-id">P' + pid + '</span>'
+          + '<span class="seat-name">' + esc(seat.name || 'AI') + '</span>'
+          + '<span class="badge badge-ai">🤖 AI</span></div>';
       } else {
-        html += '<div class="seat human">P' + seat.playerId + ' ' + esc(seat.name) + '<br>真人</div>';
+        html += '<div class="seat human' + (isMine ? ' mine' : '') + '">'
+          + '<span class="seat-id">P' + pid + '</span>'
+          + '<span class="seat-name">' + esc(seat.name || ('P' + pid)) + '</span>'
+          + '<span class="badge badge-human">🧑 真人</span>';
+        if (seat.disconnected) {
+          html += '<span class="badge badge-proxy">⚠️ AI 託管中</span>';
+        }
+        if (isMine) {
+          html += '<button type="button" class="btn-ghost btn-small seat-leave" data-leave="' + pid + '">離座</button>';
+        }
+        html += '</div>';
       }
     }
-    lobbySeats.innerHTML = html;
-    var btns = lobbySeats.querySelectorAll('button.seat');
-    for (var b = 0; b < btns.length; b++) {
-      btns[b].addEventListener('click', function () {
-        var pid = parseInt(this.getAttribute('data-seat'), 10);
-        var name = lobbyName.value.trim() || undefined;
-        send({ type: 'JOIN', playerId: pid, name: name });
+    lobbySeats.innerHTML = html || '<div class="msg">座位載入中…</div>';
+
+    var joins = lobbySeats.querySelectorAll('button.seat[data-seat]');
+    for (var b = 0; b < joins.length; b++) {
+      joins[b].addEventListener('click', function () {
+        var target = parseInt(this.getAttribute('data-seat'), 10);
+        var name = (lobbyName && lobbyName.value.trim()) || undefined;
+        if (name && name.length > 12) name = name.slice(0, 12);
+        // 參戰↔觀戰一鍵切換：已在座位上就先離座再加入新座位（後端 JOIN 會直接換座）
+        send({ type: 'JOIN', playerId: target, name: name });
       });
     }
-    // 已選座的真人可按開始
-    startBtn.hidden = state.mode !== 'player';
+    var leaves = lobbySeats.querySelectorAll('button.seat-leave[data-leave]');
+    for (var l = 0; l < leaves.length; l++) {
+      leaves[l].addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        state.playerId = null; // 樂觀切換：先當自己已離座，等下一次 LOBBY 校準
+        send({ type: 'SPECTATE' });
+        send({ type: 'REQUEST_SNAPSHOT' });
+      });
+    }
+    void seated;
+  }
+
+  function renderSpectatorZone(lobby) {
+    var names = spectatorNames(lobby);
+    if (lobbySpecCount) {
+      lobbySpecCount.textContent = names.length > 0 ? '（' + names.length + ' 人觀戰）' : '';
+    }
+    if (lobbySpectators) {
+      if (names.length === 0) {
+        lobbySpectators.innerHTML = '<span class="hint">目前沒有觀戰者，來當第一個吧！</span>';
+      } else {
+        var html = '';
+        for (var i = 0; i < names.length; i++) {
+          html += '<span class="spec-chip">👁️ ' + esc(names[i]) + '</span>';
+        }
+        lobbySpectators.innerHTML = html;
+      }
+    }
+    var seated = isSeated(lobby);
+    if (spectateBtn) {
+      spectateBtn.hidden = !seated;
+    }
+    if (lobbyWatchHint) {
+      lobbyWatchHint.textContent = seated ? '想休息就按「轉為觀戰」或自己座位的「離座」。' : '點左方空位就能加入參戰。';
+    }
+  }
+
+  function renderHostControls(lobby) {
+    var host = isHost(lobby);
+    var count = lobbyPlayerCount(lobby);
+    var random = lobbyRandomEnabled(lobby);
+    if (playerCountSel) {
+      if (playerCountSel.options.length === 0) {
+        for (var n = 6; n <= 15; n++) {
+          var opt = document.createElement('option');
+          opt.value = String(n);
+          opt.textContent = n + ' 人局';
+          playerCountSel.appendChild(opt);
+        }
+      }
+      suppressCountEvent = true;
+      playerCountSel.value = String(count);
+      playerCountSel.disabled = !host;
+      suppressCountEvent = false;
+    }
+    if (randomCheck) {
+      suppressRandomEvent = true;
+      randomCheck.checked = random;
+      randomCheck.disabled = !host;
+      suppressRandomEvent = false;
+    }
+    if (hostControls) hostControls.hidden = !host;
+    if (guestNote) guestNote.hidden = host;
+    updateStartButton();
   }
 
   function hideLobby() {
@@ -216,8 +621,64 @@
   }
 
   startBtn.addEventListener('click', function () {
+    if (startBtn.disabled) return;
     send({ type: 'START_GAME' });
   });
+
+  if (playerCountSel) {
+    playerCountSel.addEventListener('change', function () {
+      if (suppressCountEvent || playerCountSel.disabled) return;
+      var v = parseInt(playerCountSel.value, 10);
+      if (v >= 6 && v <= 15) send({ type: 'SET_PLAYER_COUNT', count: v });
+    });
+  }
+
+  if (randomCheck) {
+    randomCheck.addEventListener('change', function () {
+      if (suppressRandomEvent || randomCheck.disabled) return;
+      send({ type: 'SET_RANDOM_COUNT', enabled: !!randomCheck.checked });
+    });
+  }
+
+  if (spectateBtn) {
+    spectateBtn.addEventListener('click', function () {
+      state.playerId = null;
+      send({ type: 'SPECTATE' });
+      send({ type: 'REQUEST_SNAPSHOT' });
+    });
+  }
+
+  if (chatSend) {
+    chatSend.addEventListener('click', sendChat);
+  }
+  if (chatInput) {
+    chatInput.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' && !ev.shiftKey) {
+        ev.preventDefault();
+        sendChat();
+      }
+    });
+    chatInput.addEventListener('input', function () {
+      if (chatInput.value.length > 500) chatInput.value = chatInput.value.slice(0, 500);
+      if (chatCount) chatCount.textContent = chatInput.value.length + ' / 500';
+    });
+  }
+
+  try {
+    var savedName = localStorage.getItem('ww-name');
+    if (savedName && lobbyName && !lobbyName.value) lobbyName.value = savedName;
+  } catch (e) { /* ignore */ }
+  if (lobbyName) {
+    lobbyName.addEventListener('input', function () {
+      if (lobbyName.value.length > 12) lobbyName.value = lobbyName.value.slice(0, 12);
+      try {
+        localStorage.setItem('ww-name', lobbyName.value);
+      } catch (e) { /* ignore */ }
+    });
+  }
+
+  // 聊天室初始文案
+  renderChatLog();
 
   // ---------- 白板 / 玩家卡片共用 ----------
 

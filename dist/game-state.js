@@ -156,7 +156,8 @@ export function buildLobbySnapshot(state) {
             : { playerId: id, name: '', controlledBy: 'empty' });
     }
     const started = state.phase !== 'SETUP_WAITING_JOIN' && state.phase !== 'SETUP_READY';
-    return { phase: state.phase, expectedPlayerCount: state.expectedPlayerCount, seats, started };
+    // 等候大廳擴充欄位預設值（舊大廳路徑相容；新大廳由 LobbyManager 提供完整值）
+    return { phase: state.phase, expectedPlayerCount: state.expectedPlayerCount, seats, started, playerCount: state.expectedPlayerCount, randomCount: false, spectators: [], engineStatus: { state: 'idle' } };
 }
 /** Phase 2：斷線接管共用（翻轉為 ai + 移出 voteReady/skippedHumans；gate 內未完成 → 補派 DISPATCH_LLM） */
 function applyDisconnect(state, playerId, effects) {

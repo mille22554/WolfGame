@@ -37,6 +37,7 @@ export declare class LlamaServerManager {
     private readonly options;
     private child;
     private spawnedByUs;
+    private stopRequested;
     private actualPort;
     private readonly logTail;
     constructor(options: LlamaServerManagerOptions);

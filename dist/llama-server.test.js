@@ -228,6 +228,29 @@ test('stop()：spawn 實例 → child 被殺；reused → no-op', async () => {
         restore();
     }
 });
+test('stop()：啟動飛行中呼叫 → 丟掉 child 並快速報停（不留孤兒進程）', async () => {
+    // slow fake：120 秒後才 listen，保證 stop() 時還在 waitReady 輪詢中；
+    // healthTimeout 設 60 秒：無修復會等滿 deadline（＋重啟 loop 數分鐘），有修復數秒內報停
+    const restore = withFakeMode('slow', { FAKE_SLOW_MS: '120000' });
+    const port = await freePort();
+    const mgr = new LlamaServerManager({
+        binPath: getFake(), modelPath: 'x.gguf', port,
+        healthTimeoutMs: 60000, healthIntervalMs: 100, maxRestarts: 3,
+    });
+    const t0 = Date.now();
+    try {
+        const p = mgr.start();
+        await new Promise((r) => setTimeout(r, 500)); // 等 spawn＋進入 waitReady
+        await mgr.stop();
+        await assert.rejects(p, /stopped/);
+        assert.equal(mgr.isRunning(), false);
+        assert.ok(Date.now() - t0 < 15000, '應在數秒內報停，而非等滿 60s deadline');
+        assert.equal(await probe(port), false);
+    }
+    finally {
+        restore();
+    }
+});
 test('port 被非 llama 程序佔用 → 依序試下一個 port', async () => {
     const restore = withFakeMode('healthy');
     const port = await freePort();

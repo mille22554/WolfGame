@@ -651,3 +651,281 @@ aside {
   .menu-wrap .brand-zone h1 { font-size: 34px; }
   .menu-wrap .brand-zone .subtitle { font-size: 15px; }
 }
+
+/* ============================================
+   等候大廳三段式（參戰 / 觀戰+聊天 / 控制列）
+   沿用深色主題＋主選單視覺語言：
+   圓角 10-12px、明顯按鈕邊框、hover/pressed/focus 回饋
+   ============================================ */
+#lobby-panel {
+  max-width: 920px;
+  width: calc(100vw - 32px);
+  max-height: 92vh;
+  overflow-y: auto;
+  padding: 22px 24px;
+  border-radius: 16px;
+}
+#lobby-panel h2 { margin: 0 0 4px; font-size: 22px; letter-spacing: 4px; }
+#lobby-panel > .hint { margin: 12px 2px 0; }
+#lobby-error {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #2a1620;
+  border: 1px solid #7a2e3f;
+  color: #ff9d9d;
+  font-size: 14px;
+}
+#lobby-error[hidden] { display: none; }
+.lobby-grid {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 12px;
+  margin-top: 12px;
+}
+.lobby-zone {
+  background: #14161c;
+  border: 1px solid #333a52;
+  border-radius: 12px;
+  padding: 14px 16px;
+  min-width: 0;
+}
+.lobby-zone h3 {
+  margin: 0 0 10px;
+  font-size: 16px;
+  letter-spacing: 1px;
+}
+.lobby-zone h4 { margin: 12px 0 8px; font-size: 14px; color: #c3c9e0; }
+.lobby-count { color: #8a93b2; font-size: 13px; font-weight: 400; }
+.lobby-control { grid-column: 1 / -1; }
+/* 參戰區 */
+.lobby-nick-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 14px;
+  color: #c3c9e0;
+}
+.lobby-nick-row input {
+  flex: 1;
+  min-width: 0;
+  background: #1a1e29;
+  color: #e8eaf0;
+  border: 1px solid #4d5878;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 14px;
+}
+.lobby-nick-row input:focus-visible,
+.lobby-chat-row input:focus-visible,
+.lobby-count-row select:focus-visible {
+  outline: 2px solid #8aa2ff;
+  outline-offset: 1px;
+}
+#lobby-seats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 12px 0;
+}
+#lobby-seats .seat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  text-align: center;
+  padding: 12px 8px;
+  border-radius: 10px;
+  border: 1px solid #4d5878;
+  background: #1a1e29;
+  color: #e8eaf0;
+  min-width: 0;
+}
+#lobby-seats button.seat {
+  cursor: pointer;
+  font-size: 14px;
+  transition: border-color 0.12s ease, background 0.12s ease, transform 0.12s ease;
+}
+#lobby-seats button.seat:hover {
+  border-color: #4d7cff;
+  background: #232842;
+  transform: translateY(-1px);
+}
+#lobby-seats button.seat:active { transform: translateY(0); background: #20263e; }
+#lobby-seats button.seat:focus-visible,
+.lobby-zone button:focus-visible,
+.lobby-start-row button:focus-visible {
+  outline: 2px solid #8aa2ff;
+  outline-offset: 2px;
+}
+#lobby-seats .seat-id { font-weight: 800; font-size: 15px; }
+#lobby-seats .seat-sub { color: #8affc1; font-size: 13px; }
+#lobby-seats .seat-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+#lobby-seats .seat.ai { color: #8a93b2; border-style: dashed; }
+#lobby-seats .seat.human { border-color: #2e6b4d; background: #16241d; }
+#lobby-seats .seat.human.mine { border-color: #ffe08a; background: #262418; }
+.badge {
+  display: inline-block;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid #4d5878;
+  color: #aab2cc;
+  white-space: nowrap;
+}
+.badge-ai { border-color: #333a52; }
+.badge-human { border-color: #2e6b4d; background: #1c3a2a; color: #8affc1; }
+.badge-proxy { border-color: #6b4a2e; background: #261d14; color: #ffcf9d; }
+.seat-leave { margin-top: 4px; }
+/* 觀戰區 */
+.lobby-spectators {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 32px;
+}
+.spec-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid #4d5878;
+  background: #1a1e29;
+  color: #c3c9e0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#lobby-spectate-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+#lobby-spectate-row .hint { margin: 0; }
+.lobby-chat { margin-top: 4px; }
+#lobby-chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 190px;
+  overflow-y: auto;
+  background: #1a1e29;
+  border: 1px solid #333a52;
+  border-radius: 10px;
+  padding: 10px 12px;
+  min-height: 90px;
+}
+.chat-empty, #lobby-panel .hint { color: #8a93b2; font-size: 13px; }
+.chat-msg {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  background: #14161c;
+  border: 1px solid #2b3048;
+  border-radius: 8px;
+  padding: 6px 10px;
+  word-break: break-word;
+}
+.chat-msg.mine { border-color: #2e6b4d; background: #14261d; }
+.chat-from { font-weight: 700; color: #9db4ff; white-space: nowrap; }
+.chat-msg.mine .chat-from { color: #8affc1; }
+.chat-text { flex: 1; min-width: 120px; color: #e8eaf0; }
+.chat-time { color: #5b6380; font-size: 12px; }
+.lobby-chat-row { display: flex; gap: 8px; margin-top: 8px; }
+.lobby-chat-row input {
+  flex: 1;
+  min-width: 0;
+  background: #1a1e29;
+  color: #e8eaf0;
+  border: 1px solid #4d5878;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 14px;
+}
+#lobby-chat-count { margin: 4px 2px 0; text-align: right; }
+/* 控制列 */
+.lobby-count-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  font-size: 14px;
+}
+.lobby-count-row select {
+  background: #1a1e29;
+  color: #e8eaf0;
+  border: 1px solid #6b7bb0;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 14px;
+}
+.lobby-random { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.lobby-random input { width: 16px; height: 16px; accent-color: #4d7cff; }
+.lobby-start-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  margin-top: 12px;
+}
+.lobby-start-row .btn-primary {
+  letter-spacing: 2px;
+  text-indent: 0;
+  padding: 11px 22px;
+  font-size: 16px;
+}
+.lobby-start-row .btn-primary:active:not(:disabled) { transform: translateY(1px); }
+.lobby-start-row .btn-primary:focus-visible {
+  outline: 2px solid #8aa2ff;
+  outline-offset: 2px;
+}
+#lobby-guest-note { margin: 4px 0; font-size: 14px; }
+#lobby-guest-note[hidden], #lobby-host-controls[hidden] { display: none; }
+.lobby-engine {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid #333a52;
+  background: #1a1e29;
+  font-size: 13px;
+  color: #aab2cc;
+}
+.lobby-engine.is-ready { border-color: #2e6b4d; background: #14261d; color: #8affc1; }
+.lobby-engine.is-error { border-color: #7a2e3f; background: #2a1620; color: #ff9d9d; }
+.lobby-engine.is-busy { border-color: #4d5878; }
+.engine-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #8a93b2;
+}
+.engine-dot.pulse { background: #ffe08a; animation: pill-pulse 1.2s ease-in-out infinite; }
+.engine-dot.ok { background: #8affc1; }
+.engine-dot.bad { background: #ff5c5c; }
+/* 窄版面：三區垂直堆疊，不跑版 */
+@media (max-width: 760px) {
+  #lobby-panel { padding: 16px 14px; max-height: 94vh; }
+  .lobby-grid { grid-template-columns: 1fr; }
+  #lobby-seats { grid-template-columns: repeat(2, 1fr); }
+  .lobby-chat-row { flex-direction: column; }
+  .lobby-chat-row button { align-self: flex-end; }
+  #lobby-chat-log { max-height: 150px; }
+}
