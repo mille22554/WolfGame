@@ -34,19 +34,21 @@
       setPill('ready', '模型已就緒');
       startBtn.disabled = false;
       hint.textContent = '模型已就緒，可以開始遊戲。';
-      if (status.selectedModel) {
+      var name = status.selectedModel
+        || (status.models && status.models.length > 0 ? status.models[0].name : '');
+      if (name) {
         selectedLine.hidden = false;
-        selectedLine.textContent = '目前模型：' + status.selectedModel;
-      } else if (status.models && status.models.length > 0) {
-        selectedLine.hidden = false;
-        selectedLine.textContent = '目前模型：' + status.models[0].name;
+        selectedLine.textContent = '目前模型：' + name;
+        selectedLine.title = name;
       } else {
         selectedLine.hidden = true;
+        selectedLine.removeAttribute('title');
       }
     } else {
       setPill('empty', '尚未下載模型');
       startBtn.disabled = true;
       selectedLine.hidden = true;
+      selectedLine.removeAttribute('title');
       hint.textContent = '尚未下載模型，請先到「模型管理」下載。';
     }
   }

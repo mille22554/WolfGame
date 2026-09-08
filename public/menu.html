@@ -13,24 +13,28 @@
 </div>
 
 <main class="entry-wrap menu-wrap">
-  <div class="game-logo">
+  <section class="brand-zone">
     <div class="logo-mark" aria-hidden="true">🌕</div>
     <h1>人狼遊戲</h1>
     <p class="subtitle">真人 + AI 混合對戰</p>
-  </div>
+  </section>
 
-  <div id="model-pill" class="status-pill is-checking">
-    <span class="pill-dot" aria-hidden="true"></span>
-    <span id="model-pill-text">正在檢查模型…</span>
-  </div>
-  <p id="selected-line" class="selected-line" hidden></p>
+  <section class="status-zone">
+    <div id="model-pill" class="status-pill menu-status is-checking">
+      <span class="pill-dot" aria-hidden="true"></span>
+      <span class="status-text">
+        <span id="model-pill-text" class="status-title">正在檢查模型…</span>
+        <span id="selected-line" class="selected-line" hidden></span>
+      </span>
+    </div>
+    <p id="menu-hint" class="hint">首次使用請先到「模型管理」下載模型。</p>
+    <p id="menu-error" class="error-text" hidden></p>
+  </section>
 
-  <div class="menu-actions">
+  <section class="action-zone">
     <button id="start-btn" type="button" class="btn-primary btn-large" disabled>開始遊戲</button>
     <button id="models-btn" type="button" class="btn-ghost btn-large">模型管理</button>
-  </div>
-  <p id="menu-hint" class="hint">首次使用請先到「模型管理」下載模型。</p>
-  <p id="menu-error" class="error-text" hidden></p>
+  </section>
 
   <p class="entry-foot">同一 Wi-Fi 下可用瀏覽器開啟多機對戰</p>
 </main>

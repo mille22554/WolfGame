@@ -523,3 +523,131 @@ aside {
   .page-head { flex-wrap: wrap; }
   .models-wrap .status-pill { margin-top: 0; }
 }
+
+/* ============================================
+   主選單修正（observer 回饋）
+   根因：全域 `main { display:flex; height:calc(...) }` 污染入口頁，
+   把狀態膠囊擠成中央豎條。此處強制復位 + 明確三段式佈局。
+   ============================================ */
+.entry-page main.entry-wrap {
+  display: block;
+  height: auto;
+  flex: none;
+  margin: 0;
+  padding: 40px 36px 30px;
+}
+.menu-wrap {
+  max-width: 520px;
+  text-align: center;
+}
+/* 品牌區 */
+.menu-wrap .brand-zone { margin-bottom: 4px; }
+.menu-wrap .brand-zone .logo-mark {
+  font-size: 44px;
+  line-height: 1;
+  filter: drop-shadow(0 0 18px rgba(255, 224, 138, 0.35));
+}
+.menu-wrap .brand-zone h1 {
+  margin: 12px 0 8px;
+  font-size: 44px;
+  letter-spacing: 10px;
+  text-indent: 10px;
+  font-weight: 800;
+  color: #ffffff;
+}
+.menu-wrap .brand-zone .subtitle {
+  margin: 0;
+  font-size: 17px;
+  letter-spacing: 3px;
+  color: #c3c9e0;
+}
+/* 狀態區：橫向狀態卡，取代舊 pill 置中漂浮 */
+.menu-wrap .status-zone { margin-top: 24px; }
+.status-pill.menu-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin-top: 0;
+  padding: 14px 18px;
+  border-radius: 12px;
+  text-align: left;
+  font-size: 15px;
+}
+.status-pill.menu-status .pill-dot {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+.status-pill.menu-status .status-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.status-pill.menu-status .status-title {
+  font-weight: 700;
+  font-size: 15px;
+  white-space: nowrap;
+}
+/* 模型名稱：單行 ellipsis，不斷行破碎 */
+.menu-wrap .selected-line {
+  display: block;
+  margin: 0;
+  font-size: 13px;
+  font-family: Consolas, monospace;
+  color: #c3c9e0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: normal;
+  max-width: 100%;
+}
+.menu-wrap .selected-line[hidden] { display: none; }
+.status-pill.menu-status.is-ready .selected-line { color: #a9e8c6; }
+.status-pill.menu-status.is-empty .selected-line { color: #e8c49d; }
+.menu-wrap .status-zone .hint {
+  margin: 12px 2px 0;
+  color: #b6bcd4;
+  font-size: 14px;
+}
+/* 操作區：兩顆全寬大按鈕，次按鈕有明確邊框與回饋 */
+.menu-wrap .action-zone {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 22px;
+}
+.menu-wrap .btn-ghost {
+  background: #232842;
+  border: 1px solid #6b7bb0;
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+}
+.menu-wrap .btn-ghost:hover:not(:disabled) {
+  border-color: #8aa2ff;
+  background: #2b3352;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(77, 124, 255, 0.3);
+}
+.menu-wrap .btn-ghost:active:not(:disabled) {
+  transform: translateY(0);
+  background: #20263e;
+}
+.menu-wrap .btn-ghost:focus-visible,
+.menu-wrap .btn-primary:focus-visible {
+  outline: 2px solid #8aa2ff;
+  outline-offset: 2px;
+}
+.menu-wrap .entry-foot {
+  margin: 20px 0 0;
+  color: #9aa1bd;
+  font-size: 13px;
+}
+@media (max-width: 560px) {
+  .entry-page main.entry-wrap { padding: 30px 22px 24px; }
+  .menu-wrap .brand-zone h1 { font-size: 34px; }
+  .menu-wrap .brand-zone .subtitle { font-size: 15px; }
+}
