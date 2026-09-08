@@ -375,7 +375,12 @@ aside {
   display: flex;
   align-items: flex-start;
   gap: 16px;
-  margin-bottom: 8px;
+  margin-bottom: 16px;
+  background: #14161c;
+  border: 1px solid #333a52;
+  border-radius: 12px;
+  padding: 16px 20px;
+  box-shadow: none;
 }
 .page-title { flex: 1; }
 .page-title h1 {
