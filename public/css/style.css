@@ -705,6 +705,7 @@ aside {
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-top: 12px;
   margin-bottom: 10px;
   font-size: 14px;
   color: #c3c9e0;
