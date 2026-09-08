@@ -128,6 +128,12 @@ export declare class WebSocketRegistry implements ClientRegistry {
     private onClientMessage;
     private handleClientMessage;
     private onDisconnect;
+    /**
+     * 零連線關閉計時器：無 client 且尚未 armed 時啟動。
+     * - 啟動時呼叫一次（主選單不開 WS 也能兜底：60 秒無連線 → no-clients 關閉 exe）。
+     * - 逃生口：`zeroClientShutdownMs <= 0`（`ZERO_CLIENT_SHUTDOWN_MS=0`）時永不 armed，供 dev 使用。
+     */
+    armZeroTimerIfEmpty(): void;
     private pingCheck;
 }
 export declare function startServer(options?: ServerOptions): Promise<ServerHandle>;

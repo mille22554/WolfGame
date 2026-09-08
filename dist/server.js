@@ -509,6 +509,16 @@ export class WebSocketRegistry {
                 actions.restartLobbyTimerIfEmpty();
             }
         }
+        this.armZeroTimerIfEmpty();
+    }
+    /**
+     * 零連線關閉計時器：無 client 且尚未 armed 時啟動。
+     * - 啟動時呼叫一次（主選單不開 WS 也能兜底：60 秒無連線 → no-clients 關閉 exe）。
+     * - 逃生口：`zeroClientShutdownMs <= 0`（`ZERO_CLIENT_SHUTDOWN_MS=0`）時永不 armed，供 dev 使用。
+     */
+    armZeroTimerIfEmpty() {
+        if (this.opts.zeroClientShutdownMs <= 0)
+            return;
         if (this.clients.size === 0 && !this.zeroTimer) {
             this.zeroTimer = setTimeout(() => {
                 this.zeroTimer = null;
@@ -1027,6 +1037,9 @@ export async function startServer(options = {}) {
     });
     const url = `http://localhost:${port}`;
     console.log(`[server] 啟動：${url}`);
+    // 啟動即 armed：主選單不開 WS，從頭 0 連線也會計時（60 秒無連線 → no-clients）；
+    // 首條連線進來時 onConnection 會清掉 timer，故已有連線的情況不受影響。
+    registry.armZeroTimerIfEmpty();
     handle = {
         port,
         url,

@@ -318,4 +318,38 @@ http.createServer((req, res) => {
         rmSync(modelsDir, { recursive: true, force: true });
     }
 });
+test('啟動 armed：完全不連線（主選單不開 WS）→ zeroTimer 觸發 no-clients 關閉', async () => {
+    let reason = '';
+    const h = await boot({ zeroClientShutdownMs: 50, onShutdown: (r) => { reason = r; } });
+    const closedReason = await Promise.race([
+        h.closed,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('等啟動 armed 關閉逾時')), 5000)),
+    ]);
+    assert.equal(closedReason, 'no-clients');
+    assert.equal(reason, 'no-clients');
+});
+test('zeroClientShutdownMs: 0 → 停用自動退出（含斷開路徑；150ms 內不關閉）', async () => {
+    let shut = false;
+    const h = await boot({ zeroClientShutdownMs: 0, onShutdown: () => { shut = true; } });
+    try {
+        // 斷開路徑：連線後立刻斷開，armed 應被逃生口擋下
+        const ws = new WebSocket(`ws://localhost:${h.port}`);
+        await new Promise((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error('連線逾時')), 5000);
+            ws.on('open', () => {
+                clearTimeout(timer);
+                resolve();
+            });
+            ws.on('error', reject);
+        });
+        ws.close();
+        await new Promise((r) => setTimeout(r, 50));
+        // 啟動 armed 路徑：從頭 0 連線也不應觸發
+        await new Promise((r) => setTimeout(r, 150));
+        assert.equal(shut, false);
+    }
+    finally {
+        await h.shutdown('test');
+    }
+});
 //# sourceMappingURL=server.test.js.map
