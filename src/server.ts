@@ -984,6 +984,8 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
               release: options.llamaServerRelease ?? process.env.LLAMA_SERVER_RELEASE ?? DEFAULT_LLAMA_SERVER_RELEASE,
               onProgress: (downloaded, total) =>
                 broadcast({ type: 'MODEL_STATUS', state: 'downloading', stage: 'llama-server', downloaded, total }),
+              onStage: (info) =>
+                broadcast({ type: 'MODEL_STATUS', state: 'starting', stage: 'llama-server', info }),
             });
       } catch (err) {
         const error = err instanceof Error ? err.message : String(err);
@@ -1000,8 +1002,10 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
         threads: options.llamaServerThreads ?? envInt('LLAMA_SERVER_THREADS', os.cpus().length),
         parallel: options.llamaServerParallel ?? envInt('LLAMA_SERVER_PARALLEL', 1),
         idleTimeout: options.llamaServerIdleTimeout ?? envInt('LLAMA_SERVER_IDLE_TIMEOUT', 600),
+        // 2.38GB 模型載入動輒數分鐘：健康等待放寬至 300s（可用 env 覆寫），避免誤殺
+        healthTimeoutMs: envInt('LLAMA_SERVER_HEALTH_TIMEOUT_MS', 300000),
         onStatus: (status, info) => {
-          if (status === 'starting') broadcast({ type: 'MODEL_STATUS', state: 'starting', stage: 'llama-server' });
+          if (status === 'starting') broadcast({ type: 'MODEL_STATUS', state: 'starting', stage: 'llama-server', info });
           if (status === 'ready') broadcast({ type: 'MODEL_STATUS', state: 'ready', stage: 'llama-server' });
           if (status === 'crashed') broadcast({ type: 'MODEL_STATUS', state: 'error', stage: 'llama-server', error: info ?? 'llama-server crashed' });
         },

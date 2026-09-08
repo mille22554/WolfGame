@@ -446,6 +446,7 @@ export type ServerToClientMessage = {
     stage?: 'llama-server' | 'model';
     downloaded?: number;
     total?: number;
+    info?: string;
     error?: string;
 } | {
     type: 'ERROR';

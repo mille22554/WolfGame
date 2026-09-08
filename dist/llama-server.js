@@ -78,8 +78,9 @@ export async function ensureLlamaServer(options = {}) {
     finally {
         guard.cancel();
     }
-    // 解壓整包（DLL 需與 exe 同目錄）
+    // 解壓整包（DLL 需與 exe 同目錄；同步阻塞，慢碟可達 1-2 分鐘，先通知前端避免靜默）
     try {
+        options.onStage?.('解壓中…');
         new AdmZip(zipPath).extractAllTo(path.join(binDir, `llama-${release}`), true);
     }
     finally {
@@ -230,6 +231,8 @@ export class LlamaServerManager {
     /** 等待健康：輪詢 probeHealth；child 提前退出（且非健康）→ 回傳 'exited' */
     async waitReady(child, port) {
         const deadline = Date.now() + this.options.healthTimeoutMs;
+        const start = Date.now();
+        let beats = 0; // 已發送的心跳次數（迴圈區域變數，return 即清理，無殘留 timer）
         for (;;) {
             if (await this.probeHealth(port))
                 return 'ready';
@@ -238,6 +241,12 @@ export class LlamaServerManager {
             if (Date.now() >= deadline) {
                 this.killSync(child);
                 return 'exited';
+            }
+            // 心跳：每等待滿 30 秒廣播一次（沿用 starting + info，前端顯示「還在載入，沒死」）
+            const due = Math.floor((Date.now() - start) / 30000);
+            if (due > beats) {
+                beats = due;
+                this.options.onStatus?.('starting', `載入中，已等待 ${due * 30} 秒`);
             }
             await sleep(Math.min(this.options.healthIntervalMs, Math.max(50, deadline - Date.now())));
         }

@@ -13,6 +13,8 @@ export interface LlamaServerDownloadOptions {
     binDir?: string;
     release?: string;
     onProgress?: (downloaded: number, total: number) => void;
+    /** 解壓等同步阻塞階段前呼叫一次（下載進度通道語意不合適，另開 stage 通道） */
+    onStage?: (info: string) => void;
     fetchImpl?: typeof fetch;
 }
 /** 回傳 llama-server.exe 絕對路徑；找不到/下載失敗 → throw */

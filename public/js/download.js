@@ -75,7 +75,7 @@
       } else if (msg.state === 'starting') {
         llamaActive = true;
         cancelRedirect();
-        statusEl.textContent = '啟動執行環境…';
+        statusEl.textContent = '啟動執行環境…' + (msg.info ? '（' + msg.info + '）' : '');
       } else if (msg.state === 'ready') {
         if (msg.stage === 'llama-server') {
           llamaReady = true;

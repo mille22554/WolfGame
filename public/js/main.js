@@ -154,7 +154,7 @@
             : (msg.downloaded ? fmtMB1(msg.downloaded / 1048576) : '0.0') + ' MB';
           phaseEl.textContent = (msg.stage === 'llama-server' ? '下載執行環境…' : '模型下載中…') + prog;
         } else if (msg.state === 'starting') {
-          phaseEl.textContent = '啟動執行環境…';
+          phaseEl.textContent = '啟動執行環境…' + (msg.info ? '（' + msg.info + '）' : '');
         } else if (msg.state === 'ready') {
           phaseEl.textContent = msg.stage === 'llama-server' ? '執行環境就緒' : '模型就緒';
         } else if (msg.state === 'error') {
