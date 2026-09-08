@@ -382,7 +382,7 @@ export class WebSocketRegistry {
         // 大廳訊息（JOIN/SPECTATE/人數/隨機/聊天/GM 檢視）不觸發引擎：等候大廳先於引擎存在。
         const lobbyOnly = msg.type === 'JOIN' || msg.type === 'SPECTATE' || msg.type === 'SET_NAME'
             || msg.type === 'SET_PLAYER_COUNT' || msg.type === 'SET_RANDOM_COUNT'
-            || msg.type === 'CHAT_SEND' || msg.type === 'SET_GM_VIEW';
+            || msg.type === 'CHAT_SEND' || msg.type === 'SET_GM_VIEW' || msg.type === 'LEAVE_LOBBY';
         if (this.opts.ensureReady && msg.type !== 'PONG' && msg.type !== 'LEAVE' && !lobbyOnly) {
             let needEnsure = false;
             try {
@@ -505,6 +505,21 @@ export class WebSocketRegistry {
                     break;
                 }
                 client.playerId = undefined;
+                break;
+            }
+            case 'LEAVE_LOBBY': {
+                // 大廳乾淨離開（返回主選單用）：顯式釋放座位＋觀眾身份，即時廣播；遊戲中拒絕（保持斷線接管語義）
+                const actions = this.opts.actions;
+                if (!actions)
+                    return;
+                const r = actions.leaveLobby(client.clientId, client.playerId, client.token);
+                if (!r.accepted) {
+                    send({ type: 'ACTION_REJECTED', reason: r.reason ?? 'rejected' });
+                    break;
+                }
+                client.playerId = undefined;
+                client.token = undefined; // 座位 token 已作廢，避免後續 RECONNECT 拿回
+                send({ type: 'LEFT_LOBBY' });
                 break;
             }
             case 'SET_PLAYER_COUNT': {
@@ -653,6 +668,22 @@ export async function startServer(options = {}) {
     // ---- 等候大廳（先於引擎存在；server 側唯一資料源） ----
     const lobby = new LobbyManager(playerCount);
     const lobbyClients = new Set();
+    const lobbySeatByClient = new Map(); // clientId → 座位（host 轉移參戰者優先用；離場/轉觀戰即刪）
+    /** host 轉移（共用）：離場者是 host 時轉給仍在場者——參戰者優先，同類則最長在場（lobbyClients 插入序）優先；無人則清除，後續首個發訊號者經 onLobbySignal 接任 */
+    function transferHostIfLeaver(leaverId) {
+        if (!lobby.clearHostIf(leaverId))
+            return;
+        let fallback;
+        for (const cid of lobbyClients) {
+            fallback ??= cid;
+            if (lobbySeatByClient.has(cid)) {
+                lobby.setHost(cid);
+                return;
+            }
+        }
+        if (fallback !== undefined)
+            lobby.setHost(fallback);
+    }
     const publicDir = options.publicDir ?? path.join(getResourceRoot(), 'public');
     const modelsDir = options.modelsDir ?? process.env.LLM_MODELS_DIR ?? getDefaultModelsDir();
     const modelUri = options.modelUri ?? process.env.LLM_MODEL_URI ?? DEFAULT_LLAMACPP_MODEL_URI;
@@ -940,12 +971,9 @@ export async function startServer(options = {}) {
         },
         onClientLeave: (clientId, playerId) => {
             lobbyClients.delete(clientId);
+            lobbySeatByClient.delete(clientId);
             lobby.removeSpectator(clientId);
-            if (lobby.clearHostIf(clientId)) {
-                const next = [...lobbyClients][0];
-                if (next !== undefined)
-                    lobby.setHost(next);
-            }
+            transferHostIfLeaver(clientId);
             if (playerId !== undefined && !started) {
                 lobby.markDisconnected(playerId); // 座位保留＋AI 託管
                 registry.sendLobby(lobby.snapshot());
@@ -959,6 +987,7 @@ export async function startServer(options = {}) {
                     const { token } = lobby.join(playerId, name, clientId);
                     lobby.adoptSpectatorIdentity(clientId, prevToken, token);
                     lobby.removeSpectator(clientId);
+                    lobbySeatByClient.set(clientId, playerId);
                     registry.sendLobby(lobby.snapshot());
                     return { accepted: true, token };
                 }
@@ -972,6 +1001,7 @@ export async function startServer(options = {}) {
                     const back = lobby.reclaim(token);
                     if (back) {
                         lobby.removeSpectator(clientId);
+                        lobbySeatByClient.set(clientId, back.playerId);
                         registry.sendLobby(lobby.snapshot());
                         return { accepted: true, playerId: back.playerId, token };
                     }
@@ -997,6 +1027,21 @@ export async function startServer(options = {}) {
                 lobby.leave(playerId);
                 // 同 token 回原觀眾編號（首次離席則把無名號碼帶到 token，不遞增）
                 lobby.addSpectator(clientId, token);
+                lobbySeatByClient.delete(clientId);
+                registry.sendLobby(lobby.snapshot());
+                return { accepted: true };
+            },
+            leaveLobby: (clientId, playerId, token) => {
+                // 大廳乾淨離開（返回主選單用）：顯式釋放座位（limbo 一併清除，不可重連拿回）＋觀眾下架＋host 轉移，即時廣播；遊戲中拒絕
+                if (started || engine)
+                    return { accepted: false, reason: 'game started' };
+                if (playerId !== undefined) {
+                    lobby.leaveLobbySeat(playerId, token);
+                }
+                lobby.removeSpectator(clientId);
+                lobbyClients.delete(clientId);
+                lobbySeatByClient.delete(clientId);
+                transferHostIfLeaver(clientId);
                 registry.sendLobby(lobby.snapshot());
                 return { accepted: true };
             },

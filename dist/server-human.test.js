@@ -580,4 +580,96 @@ test('timer/host 只認遊戲頁訊號：純 WS 連線無 host、無開局', asy
         await h.shutdown('test');
     }
 });
+test('LEAVE_LOBBY：大廳乾淨離開→座位即時釋放＋他人可見，同 token 重連拿不回', async () => {
+    const h = await boot();
+    try {
+        const a = await connect(h.port);
+        await waitFor(a, (m) => m.type === 'LOBBY');
+        send(a, { type: 'JOIN', playerId: 2, name: 'EX' });
+        const joined = await waitFor(a, (m) => m.type === 'JOINED');
+        const token = joined.token;
+        assert.ok(token);
+        const b = await connect(h.port);
+        await waitFor(b, (m) => m.type === 'LOBBY' && m.lobby.seats[1].controlledBy === 'human');
+        send(a, { type: 'LEAVE_LOBBY' });
+        await waitFor(a, (m) => m.type === 'LEFT_LOBBY');
+        const freed = await waitFor(b, (m) => m.type === 'LOBBY' && m.lobby.seats[1].controlledBy === 'empty');
+        assert.equal(freed.lobby.seats[1].controlledBy, 'empty');
+        // 乾淨離開：同 token 重連拿不回座位（與斷線保留區隔）
+        send(a, { type: 'RECONNECT', token });
+        const rej = await waitFor(a, (m) => m.type === 'JOIN_REJECTED');
+        assert.ok(rej.reason);
+        // 空出的座位他人可立即佔用
+        send(b, { type: 'JOIN', playerId: 2, name: 'NEXT' });
+        const back = await waitFor(b, (m) => m.type === 'JOINED');
+        assert.equal(back.playerId, 2);
+        a.close();
+        b.close();
+        await new Promise((r) => setTimeout(r, 50));
+    }
+    finally {
+        await h.shutdown('test');
+    }
+});
+test('LEAVE_LOBBY：房主離開→host 轉給最長在場參戰者，開局權限跟著走', async () => {
+    const h = await boot();
+    try {
+        const a = await connect(h.port); // 首訊號＝host
+        const firstA = await waitFor(a, (m) => m.type === 'LOBBY');
+        assert.ok(firstA.clientId);
+        send(a, { type: 'JOIN', playerId: 1, name: 'HA' });
+        await waitFor(a, (m) => m.type === 'JOINED');
+        const c = await connect(h.port); // 純觀戰連線（比 B 早到，但非參戰）
+        const firstC = await waitFor(c, (m) => m.type === 'LOBBY');
+        const idC = firstC.clientId;
+        assert.ok(idC);
+        const b = await connect(h.port);
+        const firstB = await waitFor(b, (m) => m.type === 'LOBBY');
+        const idB = firstB.clientId;
+        assert.ok(idB);
+        assert.notEqual(idB, idC);
+        send(b, { type: 'JOIN', playerId: 2, name: 'HB' });
+        await waitFor(b, (m) => m.type === 'JOINED');
+        // 房主 A 乾淨離開 → host 應給參戰者 B（而非更早到的觀戰者 C）
+        send(a, { type: 'LEAVE_LOBBY' });
+        await waitFor(a, (m) => m.type === 'LEFT_LOBBY');
+        const moved = await waitFor(b, (m) => m.type === 'LOBBY' && m.lobby.hostClientId === idB && m.lobby.seats[0].controlledBy === 'empty');
+        assert.equal(moved.lobby.hostClientId, idB);
+        assert.equal(moved.lobby.seats[0].controlledBy, 'empty');
+        // 權限跟著走：新 host 可改人數
+        send(b, { type: 'SET_PLAYER_COUNT', count: 8 });
+        const upd = await waitFor(b, (m) => m.type === 'LOBBY' && m.lobby.playerCount === 8);
+        assert.equal(upd.lobby.seats.length, 8);
+        a.close();
+        b.close();
+        c.close();
+        await new Promise((r) => setTimeout(r, 50));
+    }
+    finally {
+        await h.shutdown('test');
+    }
+});
+test('LEAVE_LOBBY：遊戲中拒絕（座位不釋放，斷線接管語義不變）', async () => {
+    const h = await boot();
+    try {
+        const a = await connect(h.port);
+        await waitFor(a, (m) => m.type === 'LOBBY');
+        send(a, { type: 'JOIN', playerId: 1, name: 'G1' });
+        await waitFor(a, (m) => m.type === 'JOINED');
+        send(a, { type: 'START_GAME' });
+        await waitFor(a, (m) => m.type === 'SNAPSHOT' && !!m.snapshot?.you, 8000);
+        send(a, { type: 'LEAVE_LOBBY' });
+        const rej = await waitFor(a, (m) => m.type === 'ACTION_REJECTED');
+        assert.equal(rej.reason, 'game started');
+        // 玩家身份仍在：快照照常有 you（座位未被釋放）
+        send(a, { type: 'REQUEST_SNAPSHOT' });
+        const snap = await waitFor(a, (m) => m.type === 'SNAPSHOT' && !!m.snapshot?.you);
+        assert.ok(snap.snapshot.you.role);
+        a.close();
+        await new Promise((r) => setTimeout(r, 50));
+    }
+    finally {
+        await h.shutdown('test');
+    }
+});
 //# sourceMappingURL=server-human.test.js.map

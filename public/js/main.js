@@ -97,7 +97,10 @@
   var engineText = document.getElementById('lobby-engine-text');
   var gmBtn = document.getElementById('gm-toggle');
   var leaveBtn = document.getElementById('leave-btn');
+  var lobbyExitBtn = document.getElementById('lobby-exit-btn');
   var lobbyErrorTimer = null;
+  var lobbyExitNav = null; // LEAVE_LOBBY 確認後的跳轉（等確認或超時才走，避免座位來不及釋放）
+  var lobbyExiting = false;
   var suppressCountEvent = false;
   var suppressRandomEvent = false;
 
@@ -219,6 +222,9 @@
       } else if (msg.type === 'JOIN_REJECTED') {
         showLobbyError(friendlyReason(msg.reason));
         showError(friendlyReason(msg.reason));
+      } else if (msg.type === 'LEFT_LOBBY') {
+        // 大廳乾淨離開確認：座位已釋放＋廣播已送出，可以回主選單
+        if (lobbyExitNav) lobbyExitNav();
       } else if (msg.type === 'ACTION_REJECTED') {
         showLobbyError(friendlyReason(msg.reason));
         showError(friendlyReason(msg.reason));
@@ -1150,6 +1156,34 @@
     gmBtn.textContent = 'GM 檢視：' + (gmView ? '開' : '關');
     send({ type: 'SET_GM_VIEW', enabled: gmView });
   });
+
+  // 大廳返回主選單：先送顯式離開（釋放座位＋觀眾下架＋host 轉移，即時廣播），
+  // 收到 LEFT_LOBBY 確認或超時後跳轉。遊戲中此鈕隨大廳 overlay 隱藏，不觸發座位釋放。
+  function exitLobbyToMenu() {
+    if (left || lobbyExiting) return;
+    lobbyExiting = true;
+    if (lobbyExitBtn) lobbyExitBtn.disabled = true;
+    send({ type: 'LEAVE_LOBBY' });
+    var done = false;
+    var go = function () {
+      if (done) return;
+      done = true;
+      left = true; // 停止自動重連
+      try {
+        localStorage.removeItem(TOKEN_KEY);
+      } catch (e) { /* ignore */ }
+      try {
+        if (ws) ws.close();
+      } catch (e) { /* ignore */ }
+      location.href = '/menu.html';
+    };
+    lobbyExitNav = go;
+    setTimeout(go, 1500);
+  }
+
+  if (lobbyExitBtn) {
+    lobbyExitBtn.addEventListener('click', exitLobbyToMenu);
+  }
 
   leaveBtn.addEventListener('click', function () {
     left = true;

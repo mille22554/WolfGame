@@ -45,6 +45,19 @@ test('reclaim：座位被佔後拿不回；未知 token 回 undefined', () => {
   assert.equal(l.reclaim('nope'), undefined);
 });
 
+test('leaveLobbySeat：乾淨離開釋放座位＋清 limbo（同 token 重連拿不回）', () => {
+  const l = new LobbyManager(6);
+  const { token } = l.join(2, 'A');
+  l.leaveLobbySeat(2, token);
+  assert.equal(l.snapshot().seats[1].controlledBy, 'empty');
+  assert.equal(l.reclaim(token), undefined);
+  // 對比：一般 leave() 保留 limbo，可拿回
+  const l2 = new LobbyManager(6);
+  const r2 = l2.join(2, 'B');
+  l2.leave(2);
+  assert.deepEqual(l2.reclaim(r2.token), { playerId: 2 });
+});
+
 test('斷線標記：保留座位＋不計入 hasHumanSeats；重連拿回', () => {
   const l = new LobbyManager(6);
   const { token } = l.join(1, 'H');

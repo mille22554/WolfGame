@@ -486,6 +486,8 @@ export type ServerToClientMessage = {
 } | {
     type: 'SHUTDOWN';
 } | {
+    type: 'LEFT_LOBBY';
+} | {
     type: 'CHAT_MESSAGE';
     from: string;
     text: string;
@@ -501,6 +503,8 @@ export type ClientToServerMessage = {
     enabled: boolean;
 } | {
     type: 'LEAVE';
+} | {
+    type: 'LEAVE_LOBBY';
 } | {
     type: 'JOIN';
     playerId: number;

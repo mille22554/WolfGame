@@ -83,6 +83,10 @@ export interface RegistryActions {
         accepted: boolean;
         reason?: string;
     };
+    leaveLobby(clientId: string, playerId: number | undefined, token?: string): {
+        accepted: boolean;
+        reason?: string;
+    };
     setName(clientId: string, playerId: number | undefined, token: string | undefined, name: string): {
         accepted: boolean;
         reason?: string;

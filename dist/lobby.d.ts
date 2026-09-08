@@ -55,6 +55,8 @@ export declare class LobbyManager {
     };
     /** 離座→觀戰：座位清空，token＋名字進 limbo（重連可拿回）；tokens 映射同步刪除 */
     leave(playerId: number): void;
+    /** 乾淨離開大廳（返回主選單用）：沿用 leave() 釋放座位，再清除該座位 token 的 limbo（同 token 重連拿不回，與斷線保留區隔） */
+    leaveLobbySeat(playerId: number, token?: string): void;
     /** 大廳內同 token 重連：斷線座位（human+disconnected）直接拿回；limbo（已離座）座位空才恢復 */
     reclaim(token: string): {
         playerId: number;

@@ -460,6 +460,7 @@ export type ServerToClientMessage =
   | { type: 'ERROR'; message: string }
   | { type: 'PING' }
   | { type: 'SHUTDOWN' }
+  | { type: 'LEFT_LOBBY' }
   | { type: 'CHAT_MESSAGE'; from: string; text: string; ts: number };
 
 /** 前端 WS 協定：客戶端 → 伺服器（Phase 2 擴充；真人操作訊息不含 playerId，伺服器由連線補上） */
@@ -468,6 +469,7 @@ export type ClientToServerMessage =
   | { type: 'REQUEST_SNAPSHOT' }
   | { type: 'SET_GM_VIEW'; enabled: boolean }
   | { type: 'LEAVE' }
+  | { type: 'LEAVE_LOBBY' }
   | { type: 'JOIN'; playerId: number; name?: string }
   | { type: 'RECONNECT'; token: string }
   | { type: 'SET_NAME'; name: string; token?: string }
