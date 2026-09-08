@@ -232,9 +232,10 @@ export class LlamaServerManager {
       const regexHit = /EADDRINUSE|listen EADDR|address already in use|port .* (in use|occupied|already)/i.test(tail);
       const occupied = regexHit || (await this.portOccupiedByOther(port));
       this.killSync(child);
-      this.logTail.length = 0;
       if (occupied) return 'port-in-use';
+      // 重啟耗盡：保留 logTail（start() 的 crashed 錯誤訊息要用；清空會導致空診斷）
       if (restarts >= this.options.maxRestarts) return 'crashed';
+      this.logTail.length = 0;   // 真正重試才清空
       restarts++;
       await sleep(1000 * 2 ** (restarts - 1));
       // 每次重啟都廣播 starting（spawn + health polling 期間前端才有更新）
@@ -252,7 +253,8 @@ export class LlamaServerManager {
       '--threads', String(o.threads),
       '--parallel', String(o.parallel),
       '--no-webui',
-      '--idle-timeout', String(o.idleTimeout),
+      // 注意：b10361 不支援 --idle-timeout（傳了會秒死 "invalid argument"）；
+      // idleTimeout 選項保留相容，暫不轉成 flag。
     ];
   }
 

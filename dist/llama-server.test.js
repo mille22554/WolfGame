@@ -251,6 +251,55 @@ test('stop()：啟動飛行中呼叫 → 丟掉 child 並快速報停（不留�
         restore();
     }
 });
+test('start()：spawn 參數不含 b10361 不支援的 flag（--idle-timeout 回歸）', async () => {
+    // strict fake：argv 出現 --idle-timeout 即秒退；start() 成功＝我們的參數被接受
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-strict-'));
+    const bin = path.join(dir, 'fake-strict.mjs');
+    fs.writeFileSync(bin, `
+import http from 'node:http';
+const args = process.argv.slice(2);
+if (args.includes('--idle-timeout')) { console.error('unsupported flag: --idle-timeout'); process.exit(1); }
+const pi = args.indexOf('--port');
+const port = pi >= 0 ? Number(args[pi + 1]) : 3001;
+const hi = args.indexOf('--host');
+const host = hi >= 0 ? args[hi + 1] : '127.0.0.1';
+http.createServer((req, res) => {
+  if (req.url === '/health') { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"status":"ok"}'); }
+  else { res.writeHead(404); res.end(); }
+}).listen(port, host);
+`);
+    const port = await freePort();
+    const mgr = new LlamaServerManager({
+        binPath: bin, modelPath: 'x.gguf', port,
+        healthTimeoutMs: 15000, healthIntervalMs: 100, maxRestarts: 0,
+    });
+    try {
+        const r = await mgr.start();
+        assert.equal(r.reused, false);
+        assert.equal(mgr.isRunning(), true);
+    }
+    finally {
+        await mgr.stop();
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+test('start()：重啟耗盡的錯誤訊息包含最後輸出（不清空診斷）', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-boom-'));
+    const bin = path.join(dir, 'fake-boom.mjs');
+    fs.writeFileSync(bin, `console.error('boom-xyz-diagnostic'); process.exit(1);\n`);
+    const port = await freePort();
+    const mgr = new LlamaServerManager({
+        binPath: bin, modelPath: 'x.gguf', port,
+        healthTimeoutMs: 5000, healthIntervalMs: 100, maxRestarts: 0,
+    });
+    try {
+        await assert.rejects(mgr.start(), /boom-xyz-diagnostic/);
+    }
+    finally {
+        await mgr.stop();
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
 test('port 被非 llama 程序佔用 → 依序試下一個 port', async () => {
     const restore = withFakeMode('healthy');
     const port = await freePort();

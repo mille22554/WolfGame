@@ -64,7 +64,8 @@ LLM_PROVIDER（環境變數）：
 啟動：
   1. 檢查 getDataDir()/bin/llama-b<release>/llama-server.exe（或 binDir/llama-server.exe 使用者手放）→ 無 → 下載 zip → 解壓 → 驗證
   2. probe GET http://host:port/health → 200 {"status":"ok"} → 重用（不 spawn；雙開/殘留實例共用）
-  3. 否則 spawn llama-server.exe --model <path> --host 127.0.0.1 --port <port> --ctx-size 8192 --threads N --parallel 1 --no-webui --idle-timeout 600
+  3. 否則 spawn llama-server.exe --model <path> --host 127.0.0.1 --port <port> --ctx-size 8192 --threads N --parallel 1 --no-webui
+     （注意：b10361 不支援 --idle-timeout，傳了會秒死 invalid argument；idleTimeout 選項已棄用）
   4. 輪詢 /health（1s 間隔，上限 120s——模型載入可能很久）→ 200 → ready
   5. spawn 失敗或 crash → 重啟（backoff 1s/2s/4s，≤ maxRestarts=3）；port 被佔 → 依序試 port+1..+10
   6. 全部失敗 → MODEL_STATUS error → shutdown
@@ -75,7 +76,7 @@ LLM_PROVIDER（環境變數）：
 
 崩潰殘留：
   父進程意外死亡（關閉 console 視窗）→ sidecar 成為孤兒 → 下次啟動 /health 探測到 → 重用
-  + --idle-timeout 600：閒置 10 分鐘自動退出，避免孤兒常駐
+  孤兒安全僅靠：重用＋stop 只殺自 spawn child＋零連線自動關閉（b10361 無 --idle-timeout，不可依賴）
 ```
 
 ### 1.4 模型下載（純 fetch，無 node-llama-cpp）
@@ -332,7 +333,7 @@ export interface LlamaServerManagerOptions {
   ctxSize?: number;                // 預設 8192
   threads?: number;                // 預設 os.cpus().length
   parallel?: number;               // 預設 1
-  idleTimeout?: number;            // 預設 600（秒；--idle-timeout，孤兒自動退出）
+  idleTimeout?: number;            // 已棄用，無作用（b10361 不支援 --idle-timeout，保留相容）
   healthTimeoutMs?: number;        // 預設 120000（模型載入可能很久）
   healthIntervalMs?: number;       // 預設 1000
   maxRestarts?: number;            // 預設 3
@@ -366,7 +367,7 @@ export class LlamaServerManager {
 
 ```
 --model <modelPath> --host <host> --port <port> --ctx-size <ctxSize>
---threads <threads> --parallel <parallel> --no-webui --idle-timeout <idleTimeout>
+--threads <threads> --parallel <parallel> --no-webui
 ```
 
 **probeHealth(port)**：
@@ -446,7 +447,7 @@ export interface ServerOptions {
   llamaServerCtxSize?: number;     // env LLAMA_SERVER_CTX_SIZE，預設 8192
   llamaServerThreads?: number;     // env LLAMA_SERVER_THREADS，預設 os.cpus().length
   llamaServerParallel?: number;    // env LLAMA_SERVER_PARALLEL，預設 1
-  llamaServerIdleTimeout?: number; // env LLAMA_SERVER_IDLE_TIMEOUT，預設 600
+  llamaServerIdleTimeout?: number; // 已棄用，無作用（b10361 不支援 --idle-timeout，保留相容）
   llamaServerRelease?: string;     // env LLAMA_SERVER_RELEASE，預設 'b10361'
   llamaServerBinDir?: string;      // env LLAMA_SERVER_BIN_DIR，預設 getDefaultBinDir()
   llamaServerBinPath?: string;     // 測試 hook：直接指定 exe 路徑（跳過下載）
@@ -523,7 +524,8 @@ if (options.dispatcherFactory) {
     binPath, modelPath,
     port: options.llamaServerPort, host: options.llamaServerHost,
     ctxSize: options.llamaServerCtxSize, threads: options.llamaServerThreads,
-    parallel: options.llamaServerParallel, idleTimeout: options.llamaServerIdleTimeout,
+    parallel: options.llamaServerParallel,
+    // idleTimeout 已棄用（b10361 不支援 --idle-timeout），不傳
     onStatus: (status, info) => {
       if (status === 'ready') broadcast({ type: 'MODEL_STATUS', state: 'ready', stage: 'llama-server' });
       if (status === 'crashed') broadcast({ type: 'MODEL_STATUS', state: 'error', stage: 'llama-server', error: info ?? 'llama-server crashed' });
@@ -806,7 +808,7 @@ await $`npx pkg dist-pkg/WerewolfGame.cjs --config pkg.config.json`;
 1. **開發模式不破**：`npm start` / `node dist/entry.js` 三種 provider（llama-server / llamacpp / mock）皆可用；`LLM_PROVIDER` 切換是唯一開關。
 2. **exe 不含 node-llama-cpp**：esbuild `--external:node-llama-cpp` + `--external:./llamacpp.js`；build 腳本驗證 bundle 無 `node-llama-cpp` 字樣。llamacpp 模式在 exe 中回報明確錯誤，不靜默失敗。
 3. **寫入一律 getDataDir()**（models/、bin/、game-state.json）；**讀取一律 getResourceRoot()**（public/、character/）。pkg 下 getResourceRoot = snapshot 根（entry 位於 dist-pkg/ 子目錄，`resolve(__dirname,'..')` 正確）。
-4. **llama-server 是共享資源**：/health 探測到健康實例 → 重用不 spawn；優雅關閉只殺本實例 spawn 的 child；孤兒由下次啟動重用 + `--idle-timeout` 兜底。
+4. **llama-server 是共享資源**：/health 探測到健康實例 → 重用不 spawn；優雅關閉只殺本實例 spawn 的 child；孤兒由下次啟動重用＋零連線自動關閉兜底（b10361 無 --idle-timeout）。
 5. **崩潰重啟 ≤ maxRestarts（3）**，backoff 1s/2s/4s；耗盡 → MODEL_STATUS error → shutdown。
 6. **下載進度一律 MODEL_STATUS 廣播**（stage: 'llama-server' | 'model'）；download.html 驅動；模型下載純 fetch（無 node-llama-cpp）。
 7. **模型檔相容**：`isModelDownloaded` 的「任一 .gguf」檢查保留（既有 hf_ 前綴檔不重複下載）；`resolveModelPath` 掃描邏輯不變。

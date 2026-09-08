@@ -65,7 +65,7 @@ export interface ServerOptions {
   llamaServerCtxSize?: number;     // env LLAMA_SERVER_CTX_SIZE，預設 8192
   llamaServerThreads?: number;     // env LLAMA_SERVER_THREADS，預設 os.cpus().length
   llamaServerParallel?: number;    // env LLAMA_SERVER_PARALLEL，預設 1
-  llamaServerIdleTimeout?: number; // env LLAMA_SERVER_IDLE_TIMEOUT，預設 600
+  llamaServerIdleTimeout?: number; // 已棄用，無作用（b10361 不支援 --idle-timeout，保留相容）
   llamaServerRelease?: string;     // env LLAMA_SERVER_RELEASE，預設 'b10361'
   llamaServerBinDir?: string;      // env LLAMA_SERVER_BIN_DIR，預設 getDefaultBinDir()
   llamaServerBinPath?: string;     // 測試 hook：直接指定 exe 路徑（跳過下載）
@@ -1159,7 +1159,7 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
         ctxSize: options.llamaServerCtxSize ?? envInt('LLAMA_SERVER_CTX_SIZE', 8192),
         threads: options.llamaServerThreads ?? envInt('LLAMA_SERVER_THREADS', os.cpus().length),
         parallel: options.llamaServerParallel ?? envInt('LLAMA_SERVER_PARALLEL', 1),
-        idleTimeout: options.llamaServerIdleTimeout ?? envInt('LLAMA_SERVER_IDLE_TIMEOUT', 600),
+        idleTimeout: options.llamaServerIdleTimeout ?? envInt('LLAMA_SERVER_IDLE_TIMEOUT', 600), // 已棄用：b10361 不支援，不轉 flag
         // 2.38GB 模型載入動輒數分鐘：健康等待放寬至 300s（可用 env 覆寫），避免誤殺
         healthTimeoutMs: envInt('LLAMA_SERVER_HEALTH_TIMEOUT_MS', 300000),
         onStatus: (status, info) => {
