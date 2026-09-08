@@ -513,7 +513,7 @@
     if (lobbyCount) {
       lobbyCount.textContent = '（' + humans + ' / ' + lobbyPlayerCount(lobby) + ' 人參戰）';
     }
-    // 純清單：不自選座號；未入座顯示「參戰」鈕（自動配最低空位），已入座顯示提示
+    // 純清單：無座號欄位，只列參戰者（有名物件）；沒人時顯示空態
     var html = '';
     if (lobby.seats.length === 0) {
       html = '<div class="msg">座位載入中…</div>';
@@ -524,30 +524,26 @@
         html += '<div class="msg">參戰名額已滿，只能觀戰了。</div>';
       }
     }
+    var shown = 0;
     for (var i = 0; i < lobby.seats.length; i++) {
       var seat = lobby.seats[i];
+      if (seat.controlledBy !== 'human') continue;   // 開局前只有真人，沒有 AI 列
       var pid = seat.playerId;
-      var isMine = state.playerId !== null && pid === state.playerId && seat.controlledBy === 'human';
-      if (seat.controlledBy === 'empty') {
-        html += '<div class="seat seat-row empty"><span class="seat-id">P' + pid + '</span>'
-          + '<span class="seat-sub">空位</span></div>';
-      } else if (seat.controlledBy === 'ai') {
-        html += '<div class="seat seat-row ai"><span class="seat-id">P' + pid + '</span>'
-          + '<span class="seat-name">' + esc(seat.name || 'AI') + '</span>'
-          + '<span class="badge badge-ai">🤖 AI</span></div>';
-      } else {
-        html += '<div class="seat seat-row human' + (isMine ? ' mine' : '') + '">'
-          + '<span class="seat-id">P' + pid + '</span>'
-          + '<span class="seat-name">' + esc(seat.name || ('P' + pid)) + '</span>'
-          + '<span class="badge badge-human">🧑 真人</span>';
-        if (seat.disconnected) {
-          html += '<span class="badge badge-proxy">⚠️ AI 託管中</span>';
-        }
-        if (isMine) {
-          html += '<button type="button" class="btn-ghost btn-small seat-leave" data-leave="' + pid + '">離座</button>';
-        }
-        html += '</div>';
+      var isMine = state.playerId !== null && pid === state.playerId;
+      shown++;
+      html += '<div class="seat seat-row human' + (isMine ? ' mine' : '') + '">'
+        + '<span class="seat-name">' + esc(seat.name || '無名氏') + '</span>'
+        + '<span class="badge badge-human">🧑 真人</span>';
+      if (seat.disconnected) {
+        html += '<span class="badge badge-proxy">⚠️ AI 託管中</span>';
       }
+      if (isMine) {
+        html += '<button type="button" class="btn-ghost btn-small seat-leave" data-leave="' + pid + '">離座</button>';
+      }
+      html += '</div>';
+    }
+    if (lobby.seats.length > 0 && shown === 0) {
+      html += '<div class="msg">目前還沒有人參戰，來當第一個吧！</div>';
     }
     lobbySeats.innerHTML = html || '<div class="msg">座位載入中…</div>';
 
@@ -559,8 +555,12 @@
           if (lobby.seats[k].controlledBy === 'empty') { target = lobby.seats[k].playerId; break; }
         }
         if (target < 0) return;
-        var name = (lobbyName && lobbyName.value.trim()) || undefined;
-        if (name && name.length > 12) name = name.slice(0, 12);
+        var name = (lobbyName && lobbyName.value.trim()) || '';
+        if (name.length === 0) {
+          showLobbyError('先取個暱稱再參戰吧');
+          return;
+        }
+        if (name.length > 12) name = name.slice(0, 12);
         send({ type: 'JOIN', playerId: target, name: name });
       });
     }
