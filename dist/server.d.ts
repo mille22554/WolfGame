@@ -54,7 +54,15 @@ export declare function isModelDownloaded(modelUri: string, modelsDir: string): 
  * （node-llama-cpp 下載後實際檔名為 hf_ 前綴形式）。
  */
 export declare function resolveModelPath(modelUri: string, modelsDir: string): string;
-export declare function serveStatic(req: http.IncomingMessage, res: http.ServerResponse, publicDir: string, modelReady: boolean): void;
+export interface ModelInfo {
+    name: string;
+    sizeMB: number;
+}
+/** 掃描 modelsDir 下的 .gguf 檔案（回傳 name + sizeMB，name 排序） */
+export declare function listGgufModels(modelsDir: string): ModelInfo[];
+/** 選定模型：檔名含 Qwen3-4B 優先，否則第一個；無模型 → null */
+export declare function pickPreferredModel(names: string[]): string | null;
+export declare function serveStatic(req: http.IncomingMessage, res: http.ServerResponse, publicDir: string, _modelReady?: boolean): void;
 export declare function findAvailablePort(start: number): Promise<number>;
 export declare function openBrowser(url: string): void;
 /** Phase 2：SeatManager（token 管理；playerId ↔ token 雙向映射） */
@@ -97,6 +105,7 @@ export interface WebSocketRegistryOptions {
     onZeroClientsTimeout?: () => void;
     onLastClientLeave?: () => void;
     actions?: RegistryActions;
+    ensureReady?: () => Promise<boolean>;
 }
 export declare class WebSocketRegistry implements ClientRegistry {
     private readonly opts;
@@ -117,6 +126,7 @@ export declare class WebSocketRegistry implements ClientRegistry {
     private pushSnapshot;
     private onConnection;
     private onClientMessage;
+    private handleClientMessage;
     private onDisconnect;
     private pingCheck;
 }

@@ -80,6 +80,33 @@ export function resolveModelPath(modelUri, modelsDir) {
     catch { /* fallthrough */ }
     return exact;
 }
+/** 掃描 modelsDir 下的 .gguf 檔案（回傳 name + sizeMB，name 排序） */
+export function listGgufModels(modelsDir) {
+    let entries;
+    try {
+        entries = fs.readdirSync(modelsDir);
+    }
+    catch {
+        return [];
+    }
+    const ggufs = entries.filter((e) => e.toLowerCase().endsWith('.gguf')).sort();
+    const out = [];
+    for (const name of ggufs) {
+        try {
+            const bytes = fs.statSync(path.join(modelsDir, name)).size;
+            out.push({ name, sizeMB: Number((bytes / 1048576).toFixed(1)) });
+        }
+        catch { /* 忽略無法 stat 的檔案 */ }
+    }
+    return out;
+}
+/** 選定模型：檔名含 Qwen3-4B 優先，否則第一個；無模型 → null */
+export function pickPreferredModel(names) {
+    if (names.length === 0)
+        return null;
+    const hit = names.find((n) => n.includes('Qwen3-4B'));
+    return hit ?? names[0];
+}
 // ============================================
 // 靜態檔案伺服
 // ============================================
@@ -93,7 +120,7 @@ const MIME = {
     '.ico': 'image/x-icon',
     '.woff2': 'font/woff2',
 };
-export function serveStatic(req, res, publicDir, modelReady) {
+export function serveStatic(req, res, publicDir, _modelReady) {
     if (req.method !== 'GET') {
         res.writeHead(404).end('Not found');
         return;
@@ -107,11 +134,7 @@ export function serveStatic(req, res, publicDir, modelReady) {
         return;
     }
     if (pathname === '/') {
-        if (!modelReady) {
-            res.writeHead(302, { Location: '/download.html' }).end();
-            return;
-        }
-        pathname = '/index.html';
+        pathname = '/menu.html';
     }
     const resolved = path.resolve(publicDir, `.${pathname}`);
     if (!resolved.startsWith(path.resolve(publicDir) + path.sep) && resolved !== path.resolve(publicDir)) {
@@ -120,6 +143,19 @@ export function serveStatic(req, res, publicDir, modelReady) {
     }
     fs.readFile(resolved, (err, data) => {
         if (err) {
+            // menu.html 尚不存在（@designer 處理中）時退回 index.html，保持根路徑可用
+            if (pathname === '/menu.html') {
+                const fallback = path.resolve(publicDir, './index.html');
+                fs.readFile(fallback, (err2, data2) => {
+                    if (err2) {
+                        res.writeHead(404).end('Not found');
+                        return;
+                    }
+                    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+                    res.end(data2);
+                });
+                return;
+            }
             res.writeHead(404).end('Not found');
             return;
         }
@@ -187,14 +223,15 @@ export class WebSocketRegistry {
     constructor(wss, opts) {
         this.opts = {
             getState: opts.getState,
-            zeroClientShutdownMs: opts.zeroClientShutdownMs ?? envInt('ZERO_CLIENT_SHUTDOWN_MS', 600000),
+            zeroClientShutdownMs: opts.zeroClientShutdownMs ?? envInt('ZERO_CLIENT_SHUTDOWN_MS', 60000),
             pingIntervalMs: opts.pingIntervalMs ?? envInt('PING_INTERVAL_MS', 30000),
             pingTimeoutMs: opts.pingTimeoutMs ?? envInt('PING_TIMEOUT_MS', 10000),
             onZeroClientsTimeout: opts.onZeroClientsTimeout,
             onLastClientLeave: opts.onLastClientLeave,
             actions: opts.actions,
+            ensureReady: opts.ensureReady,
         };
-        wss.on('connection', (ws) => this.onConnection(ws));
+        wss.on('connection', (ws) => void this.onConnection(ws));
         this.pingTimer = setInterval(() => this.pingCheck(), this.opts.pingIntervalMs);
         const t = this.pingTimer;
         if (typeof t.unref === 'function')
@@ -294,6 +331,10 @@ export class WebSocketRegistry {
         }
         catch { /* ignore */ }
     }
+    // 注意：連線時不觸發 ensureReady（模型管理頁也會連 WS 監聽 MODEL_STATUS，
+    // 若連線即啟動會被誤觸發）。只有收到遊戲訊息（handleClientMessage）才延遲啟動
+    // llama-server + 建立 engine。連線當下 engine 若已就緒則推送快照，否則略過
+    // （client 發遊戲訊息後會觸發 ensure 並補送 LOBBY）。
     onConnection(ws) {
         const client = { ws, gmView: false, lastPong: Date.now() };
         this.clients.add(client);
@@ -307,6 +348,9 @@ export class WebSocketRegistry {
         ws.on('error', () => { });
     }
     onClientMessage(client, data) {
+        void this.handleClientMessage(client, data);
+    }
+    async handleClientMessage(client, data) {
         let msg;
         try {
             msg = JSON.parse(String(data));
@@ -320,6 +364,34 @@ export class WebSocketRegistry {
             }
             catch { /* ignore */ }
         };
+        // 延遲初始化重試：先前因模型未就緒而連線的 client，下載完成後無需重連，
+        // 任意訊息（除 PONG/LEAVE）都可觸發 ensure，成功後繼續處理本次訊息。
+        if (this.opts.ensureReady && msg.type !== 'PONG' && msg.type !== 'LEAVE') {
+            let needEnsure = false;
+            try {
+                this.opts.getState();
+            }
+            catch {
+                needEnsure = true;
+            }
+            if (needEnsure) {
+                let ok = false;
+                try {
+                    ok = await this.opts.ensureReady();
+                }
+                catch {
+                    ok = false;
+                }
+                if (!ok) {
+                    send({ type: 'ERROR', message: '模型未就緒' });
+                    return;
+                }
+                if (msg.type === 'REQUEST_SNAPSHOT') {
+                    this.pushSnapshot(client);
+                    return;
+                }
+            }
+        }
         switch (msg.type) {
             case 'PONG':
                 client.lastPong = Date.now();
@@ -484,10 +556,37 @@ export async function startServer(options = {}) {
     const isMock = mode === 'mock';
     const llamaServerHost = options.llamaServerHost ?? process.env.LLAMA_SERVER_HOST ?? DEFAULT_LLAMA_SERVER_HOST;
     const llamaServerPort = options.llamaServerPort ?? envInt('LLAMA_SERVER_PORT', DEFAULT_LLAMA_SERVER_PORT);
-    let modelReady = isMock || isModelDownloaded(modelUri, modelsDir);
-    let modelPath = isMock ? 'mock' : resolveModelPath(modelUri, modelsDir);
+    // ---- 啟動時模型掃描（不自動下載；mock/openai 免檢查）----
+    let modelReady;
+    let selectedModel;
+    let modelPath;
+    let downloading = false;
+    if (isMock) {
+        modelReady = true;
+        selectedModel = 'mock';
+        modelPath = 'mock';
+    }
+    else if (mode === 'openai') {
+        modelReady = true;
+        selectedModel = null;
+        modelPath = 'openai';
+    }
+    else {
+        const found = listGgufModels(modelsDir);
+        if (found.length > 0) {
+            modelReady = true;
+            const pick = pickPreferredModel(found.map((f) => f.name));
+            selectedModel = pick;
+            modelPath = path.join(modelsDir, pick);
+        }
+        else {
+            modelReady = false;
+            selectedModel = null;
+            modelPath = resolveModelPath(modelUri, modelsDir);
+        }
+    }
     const httpServer = http.createServer((req, res) => {
-        serveStatic(req, res, publicDir, modelReady);
+        void handleRequest(req, res);
     });
     const wss = new WebSocketServer({ server: httpServer });
     const broadcast = (msg) => {
@@ -500,6 +599,118 @@ export async function startServer(options = {}) {
             }
         }
     };
+    function sendJson(res, status, obj) {
+        const body = JSON.stringify(obj);
+        res.writeHead(status, {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Content-Length': Buffer.byteLength(body),
+        });
+        res.end(body);
+    }
+    function readBody(req) {
+        return new Promise((resolve, reject) => {
+            let data = '';
+            req.on('data', (c) => { data += String(c); });
+            req.on('end', () => resolve(data));
+            req.on('error', reject);
+        });
+    }
+    async function handleRequest(req, res) {
+        try {
+            let pathname;
+            try {
+                pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://localhost').pathname);
+            }
+            catch {
+                res.writeHead(400).end('Bad request');
+                return;
+            }
+            if (req.method === 'GET' && pathname === '/api/status') {
+                sendJson(res, 200, { modelReady, selectedModel, models: listGgufModels(modelsDir) });
+                return;
+            }
+            if (req.method === 'POST' && pathname === '/api/model/select') {
+                let body = '';
+                try {
+                    body = await readBody(req);
+                }
+                catch {
+                    sendJson(res, 400, { error: 'bad body' });
+                    return;
+                }
+                let name;
+                try {
+                    name = JSON.parse(body || '{}').name;
+                }
+                catch {
+                    sendJson(res, 400, { error: 'invalid json' });
+                    return;
+                }
+                if (typeof name !== 'string' || name.length === 0) {
+                    sendJson(res, 400, { error: 'missing name' });
+                    return;
+                }
+                if (name.includes('/') || name.includes('\\') || name.includes('..')) {
+                    sendJson(res, 404, { error: 'not found' });
+                    return;
+                }
+                if (!name.toLowerCase().endsWith('.gguf')) {
+                    sendJson(res, 404, { error: 'not found' });
+                    return;
+                }
+                const target = path.join(modelsDir, name);
+                try {
+                    const st = fs.statSync(target);
+                    if (!st.isFile()) {
+                        sendJson(res, 404, { error: 'not found' });
+                        return;
+                    }
+                }
+                catch {
+                    sendJson(res, 404, { error: 'not found' });
+                    return;
+                }
+                selectedModel = name;
+                modelPath = target;
+                modelReady = true;
+                sendJson(res, 200, { ok: true });
+                return;
+            }
+            if (req.method === 'POST' && pathname === '/api/model/download') {
+                if (!downloading && !modelReady) {
+                    downloading = true;
+                    void (async () => {
+                        try {
+                            broadcast({ type: 'MODEL_STATUS', state: 'downloading', stage: 'model', downloaded: 0, total: 0 });
+                            const dlPath = await downloadModelFile(modelUri, modelsDir, (downloaded, total) => {
+                                broadcast({ type: 'MODEL_STATUS', state: 'downloading', stage: 'model', downloaded, total });
+                            });
+                            modelPath = dlPath;
+                            selectedModel = path.basename(dlPath);
+                            modelReady = true;
+                            broadcast({ type: 'MODEL_STATUS', state: 'ready', stage: 'model' });
+                        }
+                        catch (err) {
+                            const error = err instanceof Error ? err.message : String(err);
+                            broadcast({ type: 'MODEL_STATUS', state: 'error', stage: 'model', error });
+                        }
+                        finally {
+                            downloading = false;
+                        }
+                    })();
+                }
+                sendJson(res, 200, { ok: true });
+                return;
+            }
+            serveStatic(req, res, publicDir, modelReady);
+        }
+        catch {
+            try {
+                res.writeHead(500).end('Internal error');
+            }
+            catch { /* ignore */ }
+        }
+    }
     let handle;
     let shutdownFn = async () => undefined;
     const closed = new Promise((resolveClosed) => {
@@ -598,16 +809,23 @@ export async function startServer(options = {}) {
             t.unref();
     }
     const registry = new WebSocketRegistry(wss, {
-        getState: () => engine.getState(),
+        getState: () => {
+            if (!engine)
+                throw new Error('engine not ready');
+            return engine.getState();
+        },
         zeroClientShutdownMs: options.zeroClientShutdownMs,
         pingIntervalMs: options.pingIntervalMs,
         pingTimeoutMs: options.pingTimeoutMs,
         onZeroClientsTimeout: () => void shutdownFn('no-clients'),
         onLastClientLeave: () => void shutdownFn('leave'),
+        ensureReady: () => ensureEngineReady(),
         actions: {
             join: (playerId, name) => {
                 if (started)
                     return { accepted: false, reason: 'game started' };
+                if (!engine)
+                    return { accepted: false, reason: 'engine not ready' };
                 if (seats.isReserved(playerId))
                     return { accepted: false, reason: 'seat reserved' };
                 const result = engine.tryEvent({ type: 'HUMAN_JOIN', playerId, name });
@@ -621,6 +839,8 @@ export async function startServer(options = {}) {
                 const pid = seats.lookup(token);
                 if (pid === undefined)
                     return { accepted: false, reason: 'unknown token' };
+                if (!engine)
+                    return { accepted: false, reason: 'engine not ready' };
                 engine.enqueue({ type: 'RECONNECT', playerId: pid });
                 engine.drain();
                 // 死亡 → RECONNECT 被拒，client 變觀戰者，仍回 JOINED 讓其知道身分
@@ -628,10 +848,14 @@ export async function startServer(options = {}) {
             },
             startGame: () => { startGame(); },
             humanEvent: (event) => {
+                if (!engine)
+                    return { accepted: false, reason: 'engine not ready' };
                 const result = engine.tryEvent(event);
                 return { accepted: result.accepted, reason: result.reason };
             },
             disconnectPlayer: (playerId) => {
+                if (!engine)
+                    return;
                 engine.enqueue({ type: 'DISCONNECT', playerId });
                 engine.drain();
             },
@@ -643,6 +867,154 @@ export async function startServer(options = {}) {
             },
         },
     });
+    // ---- 延遲建立：進入遊戲（WS 連線）時確保 llama-server + dispatcher/scheduler/engine ----
+    // llama-server 只啟動一次；重複連線直接回傳既有 engine。
+    let initPromise = null;
+    async function ensureEngineReady() {
+        if (engine)
+            return true;
+        if (initPromise) {
+            try {
+                await initPromise;
+            }
+            catch {
+                return false;
+            }
+            return engine !== null;
+        }
+        // 測試 hook 直接注入 dispatcher，跳過模型檢查與 sidecar
+        if (!options.dispatcherFactory && (mode === 'llama-server' || mode === 'llamacpp') && !modelReady) {
+            return false;
+        }
+        initPromise = initGame();
+        try {
+            await initPromise;
+        }
+        catch {
+            initPromise = null;
+            return false;
+        }
+        return engine !== null;
+    }
+    async function initGame() {
+        if (engine)
+            return;
+        if (options.dispatcherFactory) {
+            dispatcher = options.dispatcherFactory(modelPath); // 測試 hook：跳過 sidecar
+        }
+        else if (mode === 'llama-server') {
+            broadcast({ type: 'MODEL_STATUS', state: 'downloading', stage: 'llama-server', downloaded: 0, total: 0 });
+            let binPath;
+            try {
+                binPath = options.llamaServerBinPath
+                    ?? await ensureLlamaServer({
+                        binDir: options.llamaServerBinDir ?? process.env.LLAMA_SERVER_BIN_DIR ?? getDefaultBinDir(),
+                        release: options.llamaServerRelease ?? process.env.LLAMA_SERVER_RELEASE ?? DEFAULT_LLAMA_SERVER_RELEASE,
+                        onProgress: (downloaded, total) => broadcast({ type: 'MODEL_STATUS', state: 'downloading', stage: 'llama-server', downloaded, total }),
+                    });
+            }
+            catch (err) {
+                const error = err instanceof Error ? err.message : String(err);
+                broadcast({ type: 'MODEL_STATUS', state: 'error', stage: 'llama-server', error });
+                console.error(`[server] llama-server 準備失敗：${error}`);
+                throw err;
+            }
+            llamaServer = new LlamaServerManager({
+                binPath,
+                modelPath,
+                port: llamaServerPort,
+                host: llamaServerHost,
+                ctxSize: options.llamaServerCtxSize ?? envInt('LLAMA_SERVER_CTX_SIZE', 8192),
+                threads: options.llamaServerThreads ?? envInt('LLAMA_SERVER_THREADS', os.cpus().length),
+                parallel: options.llamaServerParallel ?? envInt('LLAMA_SERVER_PARALLEL', 1),
+                idleTimeout: options.llamaServerIdleTimeout ?? envInt('LLAMA_SERVER_IDLE_TIMEOUT', 600),
+                onStatus: (status, info) => {
+                    if (status === 'ready')
+                        broadcast({ type: 'MODEL_STATUS', state: 'ready', stage: 'llama-server' });
+                    if (status === 'crashed')
+                        broadcast({ type: 'MODEL_STATUS', state: 'error', stage: 'llama-server', error: info ?? 'llama-server crashed' });
+                },
+            });
+            try {
+                const { port } = await llamaServer.start();
+                dispatcher = new OpenAICompatibleDispatcher(new OpenAICompatibleProvider({ baseURL: `http://${llamaServerHost}:${port}/v1`, model: 'local' }));
+            }
+            catch (err) {
+                const error = err instanceof Error ? err.message : String(err);
+                broadcast({ type: 'MODEL_STATUS', state: 'error', stage: 'llama-server', error });
+                console.error(`[server] llama-server 啟動失敗：${error}`);
+                throw err;
+            }
+        }
+        else if (mode === 'llamacpp') {
+            try {
+                dispatcher = new WorkerDispatcher({ modelPath });
+            }
+            catch (err) {
+                const error = err instanceof Error ? err.message : String(err);
+                broadcast({ type: 'MODEL_STATUS', state: 'error', stage: 'model',
+                    error: `packaged build 不支援 llamacpp 模式：${error}` });
+                console.error(`[server] llamacpp 模式啟動失敗：${error}`);
+                throw err;
+            }
+        }
+        else if (mode === 'openai') {
+            dispatcher = new OpenAICompatibleDispatcher(new OpenAICompatibleProvider({
+                baseURL: process.env.LLM_BASE_URL, model: process.env.LLM_MODEL, apiKey: process.env.FREELLMAPI_API_KEY
+            }));
+        }
+        else { // mock
+            dispatcher = new MockDispatcher();
+        }
+        try {
+            await dispatcher.start();
+        }
+        catch (err) {
+            const error = err instanceof Error ? err.message : String(err);
+            broadcast({ type: 'MODEL_STATUS', state: 'error', stage: 'model', error });
+            console.error(`[server] worker 啟動失敗：${error}`);
+            throw err;
+        }
+        // scheduler 先建（ctx 閉包延遲取用 engine），再傳入 engine options
+        scheduler = new SpeechScheduler({
+            enqueue: (e) => {
+                engine.enqueue(e);
+                engine.drain(); // AI_SPEECH_DONE 需立即處理，否則卡在 queue（討論永不推進）
+            },
+            getState: () => engine.getState(),
+            llm: dispatcher,
+        });
+        engine = new GameEngine({ mode: 'web', llm: dispatcher, scheduler, registry }, createGameState(playerCount));
+        // ---- Phase 2：大廳流程（不再自動 CLIENT_JOIN × N + START_GAME，改由大廳驅動） ----
+        startLobbyTimer();
+        // ---- 全 AI 自動推進：每日發言達標 → CLOSE_DISCUSSION（缺口補位） ----
+        if (!autoCloseTimer) {
+            autoCloseTimer = setInterval(() => {
+                try {
+                    const s = engine.getState();
+                    if (s.phase !== 'DAY_DISCUSSION_OPEN')
+                        return;
+                    const aliveHumans = s.players.filter((p) => p.alive && p.controlledBy === 'human').length;
+                    if (aliveHumans > 0)
+                        return; // 真人主導討論，不自動關閉
+                    const count = s.discussionLog.filter((d) => d.day === s.day).length;
+                    if (count >= speechesPerDay) {
+                        engine.enqueue({ type: 'CLOSE_DISCUSSION' });
+                        engine.drain();
+                    }
+                }
+                catch { /* ignore */ }
+            }, 1000);
+            const act = autoCloseTimer;
+            if (typeof act.unref === 'function')
+                act.unref();
+        }
+        // 先前因模型未就緒而連線的 client：補送 LOBBY，無需重連
+        try {
+            registry.sendLobby(buildLobbySnapshot(engine.getState()));
+        }
+        catch { /* ignore */ }
+    }
     const onSignal = () => {
         void shutdownFn('signal');
     };
@@ -661,154 +1033,12 @@ export async function startServer(options = {}) {
         shutdown: (reason) => shutdownFn(reason),
         closed,
     };
-    // ---- 模型下載流程（依 mode 切換）----
-    if (!modelReady) {
-        console.log(`[server] 模型未下載，背景下載中：${modelUri}`);
-        if (shouldOpenBrowser)
-            openBrowser(`${url}/download.html`);
-        try {
-            if (mode === 'llamacpp') {
-                const { ensureModelDownloaded } = await import('./llamacpp.js');
-                modelPath = await ensureModelDownloaded(modelUri, modelsDir, (downloaded, total) => {
-                    broadcast({ type: 'MODEL_STATUS', state: 'downloading', stage: 'model', downloaded, total });
-                });
-            }
-            else {
-                modelPath = await downloadModelFile(modelUri, modelsDir, (downloaded, total) => {
-                    broadcast({ type: 'MODEL_STATUS', state: 'downloading', stage: 'model', downloaded, total });
-                });
-            }
-            modelReady = true;
-            broadcast({ type: 'MODEL_STATUS', state: 'ready', stage: 'model' });
-        }
-        catch (err) {
-            const error = err instanceof Error ? err.message : String(err);
-            broadcast({ type: 'MODEL_STATUS', state: 'error', stage: 'model', error });
-            console.error(`[server] 模型下載失敗：${error}`);
-            return handle;
-        }
+    // ---- 啟動完成：先顯示主選單，不自動下載模型、不自動啟動 llama-server ----
+    // 模型下載改由 POST /api/model/download 觸發；
+    // llama-server + dispatcher/scheduler/engine 改由 WS 連線時（ensureEngineReady）延遲建立。
+    if (!modelReady && !isMock && mode !== 'openai') {
+        console.log(`[server] 未偵測到模型（${modelsDir}），請由主選單下載`);
     }
-    else {
-        broadcast({ type: 'MODEL_STATUS', state: 'ready', stage: 'model' });
-    }
-    // ---- 啟動 LLM + 遊戲（依 mode 切換）----
-    if (options.dispatcherFactory) {
-        dispatcher = options.dispatcherFactory(modelPath); // 測試 hook：跳過 sidecar
-    }
-    else if (mode === 'llama-server') {
-        // 階段宣告：讓 download.html 得知 llama-server 階段開始（即使 binary 已快取無需下載），
-        // 兩階段皆 ready 才跳轉（見 download.js）
-        broadcast({ type: 'MODEL_STATUS', state: 'downloading', stage: 'llama-server', downloaded: 0, total: 0 });
-        // 1. 確保 llama-server.exe
-        let binPath;
-        try {
-            binPath = options.llamaServerBinPath
-                ?? await ensureLlamaServer({
-                    binDir: options.llamaServerBinDir ?? process.env.LLAMA_SERVER_BIN_DIR ?? getDefaultBinDir(),
-                    release: options.llamaServerRelease ?? process.env.LLAMA_SERVER_RELEASE ?? DEFAULT_LLAMA_SERVER_RELEASE,
-                    onProgress: (downloaded, total) => broadcast({ type: 'MODEL_STATUS', state: 'downloading', stage: 'llama-server', downloaded, total }),
-                });
-        }
-        catch (err) {
-            const error = err instanceof Error ? err.message : String(err);
-            broadcast({ type: 'MODEL_STATUS', state: 'error', stage: 'llama-server', error });
-            console.error(`[server] llama-server 準備失敗：${error}`);
-            return handle;
-        }
-        // 2. 啟動 sidecar
-        llamaServer = new LlamaServerManager({
-            binPath,
-            modelPath,
-            port: llamaServerPort,
-            host: llamaServerHost,
-            ctxSize: options.llamaServerCtxSize ?? envInt('LLAMA_SERVER_CTX_SIZE', 8192),
-            threads: options.llamaServerThreads ?? envInt('LLAMA_SERVER_THREADS', os.cpus().length),
-            parallel: options.llamaServerParallel ?? envInt('LLAMA_SERVER_PARALLEL', 1),
-            idleTimeout: options.llamaServerIdleTimeout ?? envInt('LLAMA_SERVER_IDLE_TIMEOUT', 600),
-            onStatus: (status, info) => {
-                if (status === 'ready')
-                    broadcast({ type: 'MODEL_STATUS', state: 'ready', stage: 'llama-server' });
-                if (status === 'crashed')
-                    broadcast({ type: 'MODEL_STATUS', state: 'error', stage: 'llama-server', error: info ?? 'llama-server crashed' });
-            },
-        });
-        try {
-            const { port } = await llamaServer.start();
-            dispatcher = new OpenAICompatibleDispatcher(new OpenAICompatibleProvider({ baseURL: `http://${llamaServerHost}:${port}/v1`, model: 'local' }));
-        }
-        catch (err) {
-            const error = err instanceof Error ? err.message : String(err);
-            broadcast({ type: 'MODEL_STATUS', state: 'error', stage: 'llama-server', error });
-            console.error(`[server] llama-server 啟動失敗：${error}`);
-            return handle;
-        }
-    }
-    else if (mode === 'llamacpp') {
-        // exe 內 worker.js 不存在於 snapshot → new Worker 會 throw；
-        // 包 try/catch 回報明確錯誤（不靜默失敗）
-        try {
-            dispatcher = new WorkerDispatcher({ modelPath });
-        }
-        catch (err) {
-            const error = err instanceof Error ? err.message : String(err);
-            broadcast({ type: 'MODEL_STATUS', state: 'error', stage: 'model',
-                error: `packaged build 不支援 llamacpp 模式：${error}` });
-            console.error(`[server] llamacpp 模式啟動失敗：${error}`);
-            return handle;
-        }
-    }
-    else if (mode === 'openai') {
-        dispatcher = new OpenAICompatibleDispatcher(new OpenAICompatibleProvider({
-            baseURL: process.env.LLM_BASE_URL, model: process.env.LLM_MODEL, apiKey: process.env.FREELLMAPI_API_KEY
-        }));
-    }
-    else { // mock
-        dispatcher = new MockDispatcher();
-    }
-    try {
-        await dispatcher.start();
-    }
-    catch (err) {
-        const error = err instanceof Error ? err.message : String(err);
-        broadcast({ type: 'MODEL_STATUS', state: 'error', stage: 'model', error });
-        console.error(`[server] worker 啟動失敗：${error}`);
-        return handle;
-    }
-    // scheduler 先建（ctx 閉包延遲取用 engine），再傳入 engine options
-    scheduler = new SpeechScheduler({
-        enqueue: (e) => {
-            engine.enqueue(e);
-            engine.drain(); // AI_SPEECH_DONE 需立即處理，否則卡在 queue（討論永不推進）
-        },
-        getState: () => engine.getState(),
-        llm: dispatcher,
-    });
-    engine = new GameEngine({ mode: 'web', llm: dispatcher, scheduler, registry }, createGameState(playerCount));
-    // ---- Phase 2：大廳流程（不再自動 CLIENT_JOIN × N + START_GAME，改由大廳驅動） ----
-    startLobbyTimer();
-    // ---- 全 AI 自動推進：每日發言達標 → CLOSE_DISCUSSION（缺口補位） ----
-    // 規格 §11.8 只定義 CLOSING 之後自動開投票 gate，未定義誰關閉討論；
-    // 全 AI 局無真人可關閉，故由 server 定時檢查發言數達標後推進。
-    // Phase 2：有存活真人時由真人主導討論，不自動關閉。
-    autoCloseTimer = setInterval(() => {
-        try {
-            const s = engine.getState();
-            if (s.phase !== 'DAY_DISCUSSION_OPEN')
-                return;
-            const aliveHumans = s.players.filter((p) => p.alive && p.controlledBy === 'human').length;
-            if (aliveHumans > 0)
-                return; // 真人主導討論，不自動關閉
-            const count = s.discussionLog.filter((d) => d.day === s.day).length;
-            if (count >= speechesPerDay) {
-                engine.enqueue({ type: 'CLOSE_DISCUSSION' });
-                engine.drain();
-            }
-        }
-        catch { /* ignore */ }
-    }, 1000);
-    const act = autoCloseTimer;
-    if (typeof act.unref === 'function')
-        act.unref();
     if (shouldOpenBrowser)
         openBrowser(url);
     return handle;

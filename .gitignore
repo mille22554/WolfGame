@@ -7,6 +7,9 @@ models/
 # exe 打包產物（npm run build:pkg 可重建）
 dist-pkg/
 
+# exe 檔案（測試/打包產物）
+*.exe
+
 # opencode local config
 .opencode/
 

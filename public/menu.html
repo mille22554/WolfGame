@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>人狼遊戲 — 主選單</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body class="entry-page">
+<div class="entry-bg" aria-hidden="true">
+  <div class="entry-moon"></div>
+  <div class="entry-glow"></div>
+</div>
+
+<main class="entry-wrap menu-wrap">
+  <div class="game-logo">
+    <div class="logo-mark" aria-hidden="true">🌕</div>
+    <h1>人狼遊戲</h1>
+    <p class="subtitle">真人 + AI 混合對戰</p>
+  </div>
+
+  <div id="model-pill" class="status-pill is-checking">
+    <span class="pill-dot" aria-hidden="true"></span>
+    <span id="model-pill-text">正在檢查模型…</span>
+  </div>
+  <p id="selected-line" class="selected-line" hidden></p>
+
+  <div class="menu-actions">
+    <button id="start-btn" type="button" class="btn-primary btn-large" disabled>開始遊戲</button>
+    <button id="models-btn" type="button" class="btn-ghost btn-large">模型管理</button>
+  </div>
+  <p id="menu-hint" class="hint">首次使用請先到「模型管理」下載模型。</p>
+  <p id="menu-error" class="error-text" hidden></p>
+
+  <p class="entry-foot">同一 Wi-Fi 下可用瀏覽器開啟多機對戰</p>
+</main>
+
+<script src="/js/menu.js"></script>
+</body>
+</html>

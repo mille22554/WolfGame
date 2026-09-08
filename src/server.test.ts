@@ -99,6 +99,10 @@ test('WS 連線 → 收到 LOBBY（座位全 empty，無角色洩漏）', async 
     const ws = new WebSocket(`ws://localhost:${h.port}`);
     const lobby = await new Promise<{ phase: string; seats: { controlledBy: string }[] }>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('等 LOBBY 逾時')), 5000);
+      // 遊戲頁連線後先發遊戲訊息（觸發延遲啟動；模型管理頁只監聽不發訊，不會誤觸發）
+      ws.on('open', () => {
+        ws.send(JSON.stringify({ type: 'REQUEST_SNAPSHOT' }));
+      });
       ws.on('message', (data) => {
         try {
           const msg = JSON.parse(String(data)) as { type: string; lobby?: { phase: string; seats: { controlledBy: string }[] } };
@@ -282,11 +286,14 @@ http.createServer((req, res) => {
       llamaServerPort: llamaPort,
       // 不提供 dispatcherFactory → 走 sidecar + OpenAICompatibleDispatcher
     });
-    // engine 已建立：WS 連線收到 LOBBY（座位全 empty）
+    // 延遲建立：遊戲頁先發遊戲訊息才啟動 sidecar + 建 engine，再收到 LOBBY
     const ws = new WebSocket(`ws://localhost:${h.port}`);
     try {
       const lobby = await new Promise<{ phase: string }>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error('等 LOBBY 逾時')), 8000);
+        ws.on('open', () => {
+          ws.send(JSON.stringify({ type: 'REQUEST_SNAPSHOT' }));
+        });
         ws.on('message', (data) => {
           try {
             const msg = JSON.parse(String(data)) as { type: string; lobby?: { phase: string } };

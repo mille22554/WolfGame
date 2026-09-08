@@ -448,6 +448,9 @@ export type ServerToClientMessage = {
     total?: number;
     error?: string;
 } | {
+    type: 'ERROR';
+    message: string;
+} | {
     type: 'PING';
 } | {
     type: 'SHUTDOWN';

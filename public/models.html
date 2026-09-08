@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>人狼遊戲 — 模型管理</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body class="entry-page">
+<div class="entry-bg" aria-hidden="true">
+  <div class="entry-moon small"></div>
+  <div class="entry-glow"></div>
+</div>
+
+<main class="entry-wrap models-wrap">
+  <header class="page-head">
+    <button id="back-btn" type="button" class="btn-ghost btn-small">← 返回主選單</button>
+    <div class="page-title">
+      <h1>模型管理</h1>
+      <p class="subtitle">本地模型（Qwen3-4B）</p>
+    </div>
+    <div id="models-pill" class="status-pill is-checking">
+      <span class="pill-dot" aria-hidden="true"></span>
+      <span id="models-pill-text">正在檢查…</span>
+    </div>
+  </header>
+
+  <p id="models-error" class="error-text" hidden></p>
+
+  <!-- 進度卡：下載中顯示 -->
+  <section id="progress-card" class="card" hidden>
+    <h2 id="progress-title">模型下載中…</h2>
+    <div class="progress-wrap">
+      <div id="progress-bar" class="progress-bar"></div>
+    </div>
+    <p id="progress-text" class="progress-text"></p>
+    <p class="hint">下載期間請不要關閉視窗，完成後會自動更新列表。</p>
+  </section>
+
+  <!-- 無模型：引導下載 -->
+  <section id="empty-card" class="card empty-card" hidden>
+    <div class="empty-icon" aria-hidden="true">📦</div>
+    <h2>尚未下載模型</h2>
+    <p class="hint">需要下載 Qwen3-4B 模型才能開始遊戲（約 2–3 GB，請保持網路連線）。</p>
+    <button id="download-btn" type="button" class="btn-primary btn-large">一鍵下載</button>
+    <p class="hint">也可以自行將 .gguf 模型檔放入 models 資料夾，重新整理後會出現在下方列表。</p>
+  </section>
+
+  <!-- 有模型：列表 -->
+  <section id="list-card" class="card" hidden>
+    <div class="list-head">
+      <h2>已安裝的模型</h2>
+      <button id="download-more-btn" type="button" class="btn-ghost btn-small">下載預設模型</button>
+    </div>
+    <div id="model-list" class="model-list"></div>
+    <p class="hint">點選模型即可切換使用。自行放入 models 資料夾的 .gguf 檔案也會顯示在這裡。</p>
+  </section>
+
+  <section class="card ghost-card">
+    <h2>說明</h2>
+    <ul class="desc-list">
+      <li>開始遊戲需要至少一個可用模型。</li>
+      <li>檔名包含 Qwen3-4B 的為預設模型。</li>
+      <li>下載完成後，回到主選單即可開始遊戲。</li>
+    </ul>
+  </section>
+</main>
+
+<script src="/js/models.js"></script>
+</body>
+</html>

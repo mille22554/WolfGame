@@ -10,10 +10,14 @@
 // 6. 乾淨退出：POSIX 送 SIGTERM（exit 0）；Windows 訊號無法觸發 handler，
 //    改由 WS 送 LEAVE（最後 client → orderly shutdown → exit 0）。
 import { spawn } from 'node:child_process';
+import { createServer } from 'node:net';
 import * as fs from 'node:fs';
 import { WebSocket } from 'ws';
 
 const EXE = 'dist-pkg/WerewolfGame.exe';
+// GUI subsystem（patch-gui.mjs）下 exe 的 stdout 被靜默丟棄，無法解析 port；
+// 改用固定 port + HTTP 輪詢確認啟動。
+const PORT = 2077;
 
 function fail(child, reason) {
   console.error(`❌ smoke 失敗：${reason}`);
@@ -34,12 +38,23 @@ if (!fs.existsSync(EXE)) {
   process.exit(1);
 }
 
+// 確認固定 port 可用（避免與其他程序衝突）
+const portFree = await new Promise((resolve) => {
+  const srv = createServer();
+  srv.once('error', () => resolve(false));
+  srv.listen(PORT, () => srv.close(() => resolve(true)));
+});
+if (!portFree) {
+  console.error(`❌ port ${PORT} 被佔用，無法進行 smoke 測試`);
+  process.exit(1);
+}
+
 const child = spawn(EXE, [], {
   env: {
     ...process.env,
     LLM_PROVIDER: 'mock',
     OPEN_BROWSER: '0',
-    PORT: '0',
+    PORT: String(PORT),
     ZERO_CLIENT_SHUTDOWN_MS: '60000',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -64,25 +79,23 @@ child.stderr.on('data', (d) => {
   process.stderr.write(d);
 });
 
-// 等 stdout 出現 localhost:PORT
-const port = await new Promise((resolve, reject) => {
-  const timer = setTimeout(() => reject(new Error('等 exe 啟動逾時（30s）')), 30000);
-  const onData = (d) => {
-    const m = String(d).match(/localhost:(\d+)/);
-    if (m) {
-      clearTimeout(timer);
-      child.stdout.off('data', onData);
-      resolve(Number(m[1]));
+// GUI subsystem 下 stdout 無效：固定 port + HTTP 輪詢確認啟動
+const port = PORT;
+const bootDeadline = Date.now() + 30000;
+let booted = false;
+while (Date.now() < bootDeadline) {
+  try {
+    const res = await fetch(`http://localhost:${port}/`);
+    if (res.status === 200) {
+      booted = true;
+      break;
     }
-  };
-  child.stdout.on('data', onData);
-  child.once('exit', (code) => {
-    clearTimeout(timer);
-    reject(new Error(`exe 提前退出（code=${code}）`));
-  });
-}).catch((err) => {
-  fail(child, err.message);
-});
+  } catch {
+    /* server 尚未就緒 */
+  }
+  await new Promise((r) => setTimeout(r, 500));
+}
+if (!booted) fail(child, '等 exe 啟動逾時（30s）');
 console.log(`✅ exe 啟動，port=${port}`);
 
 // HTTP 200（public/ 從 snapshot 可讀）
@@ -105,6 +118,10 @@ await new Promise((resolve, reject) => {
     }
     const ws = new WebSocket(`ws://localhost:${port}`);
     leaveWs = ws;
+    // fix-1 後：engine 延遲建立（收到第一則遊戲訊息才啟動），比照前端 main.js 先送 REQUEST_SNAPSHOT
+    ws.on('open', () => {
+      ws.send(JSON.stringify({ type: 'REQUEST_SNAPSHOT' }));
+    });
     ws.on('message', (data) => {
       try {
         const msg = JSON.parse(String(data));

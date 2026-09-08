@@ -436,6 +436,7 @@ export type ServerToClientMessage =
   | { type: 'JOIN_REJECTED'; reason: string }
   | { type: 'ACTION_REJECTED'; reason: string }
   | { type: 'MODEL_STATUS'; state: 'downloading' | 'ready' | 'error'; stage?: 'llama-server' | 'model'; downloaded?: number; total?: number; error?: string }
+  | { type: 'ERROR'; message: string }
   | { type: 'PING' }
   | { type: 'SHUTDOWN' };
 

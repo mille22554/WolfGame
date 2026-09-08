@@ -112,6 +112,11 @@ function connect(port: number): Promise<WebSocket> {
     const timer = setTimeout(() => reject(new Error('連線逾時')), 5000);
     ws.on('open', () => {
       clearTimeout(timer);
+      // 遊戲頁連線後先發遊戲訊息，觸發 server 延遲啟動 engine
+      //（模型管理頁只監聽 MODEL_STATUS 不發訊，故不會誤觸發 sidecar）
+      try {
+        ws.send(JSON.stringify({ type: 'REQUEST_SNAPSHOT' }));
+      } catch { /* ignore */ }
       resolve(ws);
     });
     ws.on('error', reject);

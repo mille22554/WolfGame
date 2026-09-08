@@ -33,5 +33,8 @@ run('npx pkg dist-pkg/WerewolfGame.cjs --config pkg.config.json');
 if (!fs.existsSync('dist-pkg/WerewolfGame.exe')) {
   throw new Error('找不到產物 dist-pkg/WerewolfGame.exe');
 }
+// GUI subsystem patch：雙擊不開 CMD 黑窗（console.log 在 GUI 下會被靜默丟棄）
+run('node scripts/patch-gui.mjs');
+
 const sizeMb = (fs.statSync('dist-pkg/WerewolfGame.exe').size / 1024 / 1024).toFixed(1);
 console.log(`✅ 打包完成：dist-pkg/WerewolfGame.exe（${sizeMb} MB）`);
