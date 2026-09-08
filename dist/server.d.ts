@@ -7,6 +7,7 @@
  */
 import * as http from 'http';
 import { WebSocketServer } from 'ws';
+import { type BackendPreference } from './llama-server.js';
 import type { GameState, GameEvent, LLMDispatcher, ClientRegistry, PlayerSnapshot, SpectatorSnapshot, LobbySnapshot } from './types.js';
 export interface ServerLLM extends LLMDispatcher {
     start(): Promise<void>;
@@ -35,6 +36,8 @@ export interface ServerOptions {
     llamaServerRelease?: string;
     llamaServerBinDir?: string;
     llamaServerBinPath?: string;
+    backend?: BackendPreference;
+    llamaGpuLayers?: number;
 }
 export interface ServerHandle {
     port: number;

@@ -8,7 +8,13 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import AdmZip from 'adm-zip';
-import { LlamaServerManager, ensureLlamaServer } from './llama-server.js';
+import {
+  LlamaServerManager, ensureLlamaServer, ensureLlamaServerPair, startLlamaServerWithFallback,
+  llamaServerDownloadUrl, llamaServerDirName, pruneOtherVariantDirs, migrateLegacyLlamaDir,
+  gpuLayersForVram, reducedGpuLayers, detectVramMB, defaultGpuLayers, isGpuCrashError,
+  readBackendPreference, writeBackendPreference, effectiveBackendPreference,
+  FULL_GPU_LAYERS, REDUCED_GPU_LAYERS,
+} from './llama-server.js';
 
 const FAKE_SRC = `
 import http from 'node:http';
@@ -340,9 +346,9 @@ test('ensureLlamaServer：下載 → 解壓 → 回傳 exe 路徑', async () => 
       binDir: dir, release: 'b10361', fetchImpl,
       onProgress: (d, t) => { prog = { d, t }; },
     });
-    assert.equal(p, path.join(dir, 'llama-b10361', 'llama-server.exe'));
+    assert.equal(p, path.join(dir, 'llama-b10361-cpu', 'llama-server.exe'));
     assert.equal(fs.readFileSync(p, 'utf-8'), 'fake-exe');
-    assert.ok(fs.existsSync(path.join(dir, 'llama-b10361', 'ggml.dll')));
+    assert.ok(fs.existsSync(path.join(dir, 'llama-b10361-cpu', 'ggml.dll')));
     assert.ok(prog.d > 0);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -357,8 +363,8 @@ test('ensureLlamaServer：已存在 → 跳過下載', async () => {
   }) as typeof fetch;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'binex-'));
   try {
-    fs.mkdirSync(path.join(dir, 'llama-b10361'), { recursive: true });
-    fs.writeFileSync(path.join(dir, 'llama-b10361', 'llama-server.exe'), 'pre');
+    fs.mkdirSync(path.join(dir, 'llama-b10361-cpu'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'llama-b10361-cpu', 'llama-server.exe'), 'pre');
     const p = await ensureLlamaServer({ binDir: dir, release: 'b10361', fetchImpl });
     assert.ok(p.endsWith('llama-server.exe'));
     assert.equal(hits, 0);
@@ -378,9 +384,372 @@ test('ensureLlamaServer：404 → throw', async () => {
   }
 });
 
+// ============================================
+// Vulkan GPU 後端：變體／regex／回退／覆寫／顯存分級
+// ============================================
+
+test('下載 URL 變體＋目錄名純函數', () => {
+  // cpu 維持現行資產名
+  assert.equal(
+    llamaServerDownloadUrl('b10361', 'cpu'),
+    'https://github.com/ggml-org/llama.cpp/releases/download/b10361/llama-b10361-bin-win-cpu-x64.zip',
+  );
+  assert.equal(
+    llamaServerDownloadUrl('b10361'),
+    'https://github.com/ggml-org/llama.cpp/releases/download/b10361/llama-b10361-bin-win-cpu-x64.zip',
+  );
+  // vulkan 變體
+  assert.equal(
+    llamaServerDownloadUrl('b10361', 'vulkan'),
+    'https://github.com/ggml-org/llama.cpp/releases/download/b10361/llama-b10361-bin-win-vulkan-x64.zip',
+  );
+  assert.equal(llamaServerDirName('b10361', 'cpu'), 'llama-b10361-cpu');
+  assert.equal(llamaServerDirName('b10361'), 'llama-b10361-cpu');
+  assert.equal(llamaServerDirName('b10361', 'vulkan'), 'llama-b10361-vulkan');
+});
+
+test('GPU 錯誤 regex：命中 Vulkan 無裝置／OOM／驅動不足，排除一般 crash', () => {
+  const gpuCases = [
+    'no vulkan device found',
+    'NO VULKAN support',
+    'vk_error_device_lost',
+    'vk_error_out_of_device_memory',
+    'vk_error_out_of_host_memory',
+    'vk_error_incompatible_driver',
+    'vk_error_initialization_failed',
+    'vulkan: no devices found',
+    'vulkan not supported on this device',
+    'vulkan initialization failed',
+    'vulkan error: unavailable',
+    'out of device memory',
+    'out of video memory',
+    'out of vram memory',
+    'GPU out of memory',
+    'device out of memory, try reducing layers',
+    'VRAM out of memory',
+    'driver too old, please update',
+    'driver insufficient for vulkan',
+    'incompatible driver version',
+    'missing driver for GPU',
+  ];
+  for (const s of gpuCases) assert.equal(isGpuCrashError(s), true, `應命中：${s}`);
+  const generalCases = [
+    'fake crash',
+    'boom-xyz-diagnostic',
+    'address already in use',
+    'listen EADDRINUSE',
+    'invalid argument',
+    'model file not found',
+    '',
+  ];
+  for (const s of generalCases) assert.equal(isGpuCrashError(s), false, `不應命中：${s}`);
+});
+
+test('GPU 錯誤 regex：fake binary 印 GPU 字串秒崩 → 錯誤訊息為 GPU 診斷', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-gpuerr-'));
+  const bin = path.join(dir, 'fake-gpuerr.mjs');
+  fs.writeFileSync(bin, `console.error('vk_error_device_lost: no vulkan device'); process.exit(1);\n`);
+  const port = await freePort();
+  const mgr = new LlamaServerManager({
+    binPath: bin, modelPath: 'x.gguf', port,
+    healthTimeoutMs: 5000, healthIntervalMs: 100, maxRestarts: 0,
+  });
+  try {
+    await assert.rejects(mgr.start(), /GPU 錯誤/);
+    assert.equal(isGpuCrashError(mgr.getLogTail()), true);
+  } finally {
+    await mgr.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('顯存到層數映射純函數', () => {
+  // ≥6GB 全層 99
+  assert.equal(gpuLayersForVram(6 * 1024), FULL_GPU_LAYERS);
+  assert.equal(gpuLayersForVram(8 * 1024), FULL_GPU_LAYERS);
+  assert.equal(gpuLayersForVram(16 * 1024), FULL_GPU_LAYERS);
+  // ≥4GB 約 20 層
+  assert.equal(gpuLayersForVram(4 * 1024), REDUCED_GPU_LAYERS);
+  assert.equal(gpuLayersForVram(5 * 1024), REDUCED_GPU_LAYERS);
+  assert.equal(gpuLayersForVram(4096 + 1024), REDUCED_GPU_LAYERS);
+  // ＜4GB 走 CPU
+  assert.equal(gpuLayersForVram(3 * 1024), 0);
+  assert.equal(gpuLayersForVram(0), 0);
+  // 內顯走 CPU（不論顯存數字）
+  assert.equal(gpuLayersForVram(16 * 1024, true), 0);
+  assert.equal(gpuLayersForVram(undefined, true), 0);
+  // 未知保守 20
+  assert.equal(gpuLayersForVram(undefined), REDUCED_GPU_LAYERS);
+  assert.equal(gpuLayersForVram(NaN), REDUCED_GPU_LAYERS);
+  // 自動降層：高層→20，20 以下→0（改走 CPU）
+  assert.equal(reducedGpuLayers(99), 20);
+  assert.equal(reducedGpuLayers(33), 20);
+  assert.equal(reducedGpuLayers(20), 0);
+  assert.equal(reducedGpuLayers(0), 0);
+  // 預設層數：env 強制覆寫 ＞ 分級；內顯→0
+  assert.equal(defaultGpuLayers({ LLAMA_GPU_LAYERS: '0' }), 0);
+  assert.equal(defaultGpuLayers({ LLAMA_GPU_LAYERS: '35' }), 35);
+  assert.equal(defaultGpuLayers({ LLAMA_VRAM_MB: String(8 * 1024) }), 99);
+  assert.equal(defaultGpuLayers({ LLAMA_INTEGRATED_GPU: '1' }), 0);
+  assert.equal(defaultGpuLayers({}), 20);
+});
+
+test('手動覆寫讀寫＋優先序（選項 hook ＞ 持久化手動 ＞ env ＞ auto）', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'backend-pref-'));
+  try {
+    // 預設 auto（無檔案）
+    assert.equal(readBackendPreference(dir), 'auto');
+    writeBackendPreference('gpu', dir);
+    assert.equal(readBackendPreference(dir), 'gpu');
+    writeBackendPreference('cpu', dir);
+    assert.equal(readBackendPreference(dir), 'cpu');
+    writeBackendPreference('auto', dir);
+    assert.equal(readBackendPreference(dir), 'auto');
+    // 髒資料 → auto
+    fs.writeFileSync(path.join(dir, 'backend.json'), '{"backend":"cuda"}');
+    assert.equal(readBackendPreference(dir), 'auto');
+    fs.writeFileSync(path.join(dir, 'backend.json'), 'not-json{');
+    assert.equal(readBackendPreference(dir), 'auto');
+
+    // 優先序
+    assert.equal(effectiveBackendPreference({ option: 'cpu', stored: 'gpu', env: { LLAMA_BACKEND: 'gpu' } }), 'cpu');
+    assert.equal(effectiveBackendPreference({ stored: 'gpu', env: { LLAMA_BACKEND: 'cpu' } }), 'gpu');
+    assert.equal(effectiveBackendPreference({ stored: 'auto', env: { LLAMA_BACKEND: 'cpu' } }), 'cpu');
+    assert.equal(effectiveBackendPreference({ env: { LLAMA_BACKEND: 'gpu' } }), 'gpu');
+    assert.equal(effectiveBackendPreference({}), 'auto');
+    assert.equal(effectiveBackendPreference({ env: { LLAMA_BACKEND: 'nope' } }), 'auto');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('變體分目錄：prune 清殘留／legacy 搬家', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vardir-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'llama-b10361-cpu'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'llama-b10361-vulkan'), { recursive: true });
+    const removed = pruneOtherVariantDirs(dir, 'b10361', 'cpu');
+    assert.equal(removed.length, 1);
+    assert.ok(removed[0].endsWith('llama-b10361-vulkan'));
+    assert.ok(!fs.existsSync(path.join(dir, 'llama-b10361-vulkan')));
+    assert.ok(fs.existsSync(path.join(dir, 'llama-b10361-cpu')));
+
+    // legacy 無後綴 → 搬為 cpu（cpu 缺 exe 時）
+    const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'legacy-'));
+    try {
+      fs.mkdirSync(path.join(dir2, 'llama-b10361'), { recursive: true });
+      fs.writeFileSync(path.join(dir2, 'llama-b10361', 'llama-server.exe'), 'old');
+      migrateLegacyLlamaDir(dir2, 'b10361');
+      assert.ok(fs.existsSync(path.join(dir2, 'llama-b10361-cpu', 'llama-server.exe')));
+      assert.ok(!fs.existsSync(path.join(dir2, 'llama-b10361')));
+    } finally {
+      fs.rmSync(dir2, { recursive: true, force: true });
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ensureLlamaServer 變體分目錄：cpu／vulkan 各就其位', async () => {
+  const mkFetch = (marker: string) => {
+    const zip = new AdmZip();
+    zip.addFile('llama-server.exe', Buffer.from(marker));
+    const buf = zip.toBuffer();
+    return (async (): Promise<Response> =>
+      new Response(buf, { status: 200, headers: { 'content-length': String(buf.length) } })) as typeof fetch;
+  };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'binvar-'));
+  try {
+    const cpu = await ensureLlamaServer({ binDir: dir, release: 'b10361', variant: 'cpu', fetchImpl: mkFetch('cpu-exe') });
+    assert.equal(cpu, path.join(dir, 'llama-b10361-cpu', 'llama-server.exe'));
+    const vk = await ensureLlamaServer({ binDir: dir, release: 'b10361', variant: 'vulkan', fetchImpl: mkFetch('vk-exe') });
+    assert.equal(vk, path.join(dir, 'llama-b10361-vulkan', 'llama-server.exe'));
+    assert.equal(fs.readFileSync(cpu, 'utf-8'), 'cpu-exe');
+    assert.equal(fs.readFileSync(vk, 'utf-8'), 'vk-exe');
+    // 手動單變體 prune：留 vulkan 清 cpu
+    const removed = pruneOtherVariantDirs(dir, 'b10361', 'vulkan');
+    assert.ok(removed[0].endsWith('llama-b10361-cpu'));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ensureLlamaServerPair：先 CPU 再 Vulkan（各下載一次）', async () => {
+  const order: string[] = [];
+  const fetchImpl = (async (url: unknown): Promise<Response> => {
+    const u = String(url);
+    order.push(u.includes('vulkan') ? 'vulkan' : 'cpu');
+    const zip = new AdmZip();
+    zip.addFile('llama-server.exe', Buffer.from('exe'));
+    const buf = zip.toBuffer();
+    return new Response(buf, { status: 200, headers: { 'content-length': String(buf.length) } });
+  }) as typeof fetch;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'binpair-'));
+  try {
+    const { cpuPath, vulkanPath } = await ensureLlamaServerPair({ binDir: dir, release: 'b10361', fetchImpl });
+    assert.deepEqual(order, ['cpu', 'vulkan']);
+    assert.equal(cpuPath, path.join(dir, 'llama-b10361-cpu', 'llama-server.exe'));
+    assert.equal(vulkanPath, path.join(dir, 'llama-b10361-vulkan', 'llama-server.exe'));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('回退狀態機：Vulkan-fake 秒崩（GPU 錯）→ 降層一次 → 換碟上 CPU 包，無二次下載', async () => {
+  // Vulkan-fake：印 GPU 錯誤秒崩；CPU-fake：健康
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fallback-'));
+  const vulkanFake = path.join(dir, 'vulkan-fake.mjs');
+  const cpuFake = path.join(dir, 'cpu-fake.mjs');
+  fs.writeFileSync(vulkanFake, `console.error('vk_error_device_lost: no vulkan device'); process.exit(1);\n`);
+  fs.writeFileSync(cpuFake, `
+import http from 'node:http';
+const args = process.argv.slice(2);
+const pi = args.indexOf('--port');
+const port = pi >= 0 ? Number(args[pi + 1]) : 3001;
+const hi = args.indexOf('--host');
+const host = hi >= 0 ? args[hi + 1] : '127.0.0.1';
+http.createServer((req, res) => {
+  if (req.url === '/health') { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"status":"ok"}'); }
+  else { res.writeHead(404); res.end(); }
+}).listen(port, host);
+`);
+  // 無二次下載驗證：回退期只吃碟上包，目錄不得新增下載產物
+  const beforeFiles = fs.readdirSync(dir).sort();
+  const port = await freePort();
+  const events: { status: string; info?: string }[] = [];
+  const gpuLayersSeen: number[] = [];
+  const { startLlamaServerWithFallback: start } = await import('./llama-server.js');
+  const result = await start({
+    cpuBinPath: cpuFake,
+    vulkanBinPath: vulkanFake,
+    modelPath: 'x.gguf',
+    port,
+    gpuLayers: 99,
+    healthTimeoutMs: 8000,
+    healthIntervalMs: 100,
+    maxRestarts: 0,
+    onStatus: (status, info) => { events.push({ status, info }); },
+    createManager: (o) => {
+      if (o.binPath === vulkanFake) gpuLayersSeen.push(o.gpuLayers ?? 0);
+      return new LlamaServerManager(o);
+    },
+  });
+  try {
+    // 換包重啟：最終 CPU 生效
+    assert.equal(result.backend, 'cpu');
+    assert.equal(result.gpuLayers, 0);
+    assert.equal(result.manager.isRunning(), true);
+    assert.ok(await probe(port));
+    // 降層重試一次：同包先 99 後 20
+    assert.deepEqual(gpuLayersSeen, [99, 20]);
+    // 狀態廣播：降層＋切 CPU 都有 starting 訊息，最終 ready
+    const infos = events.map((e) => `${e.status}:${e.info ?? ''}`).join('\n');
+    assert.match(infos, /降層/);
+    assert.match(infos, /CPU/);
+    assert.equal(events[events.length - 1].status, 'ready');
+    // 無二次下載：目錄無新增下載產物
+    assert.deepEqual(fs.readdirSync(dir).sort(), beforeFiles);
+  } finally {
+    await result.manager.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('回退狀態機：一般 crash 不走回退（直接丟原錯）', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fallback-general-'));
+  const vulkanFake = path.join(dir, 'vulkan-fake.mjs');
+  const cpuFake = path.join(dir, 'cpu-fake.mjs');
+  fs.writeFileSync(vulkanFake, `console.error('boom-xyz-general'); process.exit(1);\n`);
+  fs.writeFileSync(cpuFake, `console.error('should-never-start'); process.exit(1);\n`);
+  const port = await freePort();
+  let cpuStarted = false;
+  try {
+    await assert.rejects(
+      startLlamaServerWithFallback({
+        cpuBinPath: cpuFake,
+        vulkanBinPath: vulkanFake,
+        modelPath: 'x.gguf',
+        port,
+        gpuLayers: 99,
+        healthTimeoutMs: 5000,
+        healthIntervalMs: 100,
+        maxRestarts: 0,
+        createManager: (o) => {
+          if (o.binPath === cpuFake) cpuStarted = true;
+          return new LlamaServerManager(o);
+        },
+      }),
+      /boom-xyz-general/,
+    );
+    assert.equal(cpuStarted, false, '一般 crash 不應換 CPU 包');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Vulkan 啟動參數：gpuLayers > 0 才帶 --n-gpu-layers＋砍半 KV', async () => {
+  // argv 回顯 fake：把收到的 args 寫檔，manager ready 後讀檔驗證
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gpuargs-'));
+  const bin = path.join(dir, 'echo-args.mjs');
+  const outFile = path.join(dir, 'args.json');
+  fs.writeFileSync(bin, `
+import fs from 'node:fs';
+import http from 'node:http';
+fs.writeFileSync(process.env.FAKE_ARGS_OUT, JSON.stringify(process.argv.slice(2)));
+const args = process.argv.slice(2);
+const pi = args.indexOf('--port');
+const port = pi >= 0 ? Number(args[pi + 1]) : 3001;
+const hi = args.indexOf('--host');
+const host = hi >= 0 ? args[hi + 1] : '127.0.0.1';
+http.createServer((req, res) => {
+  if (req.url === '/health') { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"status":"ok"}'); }
+  else { res.writeHead(404); res.end(); }
+}).listen(port, host);
+`);
+  const prev = process.env.FAKE_ARGS_OUT;
+  process.env.FAKE_ARGS_OUT = outFile;
+  const port = await freePort();
+  const mgr = new LlamaServerManager({
+    binPath: bin, modelPath: 'x.gguf', port, gpuLayers: 99,
+    healthTimeoutMs: 15000, healthIntervalMs: 100,
+  });
+  try {
+    await mgr.start();
+    const args = JSON.parse(fs.readFileSync(outFile, 'utf-8')) as string[];
+    assert.ok(args.includes('--n-gpu-layers') && args.includes('99'));
+    assert.ok(args.includes('--cache-type-k') && args.includes('q8_0'));
+    assert.ok(args.includes('--cache-type-v') && args.includes('q8_0'));
+  } finally {
+    if (prev === undefined) delete process.env.FAKE_ARGS_OUT;
+    else process.env.FAKE_ARGS_OUT = prev;
+    await mgr.stop();
+  }
+  // CPU（0 層）不帶 GPU flags
+  const outFile2 = path.join(dir, 'args2.json');
+  process.env.FAKE_ARGS_OUT = outFile2;
+  const port2 = await freePort();
+  const mgr2 = new LlamaServerManager({
+    binPath: bin, modelPath: 'x.gguf', port: port2, gpuLayers: 0,
+    healthTimeoutMs: 15000, healthIntervalMs: 100,
+  });
+  try {
+    await mgr2.start();
+    const args = JSON.parse(fs.readFileSync(outFile2, 'utf-8')) as string[];
+    assert.ok(!args.includes('--n-gpu-layers'));
+    assert.ok(!args.includes('--cache-type-k'));
+  } finally {
+    if (prev === undefined) delete process.env.FAKE_ARGS_OUT;
+    else process.env.FAKE_ARGS_OUT = prev;
+    await mgr2.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('整合：真實 llama-server.exe（不存在時 skip）', async (t) => {
   const { getDefaultBinDir } = await import('./llama-server.js');
   const candidates = [
+    path.join(getDefaultBinDir(), 'llama-b10361-cpu', 'llama-server.exe'),
+    path.join(getDefaultBinDir(), 'llama-b10361-vulkan', 'llama-server.exe'),
     path.join(getDefaultBinDir(), 'llama-b10361', 'llama-server.exe'),
     path.join(getDefaultBinDir(), 'llama-server.exe'),
   ];

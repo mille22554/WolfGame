@@ -18,7 +18,7 @@ import { WorkerDispatcher } from './worker-dispatcher.js';
 import { createGameState, buildGMSnapshot, buildPlayerSnapshot, buildSpectatorSnapshot, } from './game-state.js';
 import { DEFAULT_LLAMACPP_MODEL_URI, getDefaultModelsDir, OpenAICompatibleProvider, } from './llm.js';
 import { downloadModelFile } from './model-download.js';
-import { LlamaServerManager, ensureLlamaServer, getDefaultBinDir, DEFAULT_LLAMA_SERVER_RELEASE, DEFAULT_LLAMA_SERVER_PORT, DEFAULT_LLAMA_SERVER_HOST, } from './llama-server.js';
+import { LlamaServerManager, ensureLlamaServer, ensureLlamaServerPair, startLlamaServerWithFallback, getDefaultBinDir, readBackendPreference, writeBackendPreference, effectiveBackendPreference, defaultGpuLayers, DEFAULT_LLAMA_SERVER_RELEASE, DEFAULT_LLAMA_SERVER_PORT, DEFAULT_LLAMA_SERVER_HOST, } from './llama-server.js';
 import { OpenAICompatibleDispatcher, MockDispatcher } from './llm-dispatcher.js';
 import { getResourceRoot } from './utils.js';
 import { LobbyManager } from './lobby.js';
@@ -768,7 +768,58 @@ export async function startServer(options = {}) {
                 return;
             }
             if (req.method === 'GET' && pathname === '/api/status') {
-                sendJson(res, 200, { modelReady, selectedModel, models: listGgufModels(modelsDir) });
+                sendJson(res, 200, {
+                    modelReady, selectedModel, models: listGgufModels(modelsDir),
+                    backend: effectiveBackendPreference({
+                        option: options.backend, stored: readBackendPreference(), env: process.env,
+                    }),
+                });
+                return;
+            }
+            if (req.method === 'GET' && pathname === '/api/backend') {
+                const stored = readBackendPreference();
+                sendJson(res, 200, {
+                    backend: stored,
+                    effective: effectiveBackendPreference({ option: options.backend, stored, env: process.env }),
+                });
+                return;
+            }
+            if (req.method === 'POST' && pathname === '/api/backend') {
+                let body = '';
+                try {
+                    body = await readBody(req);
+                }
+                catch {
+                    sendJson(res, 400, { error: 'bad body' });
+                    return;
+                }
+                let backend;
+                try {
+                    backend = JSON.parse(body || '{}').backend;
+                }
+                catch {
+                    sendJson(res, 400, { error: 'invalid json' });
+                    return;
+                }
+                if (backend !== 'auto' && backend !== 'cpu' && backend !== 'gpu') {
+                    sendJson(res, 400, { error: 'bad backend (want auto|cpu|gpu)' });
+                    return;
+                }
+                try {
+                    writeBackendPreference(backend);
+                }
+                catch (err) {
+                    sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+                    return;
+                }
+                sendJson(res, 200, {
+                    ok: true,
+                    backend,
+                    // 只寫檔不熱切換：下次引擎啟動才生效；本局進行中不受影響
+                    note: engine
+                        ? '已儲存，將於下次啟動引擎時生效（本局不受影響）'
+                        : '已儲存，將於下次啟動引擎時生效',
+                });
                 return;
             }
             if (req.method === 'POST' && pathname === '/api/model/select') {
@@ -1160,24 +1211,13 @@ export async function startServer(options = {}) {
         }
         else if (mode === 'llama-server') {
             broadcast({ type: 'MODEL_STATUS', state: 'starting', stage: 'llama-server' });
-            let binPath;
-            try {
-                binPath = options.llamaServerBinPath
-                    ?? await ensureLlamaServer({
-                        binDir: options.llamaServerBinDir ?? process.env.LLAMA_SERVER_BIN_DIR ?? getDefaultBinDir(),
-                        release: options.llamaServerRelease ?? process.env.LLAMA_SERVER_RELEASE ?? DEFAULT_LLAMA_SERVER_RELEASE,
-                        onProgress: (downloaded, total) => broadcast({ type: 'MODEL_STATUS', state: 'downloading', stage: 'llama-server', downloaded, total }),
-                        onStage: (info) => broadcast({ type: 'MODEL_STATUS', state: 'starting', stage: 'llama-server', info }),
-                    });
-            }
-            catch (err) {
-                const error = err instanceof Error ? err.message : String(err);
-                broadcast({ type: 'MODEL_STATUS', state: 'error', stage: 'llama-server', error });
-                console.error(`[server] llama-server 準備失敗：${error}`);
-                throw err;
-            }
-            llamaServer = new LlamaServerManager({
-                binPath,
+            const backendPref = effectiveBackendPreference({
+                option: options.backend, stored: readBackendPreference(), env: process.env,
+            });
+            const binDir = options.llamaServerBinDir ?? process.env.LLAMA_SERVER_BIN_DIR ?? getDefaultBinDir();
+            const release = options.llamaServerRelease ?? process.env.LLAMA_SERVER_RELEASE ?? DEFAULT_LLAMA_SERVER_RELEASE;
+            const gpuLayers = options.llamaGpuLayers ?? defaultGpuLayers();
+            const mgrBase = {
                 modelPath,
                 port: llamaServerPort,
                 host: llamaServerHost,
@@ -1187,17 +1227,51 @@ export async function startServer(options = {}) {
                 idleTimeout: options.llamaServerIdleTimeout ?? envInt('LLAMA_SERVER_IDLE_TIMEOUT', 600), // 已棄用：b10361 不支援，不轉 flag
                 // 2.38GB 模型載入動輒數分鐘：健康等待放寬至 300s（可用 env 覆寫），避免誤殺
                 healthTimeoutMs: envInt('LLAMA_SERVER_HEALTH_TIMEOUT_MS', 300000),
-                onStatus: (status, info) => {
-                    if (status === 'starting')
-                        broadcast({ type: 'MODEL_STATUS', state: 'starting', stage: 'llama-server', info });
-                    if (status === 'ready')
-                        broadcast({ type: 'MODEL_STATUS', state: 'ready', stage: 'llama-server' });
-                    if (status === 'crashed')
-                        broadcast({ type: 'MODEL_STATUS', state: 'error', stage: 'llama-server', error: info ?? 'llama-server crashed' });
-                },
-            });
+            };
+            const forwardStatus = (status, info) => {
+                if (status === 'starting')
+                    broadcast({ type: 'MODEL_STATUS', state: 'starting', stage: 'llama-server', info });
+                if (status === 'ready')
+                    broadcast({ type: 'MODEL_STATUS', state: 'ready', stage: 'llama-server' });
+                if (status === 'crashed')
+                    broadcast({ type: 'MODEL_STATUS', state: 'error', stage: 'llama-server', error: info ?? 'llama-server crashed' });
+            };
+            const onProg = {
+                onProgress: (downloaded, total) => broadcast({ type: 'MODEL_STATUS', state: 'downloading', stage: 'llama-server', downloaded, total }),
+                onStage: (info) => broadcast({ type: 'MODEL_STATUS', state: 'starting', stage: 'llama-server', info }),
+            };
             try {
-                const { port } = await llamaServer.start();
+                let port;
+                if (options.llamaServerBinPath) {
+                    // 測試 hook：單包直啟（跳過下載與回退）
+                    llamaServer = new LlamaServerManager({ ...mgrBase, binPath: options.llamaServerBinPath, onStatus: forwardStatus });
+                    ({ port } = await llamaServer.start());
+                }
+                else if (backendPref === 'cpu') {
+                    const binPath = await ensureLlamaServer({ binDir, release, variant: 'cpu', pruneOtherVariants: true, ...onProg });
+                    llamaServer = new LlamaServerManager({ ...mgrBase, binPath, gpuLayers: 0, onStatus: forwardStatus });
+                    ({ port } = await llamaServer.start());
+                }
+                else if (backendPref === 'gpu') {
+                    // 手動 GPU：只下 Vulkan 包；GPU 錯可降層一次，但不換 CPU（尊重手動選擇）
+                    const binPath = await ensureLlamaServer({ binDir, release, variant: 'vulkan', pruneOtherVariants: true, ...onProg });
+                    const r = await startLlamaServerWithFallback({
+                        cpuBinPath: binPath, vulkanBinPath: binPath,
+                        gpuLayers, allowCpuFallback: false, onStatus: forwardStatus, ...mgrBase,
+                    });
+                    llamaServer = r.manager;
+                    port = r.port;
+                }
+                else {
+                    // auto：先 CPU（底線）再 Vulkan；優先 Vulkan，失敗自動降層→換碟上 CPU，全程無二次下載
+                    const { cpuPath, vulkanPath } = await ensureLlamaServerPair({ binDir, release, ...onProg });
+                    const r = await startLlamaServerWithFallback({
+                        cpuBinPath: cpuPath, vulkanBinPath: vulkanPath,
+                        gpuLayers, allowCpuFallback: true, onStatus: forwardStatus, ...mgrBase,
+                    });
+                    llamaServer = r.manager;
+                    port = r.port;
+                }
                 dispatcher = new OpenAICompatibleDispatcher(new OpenAICompatibleProvider({ baseURL: `http://${llamaServerHost}:${port}/v1`, model: 'local' }));
             }
             catch (err) {

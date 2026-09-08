@@ -56,6 +56,21 @@
     <p class="hint">點選模型即可切換使用。自行放入 models 資料夾的 .gguf 檔案也會顯示在這裡。</p>
   </section>
 
+  <!-- 執行後端：自動／CPU／GPU（手動覆寫，優先於自動偵測） -->
+  <section class="card">
+    <div class="list-head">
+      <h2>執行後端</h2>
+      <span id="backend-state" class="hint">讀取中…</span>
+    </div>
+    <div id="backend-row" class="backend-row">
+      <button id="backend-auto" type="button" class="btn-ghost btn-small">自動</button>
+      <button id="backend-cpu" type="button" class="btn-ghost btn-small">CPU</button>
+      <button id="backend-gpu" type="button" class="btn-ghost btn-small">GPU</button>
+    </div>
+    <p class="hint">自動：優先試 GPU（Vulkan），失敗自動降層或切回 CPU。GPU 需要 Vulkan 驅動；失敗請切 CPU 或更新驅動。</p>
+    <p id="backend-error" class="error-text" hidden></p>
+  </section>
+
   <section class="card">
     <h2>說明</h2>
     <ul class="desc-list">

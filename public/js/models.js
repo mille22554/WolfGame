@@ -19,6 +19,14 @@
   var modelList = document.getElementById('model-list');
   var downloadMoreBtn = document.getElementById('download-more-btn');
 
+  var backendState = document.getElementById('backend-state');
+  var backendError = document.getElementById('backend-error');
+  var backendBtns = {
+    auto: document.getElementById('backend-auto'),
+    cpu: document.getElementById('backend-cpu'),
+    gpu: document.getElementById('backend-gpu'),
+  };
+
   var downloading = false;
   var selecting = false;
 
@@ -256,6 +264,77 @@
     };
   }
 
+  // 後端三檔（自動／CPU／GPU）：設定持久化，手動優先於自動
+  // 只寫檔不熱切換：POST 成功回來的 note 暫存，下次 repaint 一併顯示（沿用 hint 狀態文字樣式）
+  var backendNote = '';
+  function paintBackend(current) {
+    var labels = { auto: '自動', cpu: 'CPU', gpu: 'GPU' };
+    Object.keys(backendBtns).forEach(function (k) {
+      var b = backendBtns[k];
+      if (!b) return;
+      var active = k === current;
+      b.className = active ? 'btn-primary btn-small' : 'btn-ghost btn-small';
+      b.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+    if (backendState) backendState.textContent = '目前：' + (labels[current] || current) + (backendNote ? '（' + backendNote + '）' : '');
+  }
+
+  function showBackendError(msg) {
+    if (!backendError) return;
+    if (!msg) {
+      backendError.hidden = true;
+      backendError.textContent = '';
+      return;
+    }
+    backendError.hidden = false;
+    backendError.textContent = msg;
+  }
+
+  function fetchBackend() {
+    fetch('/api/backend', { cache: 'no-store' })
+      .then(function (res) {
+        if (!res.ok) throw new Error('後端狀態讀取失敗（' + res.status + '）');
+        return res.json();
+      })
+      .then(function (data) {
+        showBackendError('');
+        paintBackend(data.backend || 'auto');
+      })
+      .catch(function (err) {
+        if (backendState) backendState.textContent = '讀取失敗';
+        showBackendError(err && err.message ? err.message : '讀取失敗');
+      });
+  }
+
+  function setBackend(pref) {
+    showBackendError('');
+    backendNote = '';
+    paintBackend(pref);
+    fetch('/api/backend', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ backend: pref }),
+    })
+      .then(function (res) {
+        if (!res.ok) throw new Error('切換失敗（' + res.status + '）');
+        return res.json();
+      })
+      .then(function (data) {
+        if (data && data.note) backendNote = data.note;
+        fetchBackend();
+      })
+      .catch(function (err) {
+        showBackendError(err && err.message ? err.message : '切換失敗');
+        fetchBackend();
+      });
+  }
+
+  Object.keys(backendBtns).forEach(function (k) {
+    var b = backendBtns[k];
+    if (b) b.addEventListener('click', function () { setBackend(k); });
+  });
+
   fetchStatus();
+  fetchBackend();
   connectWS();
 })();
