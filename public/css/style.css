@@ -867,6 +867,21 @@ aside {
 }
 .lobby-random { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 .lobby-random input { width: 16px; height: 16px; accent-color: #4d7cff; }
+/* 隨機互斥：下拉禁用時視覺變灰，hint 說明實際意義（上限凍結） */
+.lobby-count-row select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  border-color: #333a52;
+}
+.lobby-count-row select.is-random {
+  background: #20263e;
+  color: #8a93b2;
+}
+#lobby-random-hint {
+  color: #ffe08a;
+  font-size: 13px;
+}
+#lobby-random-hint[hidden] { display: none; }
 .lobby-start-row {
   display: flex;
   align-items: center;

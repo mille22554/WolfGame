@@ -96,7 +96,7 @@ test('setRandomCount＋resolveCount：關閉回格數；開啟在 [max(6,真人�
   l.join(3, 'C');
   for (let i = 0; i < 50; i++) {
     const n = l.resolveCount();
-    assert.ok(n >= 3 && n <= 10, `3 真人時隨機 ${n} 不可低於 3`);
+    assert.ok(n >= 6 && n <= 10, `3 真人時隨機 ${n} 不可低於 6`);
   }
   assert.equal(l.snapshot().randomCount, true);
 });
@@ -109,6 +109,44 @@ test('resolveCount：真人坐高位（14/15）→ 下限為最大座位號，�
   for (let i = 0; i < 30; i++) {
     assert.equal(l.resolveCount(), 15);
   }
+});
+
+test('回歸：隨機開啟時下拉值僅為上限（不固定人數決議），改上限後區間跟著走', () => {
+  const l = new LobbyManager(15);
+  l.setRandomCount(true);
+  // 上限 15：每次決議落在 [6, 15]，不恆等於下拉值（上限語義，後端不變）
+  for (let i = 0; i < 30; i++) {
+    const n = l.resolveCount();
+    assert.ok(n >= MIN_PLAYERS && n <= 15, `隨機人數 ${n} 應在 6-15`);
+  }
+  // 縮小下拉（上限）→ 決議區間跟著收斂到 [6, 8]，仍不固定等於 8
+  l.setPlayerCount(8);
+  assert.equal(l.playerCount, 8);
+  for (let i = 0; i < 30; i++) {
+    const n = l.resolveCount();
+    assert.ok(n >= MIN_PLAYERS && n <= 8, `上限改 8 後隨機 ${n} 應在 6-8`);
+  }
+  // 關閉隨機 → 回到下拉定值（開局邏輯不變）
+  l.setRandomCount(false);
+  assert.equal(l.resolveCount(), 8);
+});
+
+test('回歸：快照同步隨機旗標＋人數（開關一致，所有人看到一致）', () => {
+  const l = new LobbyManager(9);
+  assert.equal(l.snapshot().randomCount, false);
+  assert.equal(l.snapshot().playerCount, 9);
+  l.setRandomCount(true);
+  let snap = l.snapshot();
+  assert.equal(snap.randomCount, true);
+  assert.equal(snap.playerCount, 9); // 隨機開啟不動格數，下拉值保留為上限
+  l.setPlayerCount(12);
+  snap = l.snapshot();
+  assert.equal(snap.randomCount, true);
+  assert.equal(snap.playerCount, 12);
+  l.setRandomCount(false);
+  snap = l.snapshot();
+  assert.equal(snap.randomCount, false);
+  assert.equal(snap.playerCount, 12);
 });
 
 test('fillAiSeats／fillDisconnectedAsAi／seatsForStart', () => {

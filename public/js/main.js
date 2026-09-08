@@ -567,7 +567,10 @@
         startHint.textContent = '引擎啟動中…就緒後才能開打';
       } else {
         var n = lobbyPlayerCount(lobby);
-        startHint.textContent = '你是房主，' + n + ' 人局，隨時可以開打！';
+        var isRandom = lobbyRandomEnabled(lobby);
+        startHint.textContent = isRandom
+          ? '你是房主，開局時隨機（上限 ' + n + ' 人），隨時可以開打！'
+          : '你是房主，' + n + ' 人局，隨時可以開打！';
       }
     }
   }
@@ -733,7 +736,10 @@
       }
       suppressCountEvent = true;
       playerCountSel.value = String(count);
-      playerCountSel.disabled = !host;
+      // 互斥：隨機開啟時下拉禁用（上限凍結，改上限需先取消隨機），值仍跟快照一致
+      playerCountSel.disabled = !host || random;
+      if (random) playerCountSel.classList.add('is-random');
+      else playerCountSel.classList.remove('is-random');
       suppressCountEvent = false;
     }
     if (randomCheck) {
@@ -742,8 +748,25 @@
       randomCheck.disabled = !host;
       suppressRandomEvent = false;
     }
+    // 隨機意義文案：所有人跟快照一致（host 看行內 hint，guest 看 guestNote）
+    var randomHint = document.getElementById('lobby-random-hint');
+    if (randomHint) {
+      if (random) {
+        randomHint.textContent = '開局時隨機（上限 ' + count + ' 人）';
+        randomHint.hidden = host ? false : true;
+      } else {
+        randomHint.hidden = true;
+      }
+    }
     if (hostControls) hostControls.hidden = !host;
-    if (guestNote) guestNote.hidden = host;
+    if (guestNote) {
+      guestNote.hidden = host;
+      if (!host) {
+        guestNote.textContent = random
+          ? '房主開啟了隨機人數，開局時隨機（上限 ' + count + ' 人）！'
+          : '房主正在設定人數，坐好準備開打！';
+      }
+    }
     updateStartButton();
   }
 
