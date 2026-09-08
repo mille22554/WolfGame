@@ -725,6 +725,11 @@ aside {
   outline: 2px solid #8aa2ff;
   outline-offset: 1px;
 }
+/* 按鈕不被擠壓＋獨立左邊距：即使 gap 失效，輸入框與按鈕之間仍有縫 */
+.lobby-nick-row button {
+  flex: none;
+  margin-left: 4px;
+}
 #lobby-seats {
   display: flex;
   flex-direction: column;
