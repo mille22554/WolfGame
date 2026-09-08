@@ -267,8 +267,8 @@
     var r = String(reason || '操作被拒絕');
     if (/only host/i.test(r) || /host/.test(r)) return '只有房主可以操作喔';
     if (/game started/i.test(r)) return '遊戲已經開打了，乖乖觀戰吧';
-    if (/seat taken|occupied|taken/i.test(r)) return '這位置剛被搶走，換個空位吧';
-    if (/unknown token/i.test(r)) return '連線身分過期，請重新選座';
+    if (/seat taken|occupied|taken|已有人|已佔用/i.test(r)) return '這位置剛被搶走，再按一次參戰';
+    if (/unknown token/i.test(r)) return '連線身分過期，請重新參戰';
     return r;
   }
 
@@ -505,27 +505,38 @@
   function renderSeats(lobby) {
     var seated = isSeated(lobby);
     var humans = 0;
+    var firstEmpty = -1;
     for (var s = 0; s < lobby.seats.length; s++) {
       if (lobby.seats[s].controlledBy === 'human') humans++;
+      if (firstEmpty < 0 && lobby.seats[s].controlledBy === 'empty') firstEmpty = lobby.seats[s].playerId;
     }
     if (lobbyCount) {
       lobbyCount.textContent = '（' + humans + ' / ' + lobbyPlayerCount(lobby) + ' 人參戰）';
     }
+    // 純清單：不自選座號；未入座顯示「參戰」鈕（自動配最低空位），已入座顯示提示
     var html = '';
+    if (lobby.seats.length === 0) {
+      html = '<div class="msg">座位載入中…</div>';
+    } else if (!seated) {
+      if (firstEmpty > 0) {
+        html += '<button type="button" id="lobby-join-btn" class="lobby-join-btn">＋ 參戰（自動配位）</button>';
+      } else {
+        html += '<div class="msg">參戰名額已滿，只能觀戰了。</div>';
+      }
+    }
     for (var i = 0; i < lobby.seats.length; i++) {
       var seat = lobby.seats[i];
       var pid = seat.playerId;
       var isMine = state.playerId !== null && pid === state.playerId && seat.controlledBy === 'human';
       if (seat.controlledBy === 'empty') {
-        html += '<button type="button" class="seat empty" data-seat="' + pid + '">'
-          + '<span class="seat-id">P' + pid + '</span>'
-          + '<span class="seat-sub">＋ 加入</span></button>';
+        html += '<div class="seat seat-row empty"><span class="seat-id">P' + pid + '</span>'
+          + '<span class="seat-sub">空位</span></div>';
       } else if (seat.controlledBy === 'ai') {
-        html += '<div class="seat ai"><span class="seat-id">P' + pid + '</span>'
+        html += '<div class="seat seat-row ai"><span class="seat-id">P' + pid + '</span>'
           + '<span class="seat-name">' + esc(seat.name || 'AI') + '</span>'
           + '<span class="badge badge-ai">🤖 AI</span></div>';
       } else {
-        html += '<div class="seat human' + (isMine ? ' mine' : '') + '">'
+        html += '<div class="seat seat-row human' + (isMine ? ' mine' : '') + '">'
           + '<span class="seat-id">P' + pid + '</span>'
           + '<span class="seat-name">' + esc(seat.name || ('P' + pid)) + '</span>'
           + '<span class="badge badge-human">🧑 真人</span>';
@@ -540,13 +551,16 @@
     }
     lobbySeats.innerHTML = html || '<div class="msg">座位載入中…</div>';
 
-    var joins = lobbySeats.querySelectorAll('button.seat[data-seat]');
-    for (var b = 0; b < joins.length; b++) {
-      joins[b].addEventListener('click', function () {
-        var target = parseInt(this.getAttribute('data-seat'), 10);
+    var joinBtn = document.getElementById('lobby-join-btn');
+    if (joinBtn) {
+      joinBtn.addEventListener('click', function () {
+        var target = -1;
+        for (var k = 0; k < lobby.seats.length; k++) {
+          if (lobby.seats[k].controlledBy === 'empty') { target = lobby.seats[k].playerId; break; }
+        }
+        if (target < 0) return;
         var name = (lobbyName && lobbyName.value.trim()) || undefined;
         if (name && name.length > 12) name = name.slice(0, 12);
-        // 參戰↔觀戰一鍵切換：已在座位上就先離座再加入新座位（後端 JOIN 會直接換座）
         send({ type: 'JOIN', playerId: target, name: name });
       });
     }
@@ -559,7 +573,6 @@
         send({ type: 'REQUEST_SNAPSHOT' });
       });
     }
-    void seated;
   }
 
   function renderSpectatorZone(lobby) {
@@ -583,7 +596,7 @@
       spectateBtn.hidden = !seated;
     }
     if (lobbyWatchHint) {
-      lobbyWatchHint.textContent = seated ? '想休息就按「轉為觀戰」或自己座位的「離座」。' : '點左方空位就能加入參戰。';
+      lobbyWatchHint.textContent = seated ? '想休息就按「轉為觀戰」或自己座位的「離座」。' : '按「參戰」自動加入，座位由系統分配。';
     }
   }
 
@@ -794,7 +807,7 @@
     boardEl.innerHTML = boardHtml(snapshot);
     boardEl.scrollTop = boardEl.scrollHeight;
     playersEl.innerHTML = playersHtml(snapshot, false);
-    controlsBody.innerHTML = '<div class="msg">觀戰中…（真人請在大廳選座加入）</div>';
+      controlsBody.innerHTML = '<div class="msg">觀戰中…（真人請在大廳按參戰加入）</div>';
   }
 
   // ---------- 玩家 ----------

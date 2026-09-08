@@ -139,8 +139,6 @@ aside {
   background: #1a1e29;
   color: #e8eaf0;
 }
-#lobby-seats button.seat { cursor: pointer; }
-#lobby-seats button.seat:hover { border-color: #4d7cff; background: #232842; }
 #lobby-seats .seat.ai { color: #777; }
 #lobby-seats .seat.human { border-color: #8affc1; }
 #lobby-name {
@@ -724,38 +722,43 @@ aside {
   outline-offset: 1px;
 }
 #lobby-seats {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   margin: 12px 0;
 }
 #lobby-seats .seat {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  gap: 4px;
-  text-align: center;
-  padding: 12px 8px;
+  gap: 10px;
+  text-align: left;
+  padding: 9px 12px;
   border-radius: 10px;
   border: 1px solid #4d5878;
   background: #1a1e29;
   color: #e8eaf0;
   min-width: 0;
 }
-#lobby-seats button.seat {
+#lobby-seats .seat-row.empty { color: #8a93b2; border-style: dashed; }
+#lobby-join-btn {
   cursor: pointer;
   font-size: 14px;
+  font-weight: 700;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #4d7cff;
+  background: #232842;
+  color: #e8eaf0;
   transition: border-color 0.12s ease, background 0.12s ease, transform 0.12s ease;
 }
-#lobby-seats button.seat:hover {
-  border-color: #4d7cff;
-  background: #232842;
+#lobby-join-btn:hover {
+  border-color: #8aa2ff;
+  background: #2a3152;
   transform: translateY(-1px);
 }
-#lobby-seats button.seat:active { transform: translateY(0); background: #20263e; }
-#lobby-seats button.seat:focus-visible,
-.lobby-zone button:focus-visible,
-.lobby-start-row button:focus-visible {
+#lobby-join-btn:active { transform: translateY(0); background: #20263e; }
+#lobby-join-btn:focus-visible {
   outline: 2px solid #8aa2ff;
   outline-offset: 2px;
 }
@@ -924,7 +927,7 @@ aside {
 @media (max-width: 760px) {
   #lobby-panel { padding: 16px 14px; max-height: 94vh; }
   .lobby-grid { grid-template-columns: 1fr; }
-  #lobby-seats { grid-template-columns: repeat(2, 1fr); }
+  /* #lobby-seats 單欄清單，窄版面維持不變 */
   .lobby-chat-row { flex-direction: column; }
   .lobby-chat-row button { align-self: flex-end; }
   #lobby-chat-log { max-height: 150px; }
