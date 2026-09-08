@@ -40,64 +40,69 @@
       setTimeout(connectWS, 3000);
       return;
     }
+    ws.onopen = function () {
+      // 重連成功時：兩階段皆已 ready 但跳轉排程被 onclose 取消（broadcast 不重播）
+      // → 補一次排程，否則頁面停在「就緒，即將進入遊戲…」無跳轉
+      if (llamaReady && modelReady) scheduleRedirect();
+    };
     ws.onmessage = function (ev) {
-    var msg;
-    try {
-      msg = JSON.parse(ev.data);
-    } catch (e) {
-      return;
-    }
-    if (msg.type === 'PING') {
-      ws.send(JSON.stringify({ type: 'PONG' }));
-      return;
-    }
-    if (msg.type !== 'MODEL_STATUS') return;
-    if (msg.state === 'downloading') {
-      if (msg.stage === 'llama-server') {
+      var msg;
+      try {
+        msg = JSON.parse(ev.data);
+      } catch (e) {
+        return;
+      }
+      if (msg.type === 'PING') {
+        ws.send(JSON.stringify({ type: 'PONG' }));
+        return;
+      }
+      if (msg.type !== 'MODEL_STATUS') return;
+      if (msg.state === 'downloading') {
+        if (msg.stage === 'llama-server') {
+          llamaActive = true;
+          cancelRedirect();
+          statusEl.textContent = '下載執行環境（llama-server）…';
+        } else {
+          statusEl.textContent = '模型下載中…';
+        }
+        if (msg.total > 0) {
+          var pct = Math.floor((msg.downloaded / msg.total) * 100);
+          barEl.style.width = pct + '%';
+          textEl.textContent = pct + '%（' + fmtMB(msg.downloaded) + ' / ' + fmtMB(msg.total) + ' MB）';
+        } else {
+          textEl.textContent = fmtMB(msg.downloaded || 0) + ' MB';
+        }
+      } else if (msg.state === 'starting') {
         llamaActive = true;
         cancelRedirect();
-        statusEl.textContent = '下載執行環境（llama-server）…';
-      } else {
-        statusEl.textContent = '模型下載中…';
-      }
-      if (msg.total > 0) {
-        var pct = Math.floor((msg.downloaded / msg.total) * 100);
-        barEl.style.width = pct + '%';
-        textEl.textContent = pct + '%（' + fmtMB(msg.downloaded) + ' / ' + fmtMB(msg.total) + ' MB）';
-      } else {
-        textEl.textContent = fmtMB(msg.downloaded || 0) + ' MB';
-      }
-    } else if (msg.state === 'starting') {
-      llamaActive = true;
-      cancelRedirect();
-      statusEl.textContent = '啟動執行環境…';
-    } else if (msg.state === 'ready') {
-      if (msg.stage === 'llama-server') {
-        llamaReady = true;
-        barEl.style.width = '100%';
-        if (modelReady) {
-          statusEl.textContent = '就緒，即將進入遊戲…';
-          scheduleRedirect();
+        statusEl.textContent = '啟動執行環境…';
+      } else if (msg.state === 'ready') {
+        if (msg.stage === 'llama-server') {
+          llamaReady = true;
+          barEl.style.width = '100%';
+          if (modelReady) {
+            statusEl.textContent = '就緒，即將進入遊戲…';
+            scheduleRedirect();
+          } else {
+            statusEl.textContent = '執行環境就緒，準備下載模型…';
+          }
         } else {
-          statusEl.textContent = '執行環境就緒，準備下載模型…';
+          // stage === 'model'（或舊版無 stage）：最後階段
+          modelReady = true;
+          barEl.style.width = '100%';
+          if (!llamaActive || llamaReady) {
+            statusEl.textContent = '模型就緒，即將進入遊戲…';
+            scheduleRedirect();
+          } else {
+            statusEl.textContent = '模型就緒，啟動執行環境…';
+          }
         }
-      } else {
-        // stage === 'model'（或舊版無 stage）：最後階段
-        modelReady = true;
-        barEl.style.width = '100%';
-        if (!llamaActive || llamaReady) {
-          statusEl.textContent = '模型就緒，即將進入遊戲…';
-          scheduleRedirect();
-        } else {
-          statusEl.textContent = '模型就緒，啟動執行環境…';
-        }
+      } else if (msg.state === 'error') {
+        cancelRedirect();
+        statusEl.textContent = '下載失敗：' + (msg.error || '未知錯誤');
+        retryBtn.hidden = false;
       }
-    } else if (msg.state === 'error') {
-      cancelRedirect();
-      statusEl.textContent = '下載失敗：' + (msg.error || '未知錯誤');
-      retryBtn.hidden = false;
-    }
-  };
+    };
     ws.onclose = function () {
       // 斷線 3 秒後重連（下載中斷線否則頁面凍結；同 models.js）
       cancelRedirect();
