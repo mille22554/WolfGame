@@ -21,12 +21,12 @@
 
 - `Read` / `Write` / `Bash cat/head/tail/grep` 觸及 `game-state.json`
 - `Read` / `Write` 觸及 `character/*/memory.md`（含批次重建、校驗、重寫）
-- `Bash` 執行 `node gm-helper.mjs` / `node dist/gm.js` 任一子指令（`init`/`state`/`night`/`vote`/`speak`/`mason-chat`/`start-day`/`reveal`）
-- `Bash` 執行任何 `gen-memory.mjs` / `gen_prefab.js` 類批量推導腳本（若其讀 L2）
+- `Bash` 執行 `node scripts/gm-helper.mjs` / `node dist/gm.js` 任一子指令（`init`/`state`/`night`/`vote`/`speak`/`mason-chat`/`start-day`/`reveal`）
+- `Bash` 執行任何 `scripts/gen-memory.mjs` / `gen_prefab.js` 類批量推導腳本（若其讀 L2）
 - `Grep` 搜尋 `game-state.json` 內容並在主 session 展開結果
 - 對使用者輸出 GM 思考過程 / todo 更新 / 子代理派發與驗收狀態等程序進程資訊（主 session 輸出僅限遊戲資訊）
 
-**主 session 允許**：`Read character/game-public.md`、`Bash node gm-helper.mjs state --public`（已過濾）、轉述公開發言。
+**主 session 允許**：`Read character/game-public.md`、`Bash node scripts/gm-helper.mjs state --public`（已過濾）、轉述公開發言。
 
 ### 0.3 強制路由表（誰做、怎麼驗）
 
@@ -40,21 +40,21 @@
 ### 0.4 執行前自檢 3 問（每次想用 Read/Bash/Write 前必答）
 
 1. 目標檔/指令是否含 L1/L2？ → 是 → 立即改派 `@fixer`
-2. 是否為 `gm-helper.mjs` / `dist/gm.js` 相關？ → 是 → 立即改派
+2. 是否為 `scripts/gm-helper.mjs` / `dist/gm.js` 相關？ → 是 → 立即改派
 3. 是否需寫多檔或批次？ → 是 → 拆多 `@fixer` 並行 lane
 
 三問任一為「是」，**不得直做**。在對話中聲稱「直做更快」視為違規。
 
 ### 0.5 違規即作廢
 
-- 主 session 一旦 `Read game-state.json` 或 `Bash gm-helper.mjs` 未經委派，即視為**上下文污染**，按 `附錄B` 視為外洩事故：該局作廢或重開，手冊要求 `task_revive` 重做隔離批次並審計。
+- 主 session 一旦 `Read game-state.json` 或 `Bash scripts/gm-helper.mjs` 未經委派，即視為**上下文污染**，按 `附錄B` 視為外洩事故：該局作廢或重開，手冊要求 `task_revive` 重做隔離批次並審計。
 - 已污染的主 session 不得再以「已過濾」為由繼續，需重開乾淨 session 或明確標記污染並重派。
 
 ### 0.6 正確 vs 錯誤範例
 
 ```ts
 // ❌ 錯誤（主 session 直做，禁止）
-await bash("node gm-helper.mjs init 15")
+await bash("node scripts/gm-helper.mjs init 15")
 const state = await read("game-state.json")
 await write("character/ryoko/memory.md", "...role...")
 console.log(state.players) // 污染
@@ -62,7 +62,7 @@ console.log(state.players) // 污染
 // ✅ 正確（委派紅區子 session）
 task(subagent_type="fixer", background=true, prompt(`
   在隔離終端執行：
-  1. node gm-helper.mjs init 15
+  1. node scripts/gm-helper.mjs init 15
   2. 一次性讀 game-state.json 全量 → 批次寫15份 memory.md → 執行 4.5 Checklist
   3. 重建 game-public.md（僅白名單）
   回傳：Checklist 布林表 + state --public 視圖 + game-public.md 內容
@@ -115,7 +115,7 @@ character/
    - 每個：agents.md（靜態人設，標題通用化，不含硬編碼 P#）
 
 2. init <N> → 隨機分配角色 + 個性
-   - 執行：node gm-helper.mjs init <N>
+   - 執行：node scripts/gm-helper.mjs init <N>
    - 此步驟寫入 game-state.json（權威映射）
 
 3-4. 原子性流程（不可拆分、不可交叉寫入）：
@@ -163,7 +163,7 @@ character/
 
 ```
 1. init <N> → 重新分配角色 + 個性
-   - 執行：node gm-helper.mjs init <N>
+   - 執行：node scripts/gm-helper.mjs init <N>
    - 覆寫 game-state.json（新權威映射）
 
 2. 原子性重建（同 Phase 0 步驟 3-4.5）：
@@ -197,7 +197,7 @@ character/
 - 每個子 session 的 prompt 使用下方「參與者 prompt 模板」
 - **所有子 session 必須在同一時間同時派發**，不得分批、不得等待前一個完成再派下一個
 - 每個子 session 會在自己內部自主循環多輪讀寫，直到達成共識才回傳
-- 參與者寫入白板前需透過 `node meeting-lock.mjs acquire character/[白板名].lock` 取得 lock。若 lock 被佔，執行 `wait` 等待後重讀白板再判斷。白板開頭以 `<!-- version: N -->` 標記版次；寫入時讀取版次、寫入內容後更新版次，確保不覆蓋他人。詳見參與者模板 C。
+- 參與者寫入白板前需透過 `node scripts/meeting-lock.mjs acquire character/[白板名].lock` 取得 lock。若 lock 被佔，執行 `wait` 等待後重讀白板再判斷。白板開頭以 `<!-- version: N -->` 標記版次；寫入時讀取版次、寫入內容後更新版次，確保不覆蓋他人。詳見參與者模板 C。
 
 **步驟 A3：等待全部回傳**
 - GM 等待所有 N 個 background task 完成
@@ -264,7 +264,7 @@ character/
 你有了想法後，嘗試寫入白板：
 1. 先讀取白板，記下當前版次（`<!-- version: N -->`）
 2. 準備好你想寫的內容
-3. 嘗試取得 lock：執行 `node meeting-lock.mjs acquire character/[白板檔案名].lock`
+3. 嘗試取得 lock：執行 `node scripts/meeting-lock.mjs acquire character/[白板檔案名].lock`
    - 成功 → 進入第三步
    - 失敗（lock 被佔）→ 進入第四步
 
@@ -272,11 +272,11 @@ character/
 1. 重新讀取白板，確認版次未變（若已變，代表有人在你等待時寫入了，必須放棄本次寫入、回到第二步）
 2. 把你的發言寫進白板「發言紀錄」區，格式：`P[編號]：[你的發言]`
 3. 更新版次：在白板開頭更新 `<!-- version: N+1 -->`
-4. 釋放 lock：執行 `node meeting-lock.mjs release character/[白板檔案名].lock`
+4. 釋放 lock：執行 `node scripts/meeting-lock.mjs release character/[白板檔案名].lock`
 5. 進入第五步（監聽）
 
 ### 第四步：等待 lock 釋放
-1. 執行 `node meeting-lock.mjs wait character/[白板檔案名].lock`
+1. 執行 `node scripts/meeting-lock.mjs wait character/[白板檔案名].lock`
 2. lock 釋放後，重新讀取白板（含最新發言）
 3. 連同你之前的思考，重新思考你該說什麼
 4. 回到第二步（嘗試寫入）
@@ -365,7 +365,7 @@ character/
    - 參與者 prompt：使用通用模板，替換變數區塊
 
 4. 執行 night 指令：
-   node gm-helper.mjs night '{seerCheck, wolfKill, guardProtect}'
+   node scripts/gm-helper.mjs night '{seerCheck, wolfKill, guardProtect}'
    ※ guardProtect 在 Day1 夜為 null（守衛未參與）
 
 5. 結果處理：
@@ -468,7 +468,7 @@ if (Day === 1) {
 2. 收集所有回覆
 
 3. 執行 vote 指令：
-   node gm-helper.mjs vote '[{voterId, targetId}, ...]'
+   node scripts/gm-helper.mjs vote '[{voterId, targetId}, ...]'
 
 4. 結果處理：
    - 公開：票數統計、是否有人被票出
@@ -489,7 +489,7 @@ Phase 1 → Phase 2 → Phase 3 → Phase 1 → ... 直到遊戲結束
 
 | 區域 | 定義 | 可見資訊 | 操作 |
 |------|------|----------|------|
-| 🔴 紅區（子 session） | 執行 `gm-helper.mjs` 的隔離終端（`@fixer` 專屬） | 可讀 `game-state.json` 全量（含私密欄位） | **所有** `gm-helper.mjs` 指令（`init`/`state`/`night`/`vote`/`mason-chat`/`speak`/`start-day`/`reveal`）**必須**在此執行，且須 `task(background=true)` 委派 |
+| 🔴 紅區（子 session） | 執行 `scripts/gm-helper.mjs` 的隔離終端（`@fixer` 專屬） | 可讀 `game-state.json` 全量（含私密欄位） | **所有** `scripts/gm-helper.mjs` 指令（`init`/`state`/`night`/`vote`/`mason-chat`/`speak`/`start-day`/`reveal`）**必須**在此執行，且須 `task(background=true)` 委派 |
 | 🟢 綠區（主 session） | GM 與使用者對話的主終端（Orchestrator） | 僅 `game-public.md` 白名單 + `state --public` 過濾視圖 | 僅處理公開資訊、協調角色 sessions、轉述公開發言；**禁止任何 Read/Bash 觸及 L1/L2**；不得直接貼上紅區快照 |
 
 **紀律（§0 覆蓋）：**
@@ -515,10 +515,10 @@ Phase 1 → Phase 2 → Phase 3 → Phase 1 → ... 直到遊戲結束
 
 ### 快照過濾規則
 
-- `gm-helper.mjs state` / `gm-helper.mjs night` 返回含私密欄位（全角色分配、夜間行動明細、占卜/靈能原始結果）。
+- `scripts/gm-helper.mjs state` / `scripts/gm-helper.mjs night` 返回含私密欄位（全角色分配、夜間行動明細、占卜/靈能原始結果）。
 - **GM 不得直接貼入角色 session**：禁止將 `state`/`night` 原始 JSON 貼給任何角色 session 或綠區使用者。
 - 須過濾後分發：僅提取該角色有權限的片段（如占卜師僅給其 `seerResult`），或使用 `--public` 參數取得已過濾公開視圖。
-- 範例：`node gm-helper.mjs state --public`（若引擎支援）→ 可安全寫入 `game-public.md`；否則 GM 手動摘取公開欄位重組。
+- 範例：`node scripts/gm-helper.mjs state --public`（若引擎支援）→ 可安全寫入 `game-public.md`；否則 GM 手動摘取公開欄位重組。
 
 ## 關鍵原則
 
@@ -541,26 +541,26 @@ Phase 1 → Phase 2 → Phase 3 → Phase 1 → ... 直到遊戲結束
 
 ```bash
 # 初始化（紅區執行，寫權威映射）
-node gm-helper.mjs init <人數>
+node scripts/gm-helper.mjs init <人數>
 
 # 查看狀態（含私密欄位 ⚠️ 不得直貼角色 session，須過濾或加 --public）
-node gm-helper.mjs state
-node gm-helper.mjs state --public   # 僅公開視圖，可安全寫入 game-public.md
+node scripts/gm-helper.mjs state
+node scripts/gm-helper.mjs state --public   # 僅公開視圖，可安全寫入 game-public.md
 
 # 開始白天
-node gm-helper.mjs start-day
+node scripts/gm-helper.mjs start-day
 
 # 夜間行動（含私密欄位 ⚠️ 返回含占卜/靈能/襲擊明細，須過濾分發）
-node gm-helper.mjs night '{seerCheck, wolfKill, guardProtect}'
+node scripts/gm-helper.mjs night '{seerCheck, wolfKill, guardProtect}'
 
 # 記錄發言（公開，每句後原子寫入 game-public.md）
-node gm-helper.mjs speak <id> '<訊息>'
+node scripts/gm-helper.mjs speak <id> '<訊息>'
 
 # 投票
-node gm-helper.mjs vote '[{voterId, targetId}, ...]'
+node scripts/gm-helper.mjs vote '[{voterId, targetId}, ...]'
 
 # 共有者私聊（僅兩共有者可見，不入公開紀錄）
-node gm-helper.mjs mason-chat <id> '<訊息>'
+node scripts/gm-helper.mjs mason-chat <id> '<訊息>'
 ```
 
 > ⚠️ 標註「含私密欄位」的指令，其原始輸出禁止未過濾進入角色 session 或綠區。

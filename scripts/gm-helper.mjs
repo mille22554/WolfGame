@@ -5,7 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const gmPath = path.join(__dirname, 'dist', 'gm.js');
+const gmPath = path.join(__dirname, '..', 'dist', 'gm.js');
 
 // Helper to escape argument for Windows cmd.exe: double quotes inside are doubled, then wrapped in double quotes
 function shellQuote(str) {
@@ -19,7 +19,7 @@ function shellQuote(str) {
 // Execute gm.js with given argument string, return stdout as string
 function runGm(argStr) {
   const cmd = `node ${shellQuote(gmPath)} ${argStr}`;
-  return execSync(cmd, { encoding: 'utf-8', cwd: __dirname, stdio: 'pipe' });
+  return execSync(cmd, { encoding: 'utf-8', cwd: path.join(__dirname, '..'), stdio: 'pipe' });
 }
 
 function parseJsonOutput(output) {
