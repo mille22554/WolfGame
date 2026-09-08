@@ -220,6 +220,11 @@
         if (nameMaskError) nameMaskError.hidden = true;
         send({ type: 'REQUEST_SNAPSHOT' });
       } else if (msg.type === 'JOIN_REJECTED') {
+        // 無效 token 清除，避免無限重連迴圈
+        if (/token|unknown/i.test(msg.reason || '')) {
+          state.token = null;
+          try { localStorage.removeItem(TOKEN_KEY); } catch (e) { /* ignore */ }
+        }
         showLobbyError(friendlyReason(msg.reason));
         showError(friendlyReason(msg.reason));
       } else if (msg.type === 'LEFT_LOBBY') {
@@ -272,6 +277,8 @@
       } else if (msg.type === 'PING') {
         send({ type: 'PONG' });
       } else if (msg.type === 'SHUTDOWN') {
+        // 伺服器已關閉：停止重連，避免 onclose 覆寫訊息並無限重連
+        left = true;
         overlayText.textContent = '伺服器已關閉';
         overlayEl.hidden = false;
         try {

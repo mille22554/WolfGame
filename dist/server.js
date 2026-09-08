@@ -642,17 +642,18 @@ export class WebSocketRegistry {
         const now = Date.now();
         const ping = { type: 'PING' };
         for (const c of [...this.clients]) {
-            if (now - c.lastPong > this.opts.pingTimeoutMs) {
-                try {
-                    c.ws.terminate();
-                }
-                catch { /* ignore */ }
-                continue;
-            }
+            // 先發 PING，讓客戶端有時間回覆 PONG
             try {
                 c.ws.send(JSON.stringify(ping));
             }
             catch { /* ignore */ }
+            // 再檢查上一次 PONG 是否超過 interval + timeout
+            if (now - c.lastPong > this.opts.pingIntervalMs + this.opts.pingTimeoutMs) {
+                try {
+                    c.ws.terminate();
+                }
+                catch { /* ignore */ }
+            }
         }
     }
 }
