@@ -77,6 +77,12 @@
     });
   }
 
+  function fmtMB1(n) {
+    var v = Number(n);
+    if (!isFinite(v)) return '0.0';
+    return (Math.round(v * 10) / 10).toFixed(1);
+  }
+
   function setConn(text) {
     connEl.textContent = text;
   }
@@ -136,8 +142,23 @@
           if (state.mode !== 'player') state.mode = 'spectator';
           renderSpectator(msg.snapshot, msg.gmView);
         }
+      } else if (msg.type === 'ERROR') {
+        // 後端延遲啟動失敗（例如模型未就緒）：顯示錯誤，不再空白卡死
+        phaseEl.textContent = '啟動失敗';
+        showError(msg.message || '啟動失敗');
       } else if (msg.type === 'MODEL_STATUS') {
-        // 下載頁處理；主頁忽略
+        // 引擎準備進度（模型 / llama-server 下載中）：顯示在狀態列，避免空白等待
+        if (msg.state === 'downloading') {
+          var prog = msg.total > 0
+            ? Math.floor((msg.downloaded / msg.total) * 100) + '%（' + fmtMB1(msg.downloaded / 1048576) + ' / ' + fmtMB1(msg.total / 1048576) + ' MB）'
+            : (msg.downloaded ? fmtMB1(msg.downloaded / 1048576) : '0.0') + ' MB';
+          phaseEl.textContent = (msg.stage === 'llama-server' ? '下載執行環境…' : '模型下載中…') + prog;
+        } else if (msg.state === 'ready') {
+          phaseEl.textContent = msg.stage === 'llama-server' ? '執行環境就緒' : '模型就緒';
+        } else if (msg.state === 'error') {
+          phaseEl.textContent = '啟動失敗';
+          showError('啟動失敗：' + (msg.error || '未知錯誤'));
+        }
       } else if (msg.type === 'PING') {
         send({ type: 'PONG' });
       } else if (msg.type === 'SHUTDOWN') {
