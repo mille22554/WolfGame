@@ -46,7 +46,7 @@ export interface ServerLLM extends LLMDispatcher {
 }
 
 export interface ServerOptions {
-  port?: number;                    // env PORT；0 = 自動（2063 起）
+  port?: number;                    // env PORT；0 = 自動（2639 起）
   playerCount?: number;             // env PLAYER_COUNT，預設 15
   publicDir?: string;               // 預設 <resourceRoot>/public
   modelsDir?: string;
@@ -1078,7 +1078,7 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
   process.on('SIGINT', onSignal);
   process.on('SIGTERM', onSignal);
 
-  const port = portOpt === 0 ? await findAvailablePort(2063) : portOpt;
+  const port = portOpt === 0 ? await findAvailablePort(2639) : portOpt;
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject);
     httpServer.listen(port, () => resolve());

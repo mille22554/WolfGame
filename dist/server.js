@@ -1020,7 +1020,7 @@ export async function startServer(options = {}) {
     };
     process.on('SIGINT', onSignal);
     process.on('SIGTERM', onSignal);
-    const port = portOpt === 0 ? await findAvailablePort(2063) : portOpt;
+    const port = portOpt === 0 ? await findAvailablePort(2639) : portOpt;
     await new Promise((resolve, reject) => {
         httpServer.once('error', reject);
         httpServer.listen(port, () => resolve());
