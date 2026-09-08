@@ -102,8 +102,8 @@ export class LobbyManager {
         const lo = Math.max(MIN_PLAYERS, maxSeat);
         return lo + Math.floor(Math.random() * (this._playerCount - lo + 1));
     }
-    /** 入座（空位限定）：佔座＋發 token */
-    join(playerId, name) {
+    /** 入座（空位限定）：佔座＋發 token；與 SET_NAME 同邏輯查重名（trim、排除自己），重名拒收 */
+    join(playerId, name, clientId) {
         if (!Number.isInteger(playerId) || playerId < 1 || playerId > this._playerCount) {
             throw new Error(`座位必須是 1-${this._playerCount}，輸入為：${playerId}`);
         }
@@ -112,6 +112,16 @@ export class LobbyManager {
             throw new Error(seat.controlledBy === 'ai' ? `座位 P${playerId} 已由 AI 佔用` : `座位 P${playerId} 已有人`);
         }
         const clean = (name ?? '').trim().slice(0, 12);
+        for (const s of this.seats) {
+            if (s.controlledBy === 'human' && s.name !== '' && s.name === clean) {
+                throw new Error('名稱已被使用');
+            }
+        }
+        for (const [cid, sp] of this.spectators) {
+            if ((clientId === undefined || cid !== clientId) && sp.name === clean) {
+                throw new Error('名稱已被使用');
+            }
+        }
         seat.controlledBy = 'human';
         seat.name = clean;
         seat.disconnected = false;

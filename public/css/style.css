@@ -140,13 +140,6 @@ aside {
   color: #e8eaf0;
 }
 #lobby-seats .seat.human { border-color: #8affc1; }
-#lobby-name {
-  background: #14161c;
-  color: #e8eaf0;
-  border: 1px solid #4d5878;
-  border-radius: 6px;
-  padding: 6px 8px;
-}
 #disconnect-overlay {
   position: fixed;
   inset: 0;

@@ -956,7 +956,7 @@ export async function startServer(options = {}) {
                 if (started || engine)
                     return { accepted: false, reason: 'game started' };
                 try {
-                    const { token } = lobby.join(playerId, name);
+                    const { token } = lobby.join(playerId, name, clientId);
                     lobby.adoptSpectatorIdentity(clientId, prevToken, token);
                     lobby.removeSpectator(clientId);
                     registry.sendLobby(lobby.snapshot());

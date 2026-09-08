@@ -1018,7 +1018,7 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
       join: (clientId, playerId, name, prevToken) => {
         if (started || engine) return { accepted: false, reason: 'game started' };
         try {
-          const { token } = lobby.join(playerId, name);
+          const { token } = lobby.join(playerId, name, clientId);
           lobby.adoptSpectatorIdentity(clientId, prevToken, token);
           lobby.removeSpectator(clientId);
           registry.sendLobby(lobby.snapshot());

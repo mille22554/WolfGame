@@ -71,7 +71,6 @@
   var overlayText = document.getElementById('disconnect-text');
   var lobbyOverlay = document.getElementById('lobby-overlay');
   var lobbySeats = document.getElementById('lobby-seats');
-  var lobbyName = document.getElementById('lobby-name');
   var startBtn = document.getElementById('start-btn');
   var lobbyError = document.getElementById('lobby-error');
   var lobbyCount = document.getElementById('lobby-count');
@@ -346,8 +345,6 @@
   function selfNames() {
     var names = [];
     try {
-      var v = lobbyName && lobbyName.value ? lobbyName.value.trim() : '';
-      if (v) names.push(v);
       var v2 = mynameInput && mynameInput.value ? mynameInput.value.trim() : '';
       if (v2) names.push(v2);
       var v3 = nameMaskInput && nameMaskInput.value ? nameMaskInput.value.trim() : '';
@@ -510,9 +507,22 @@
     try {
       localStorage.setItem(NAME_KEY, name);
     } catch (e) { /* ignore */ }
-    if (lobbyName && !lobbyName.value) lobbyName.value = name;
     if (mynameInput && document.activeElement !== mynameInput) mynameInput.value = name;
     if (nameMaskInput && document.activeElement !== nameMaskInput) nameMaskInput.value = name;
+  }
+
+  // 已命名身份：具名觀眾／改名列／存檔，參戰按鈕直接拿來 JOIN（未命名時取名遮罩擋住，不可達）
+  function currentConfirmedName() {
+    var v = mynameInput && mynameInput.value ? mynameInput.value.trim() : '';
+    if (v) return v.slice(0, 12);
+    var me = state.lobby ? mySpectatorEntry(state.lobby) : null;
+    if (me && me.name) return String(me.name).slice(0, 12);
+    try {
+      var sn = localStorage.getItem(NAME_KEY) || '';
+      sn = sn.trim();
+      if (sn) return sn.slice(0, 12);
+    } catch (e) { /* ignore */ }
+    return '';
   }
 
   function submitName(inputEl) {
@@ -599,7 +609,7 @@
       }
       nameMask.hidden = !need;
     }
-    // 具名後預填參戰暱稱欄，參戰不用重打
+    // 具名後預填改名列，參戰不用重打
     var meEntry = mySpectatorEntry(lobby);
     var mySeatEntry = mySeat(lobby);
     var confirmed = (mySeatEntry && mySeatEntry.name) || (meEntry && meEntry.name) || '';
@@ -607,7 +617,6 @@
       try {
         localStorage.setItem(NAME_KEY, confirmed);
       } catch (e) { /* ignore */ }
-      if (lobbyName && !lobbyName.value) lobbyName.value = confirmed;
       if (mynameInput && document.activeElement !== mynameInput && !mynameInput.value) mynameInput.value = confirmed;
     }
   }
@@ -665,12 +674,11 @@
           if (lobby.seats[k].controlledBy === 'empty') { target = lobby.seats[k].playerId; break; }
         }
         if (target < 0) return;
-        var name = (lobbyName && lobbyName.value.trim()) || '';
+        var name = currentConfirmedName();
         if (name.length === 0) {
-          showLobbyError('先取個暱稱再參戰吧');
+          showLobbyError('先取個名字再參戰吧');
           return;
         }
-        if (name.length > 12) name = name.slice(0, 12);
         send({ type: 'JOIN', playerId: target, name: name });
       });
     }
@@ -790,19 +798,10 @@
   try {
     var savedName = localStorage.getItem(NAME_KEY);
     if (savedName) {
-      if (lobbyName && !lobbyName.value) lobbyName.value = savedName;
       if (mynameInput && !mynameInput.value) mynameInput.value = savedName;
       if (nameMaskInput && !nameMaskInput.value) nameMaskInput.value = savedName;
     }
   } catch (e) { /* ignore */ }
-  if (lobbyName) {
-    lobbyName.addEventListener('input', function () {
-      if (lobbyName.value.length > 12) lobbyName.value = lobbyName.value.slice(0, 12);
-      try {
-        localStorage.setItem(NAME_KEY, lobbyName.value);
-      } catch (e) { /* ignore */ }
-    });
-  }
   if (mynameInput) {
     mynameInput.addEventListener('input', function () {
       if (mynameInput.value.length > 12) mynameInput.value = mynameInput.value.slice(0, 12);

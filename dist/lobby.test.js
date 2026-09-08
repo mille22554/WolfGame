@@ -145,7 +145,7 @@ test('具名觀眾參戰→離席：沿用同一編號＋原名', () => {
     assert.equal(named.name, '小明');
     const first = l.snapshot().spectators.find((s) => s.clientId === 'c1');
     assert.equal(first.name, '小明');
-    const { token: seatToken } = l.join(2, '小明');
+    const { token: seatToken } = l.join(2, '小明', 'c1');
     l.adoptSpectatorIdentity('c1', named.token, seatToken);
     l.removeSpectator('c1');
     assert.equal(l.snapshot().spectators.length, 0);
@@ -184,6 +184,29 @@ test('SET_NAME：與他人重名拒收（座位／觀眾），自己沿用舊名
     assert.throws(() => l.setName('c8', { playerId: 2, name: '全新名' }), /尚未參戰/);
     // 自己重送同名放行
     assert.equal(l.setName('c9', { name: '小明' }).name, '小明');
+});
+test('JOIN：與他人重名拒收（座位／觀眾，含空白變體）', () => {
+    const l = new LobbyManager(6);
+    l.join(1, '老大', 'c-host');
+    l.setName('c9', { name: '小明' });
+    // 與座位重名 → 拒收（既有錯誤通道：throw → JOIN_REJECTED）
+    assert.throws(() => l.join(2, '老大', 'c8'), /已被使用/);
+    // 與觀眾重名 → 拒收（改名列打了重名、直接按參戰的場景）
+    assert.throws(() => l.join(2, '小明', 'c8'), /已被使用/);
+    // 前後空白視為同名 → 拒收
+    assert.throws(() => l.join(2, '  老大  ', 'c8'), /已被使用/);
+    // 座位仍為空，未被髒寫
+    assert.equal(l.snapshot().seats[1].controlledBy, 'empty');
+});
+test('JOIN：自己沿用舊名放行', () => {
+    const l = new LobbyManager(6);
+    const named = l.setName('c9', { name: '小明' });
+    const { token } = l.join(2, '小明', 'c9');
+    assert.ok(token.length > 0);
+    assert.equal(l.snapshot().seats[1].name, '小明');
+    l.adoptSpectatorIdentity('c9', named.token, token);
+    l.removeSpectator('c9');
+    assert.equal(l.snapshot().seats[1].controlledBy, 'human');
 });
 test('SET_NAME 改名即時更新名單（座位＋觀眾）', () => {
     const l = new LobbyManager(6);

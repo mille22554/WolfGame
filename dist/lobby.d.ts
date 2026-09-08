@@ -49,8 +49,8 @@ export declare class LobbyManager {
     /** 開局人數解析：隨機開啟時在 [max(6, 真人最大座位號), 座位格數] 均勻擲出，否則為座位格數
      *（下限用最大座位號而非真人數：真人坐 14/15 號時擲出 6 會超出新 engine 人數而被排除） */
     resolveCount(): number;
-    /** 入座（空位限定）：佔座＋發 token */
-    join(playerId: number, name?: string): {
+    /** 入座（空位限定）：佔座＋發 token；與 SET_NAME 同邏輯查重名（trim、排除自己），重名拒收 */
+    join(playerId: number, name?: string, clientId?: string): {
         token: string;
     };
     /** 離座→觀戰：座位清空，token＋名字進 limbo（重連可拿回）；tokens 映射同步刪除 */
