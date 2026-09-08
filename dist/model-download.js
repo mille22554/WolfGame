@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { StallGuard, downloadStallTimeoutMs } from './download-stall.js';
 /** 'hf:owner/repo:file' → HF resolve URL；'https://...' 直通 */
 export function parseModelUri(uri) {
     if (uri.startsWith('hf:')) {
@@ -45,38 +46,51 @@ export async function downloadModelFile(uri, modelsDir, onProgress, fetchImpl = 
     catch {
         /* fallthrough：繼續下載 */
     }
-    const res = await fetchImpl(url);
-    if (!res.ok) {
-        throw new Error(`下載失敗（HTTP ${res.status}）`);
-    }
-    const total = Number(res.headers.get('content-length') ?? 0);
-    const tmp = target + '.tmp';
-    let downloaded = 0;
+    // 停滯超時（idle）：一段時間無任何 bytes 進展就 abort；每 chunk 重置，不用固定總時長
+    const guard = new StallGuard(downloadStallTimeoutMs(), '模型');
     try {
-        if (!res.body)
-            throw new Error('下載失敗：回應無 body');
-        const source = Readable.fromWeb(res.body);
-        const dest = fs.createWriteStream(tmp);
-        dest.on('data', () => undefined);
-        // 手動計數：監聽 source data
-        source.on('data', (chunk) => {
-            downloaded += chunk.length;
+        const res = await fetchImpl(url, { signal: guard.signal });
+        if (!res.ok) {
+            throw new Error(`下載失敗（HTTP ${res.status}）`);
+        }
+        const total = Number(res.headers.get('content-length') ?? 0);
+        const tmp = target + '.tmp';
+        let downloaded = 0;
+        try {
+            if (!res.body)
+                throw new Error('下載失敗：回應無 body');
+            const source = Readable.fromWeb(res.body);
+            const dest = fs.createWriteStream(tmp);
+            dest.on('data', () => undefined);
+            // 手動計數：監聽 source data（每 chunk 同時重置停滯計時）
+            source.on('data', (chunk) => {
+                downloaded += chunk.length;
+                onProgress?.(downloaded, total);
+                guard.reset();
+            });
+            await pipeline(source, dest, { signal: guard.signal });
+            // content-length 未提供時補一次最終回呼
             onProgress?.(downloaded, total);
-        });
-        await pipeline(source, dest);
-        // content-length 未提供時補一次最終回呼
-        onProgress?.(downloaded, total);
-        fs.renameSync(tmp, target);
-        return target;
+            fs.renameSync(tmp, target);
+            return target;
+        }
+        catch (err) {
+            try {
+                fs.rmSync(tmp, { force: true });
+            }
+            catch {
+                /* ignore */
+            }
+            throw err;
+        }
     }
     catch (err) {
-        try {
-            fs.rmSync(tmp, { force: true });
-        }
-        catch {
-            /* ignore */
-        }
+        if (guard.didStall)
+            throw guard.stallError();
         throw err;
+    }
+    finally {
+        guard.cancel();
     }
 }
 //# sourceMappingURL=model-download.js.map

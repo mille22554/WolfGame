@@ -13,6 +13,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import AdmZip from 'adm-zip';
 import { getDataDir } from './utils.js';
+import { StallGuard, downloadStallTimeoutMs } from './download-stall.js';
 
 export const DEFAULT_LLAMA_SERVER_RELEASE = 'b10361';
 export const DEFAULT_LLAMA_SERVER_PORT = 2064;
@@ -53,29 +54,39 @@ export async function ensureLlamaServer(options: LlamaServerDownloadOptions = {}
   fs.mkdirSync(binDir, { recursive: true });
   const zipPath = path.join(binDir, `llama-${release}.zip.tmp`);
   const url = llamaServerDownloadUrl(release);
-  const res = await fetchImpl(url);
-  if (!res.ok) {
-    throw new Error(`llama-server 下載失敗（HTTP ${res.status}）`);
-  }
-  const total = Number(res.headers.get('content-length') ?? 0);
-  let downloaded = 0;
+  // 停滯超時（idle）：一段時間無任何 bytes 進展就 abort；每 chunk 重置，不用固定總時長
+  const guard = new StallGuard(downloadStallTimeoutMs(), 'llama-server ');
   try {
-    if (!res.body) throw new Error('llama-server 下載失敗：回應無 body');
-    const source = Readable.fromWeb(res.body as import('node:stream/web').ReadableStream);
-    const dest = fs.createWriteStream(zipPath);
-    source.on('data', (chunk: Buffer) => {
-      downloaded += chunk.length;
-      options.onProgress?.(downloaded, total);
-    });
-    await pipeline(source, dest);
-    options.onProgress?.(downloaded, total);
-  } catch (err) {
-    try {
-      fs.rmSync(zipPath, { force: true });
-    } catch {
-      /* ignore */
+    const res = await fetchImpl(url, { signal: guard.signal });
+    if (!res.ok) {
+      throw new Error(`llama-server 下載失敗（HTTP ${res.status}）`);
     }
+    const total = Number(res.headers.get('content-length') ?? 0);
+    let downloaded = 0;
+    try {
+      if (!res.body) throw new Error('llama-server 下載失敗：回應無 body');
+      const source = Readable.fromWeb(res.body as import('node:stream/web').ReadableStream);
+      const dest = fs.createWriteStream(zipPath);
+      source.on('data', (chunk: Buffer) => {
+        downloaded += chunk.length;
+        options.onProgress?.(downloaded, total);
+        guard.reset();
+      });
+      await pipeline(source, dest, { signal: guard.signal });
+      options.onProgress?.(downloaded, total);
+    } catch (err) {
+      try {
+        fs.rmSync(zipPath, { force: true });
+      } catch {
+        /* ignore */
+      }
+      throw err;
+    }
+  } catch (err) {
+    if (guard.didStall) throw guard.stallError();
     throw err;
+  } finally {
+    guard.cancel();
   }
 
   // 解壓整包（DLL 需與 exe 同目錄）
@@ -215,6 +226,8 @@ export class LlamaServerManager {
       if (restarts >= this.options.maxRestarts) return 'crashed';
       restarts++;
       await sleep(1000 * 2 ** (restarts - 1));
+      // 每次重啟都廣播 starting（spawn + health polling 期間前端才有更新）
+      this.options.onStatus?.('starting', `重啟中（第 ${restarts} 次）`);
     }
   }
 

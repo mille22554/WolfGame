@@ -230,6 +230,11 @@
         } else {
           setProgress(0, (msg.downloaded ? fmtMB(msg.downloaded / 1024 / 1024) : '0.0') + ' MB');
         }
+      } else if (msg.state === 'starting') {
+        showProgress(msg.stage || 'llama-server');
+        progressTitle.textContent = '啟動執行環境…';
+        // 不重置 bar（binary 已下載完時 bar 可能已 100%，只改文字保留進度）
+        progressText.textContent = '啟動執行環境…';
       } else if (msg.state === 'ready') {
         if (msg.stage === 'llama-server') {
           progressTitle.textContent = '執行環境就緒，準備下載模型…';

@@ -442,7 +442,7 @@ export type ServerToClientMessage = {
     reason: string;
 } | {
     type: 'MODEL_STATUS';
-    state: 'downloading' | 'ready' | 'error';
+    state: 'downloading' | 'starting' | 'ready' | 'error';
     stage?: 'llama-server' | 'model';
     downloaded?: number;
     total?: number;

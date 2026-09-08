@@ -252,10 +252,11 @@ function applyWinCheck(state: GameState, effects: Effect[]): void {
   }
 }
 
-function nightActionTypeFor(role: Role): NightActionType | null {
+function nightActionTypeFor(role: Role, day: number): NightActionType | null {
   switch (role) {
     case Role.SEER: return NightActionType.SEER_CHECK;
-    case Role.GUARD: return NightActionType.GUARD_PROTECT;
+    // guard 第一天不可守護（與 getNightActors 的 day > 1 一致，否則 gate 外行動會被接受）
+    case Role.GUARD: return day > 1 ? NightActionType.GUARD_PROTECT : null;
     case Role.WEREWOLF: return NightActionType.WOLF_KILL;
     default: return null;
   }
@@ -266,7 +267,7 @@ function recordNightAction(state: GameState, playerId: number, targetId: number)
   if (!actor || !actor.alive) {
     return { state, effects: [], accepted: false, reason: `actor P${playerId} not alive` };
   }
-  const type = nightActionTypeFor(actor.role);
+  const type = nightActionTypeFor(actor.role, state.day);
   if (!type) {
     return { state, effects: [], accepted: false, reason: `role ${actor.role} has no night action` };
   }

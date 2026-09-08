@@ -913,7 +913,7 @@ export async function startServer(options = {}) {
             dispatcher = options.dispatcherFactory(modelPath); // 測試 hook：跳過 sidecar
         }
         else if (mode === 'llama-server') {
-            broadcast({ type: 'MODEL_STATUS', state: 'downloading', stage: 'llama-server', downloaded: 0, total: 0 });
+            broadcast({ type: 'MODEL_STATUS', state: 'starting', stage: 'llama-server' });
             let binPath;
             try {
                 binPath = options.llamaServerBinPath
@@ -939,6 +939,8 @@ export async function startServer(options = {}) {
                 parallel: options.llamaServerParallel ?? envInt('LLAMA_SERVER_PARALLEL', 1),
                 idleTimeout: options.llamaServerIdleTimeout ?? envInt('LLAMA_SERVER_IDLE_TIMEOUT', 600),
                 onStatus: (status, info) => {
+                    if (status === 'starting')
+                        broadcast({ type: 'MODEL_STATUS', state: 'starting', stage: 'llama-server' });
                     if (status === 'ready')
                         broadcast({ type: 'MODEL_STATUS', state: 'ready', stage: 'llama-server' });
                     if (status === 'crashed')

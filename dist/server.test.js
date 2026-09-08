@@ -318,6 +318,89 @@ http.createServer((req, res) => {
         rmSync(modelsDir, { recursive: true, force: true });
     }
 });
+test('llama-server 模式：啟動過程收到 state starting 的 MODEL_STATUS', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const fakeDir = mkdtempSync(join(tmpdir(), 'srv-starting-'));
+    const fakeBin = join(fakeDir, 'fake-llama.mjs');
+    writeFileSync(fakeBin, `import http from 'node:http';
+const args = process.argv.slice(2);
+const pi = args.indexOf('--port');
+const port = pi >= 0 ? Number(args[pi + 1]) : 3001;
+const hi = args.indexOf('--host');
+const host = hi >= 0 ? args[hi + 1] : '127.0.0.1';
+http.createServer((req, res) => {
+  if (req.url === '/health') { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"status":"ok"}'); }
+  else { res.writeHead(404); res.end(); }
+}).listen(port, host);
+`);
+    const modelsDir = mkdtempSync(join(tmpdir(), 'srv-starting-models-'));
+    writeFileSync(join(modelsDir, 'fake.gguf'), 'gguf');
+    const { createServer } = await import('node:net');
+    const probeSrv = createServer();
+    await new Promise((resolve) => probeSrv.listen(0, () => resolve()));
+    const llamaPort = probeSrv.address().port;
+    await new Promise((resolve) => probeSrv.close(() => resolve()));
+    const prev = process.env.LLM_PROVIDER;
+    delete process.env.LLM_PROVIDER;
+    let h = null;
+    try {
+        h = await startServer({
+            port: 0,
+            playerCount: 6,
+            openBrowser: false,
+            exitProcess: false,
+            speechesPerDay: 1000,
+            modelsDir,
+            llamaServerBinPath: fakeBin,
+            llamaServerPort: llamaPort,
+        });
+        const ws = new WebSocket(`ws://localhost:${h.port}`);
+        try {
+            const states = await new Promise((resolve, reject) => {
+                const seen = [];
+                const timer = setTimeout(() => reject(new Error('等 LOBBY 逾時')), 15000);
+                ws.on('open', () => {
+                    ws.send(JSON.stringify({ type: 'REQUEST_SNAPSHOT' }));
+                });
+                ws.on('message', (data) => {
+                    try {
+                        const msg = JSON.parse(String(data));
+                        if (msg.type === 'PING') {
+                            ws.send(JSON.stringify({ type: 'PONG' }));
+                            return;
+                        }
+                        if (msg.type === 'MODEL_STATUS' && msg.state)
+                            seen.push(msg.state);
+                        if (msg.type === 'LOBBY' && msg.lobby) {
+                            clearTimeout(timer);
+                            resolve(seen);
+                        }
+                    }
+                    catch { /* ignore */ }
+                });
+                ws.on('error', reject);
+            });
+            assert.ok(states.includes('starting'), `啟動過程應廣播 starting，實際收到：${JSON.stringify(states)}`);
+            assert.ok(states.includes('ready'), `啟動完成應廣播 ready（完整生命週期），實際收到：${JSON.stringify(states)}`);
+        }
+        finally {
+            ws.close();
+            await new Promise((r) => setTimeout(r, 50));
+        }
+    }
+    finally {
+        if (prev === undefined)
+            delete process.env.LLM_PROVIDER;
+        else
+            process.env.LLM_PROVIDER = prev;
+        if (h)
+            await h.shutdown('test');
+        rmSync(fakeDir, { recursive: true, force: true });
+        rmSync(modelsDir, { recursive: true, force: true });
+    }
+});
 test('啟動 armed：完全不連線（主選單不開 WS）→ zeroTimer 觸發 no-clients 關閉', async () => {
     let reason = '';
     const h = await boot({ zeroClientShutdownMs: 50, onShutdown: (r) => { reason = r; } });

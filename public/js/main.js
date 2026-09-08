@@ -153,6 +153,8 @@
             ? Math.floor((msg.downloaded / msg.total) * 100) + '%（' + fmtMB1(msg.downloaded / 1048576) + ' / ' + fmtMB1(msg.total / 1048576) + ' MB）'
             : (msg.downloaded ? fmtMB1(msg.downloaded / 1048576) : '0.0') + ' MB';
           phaseEl.textContent = (msg.stage === 'llama-server' ? '下載執行環境…' : '模型下載中…') + prog;
+        } else if (msg.state === 'starting') {
+          phaseEl.textContent = '啟動執行環境…';
         } else if (msg.state === 'ready') {
           phaseEl.textContent = msg.stage === 'llama-server' ? '執行環境就緒' : '模型就緒';
         } else if (msg.state === 'error') {
@@ -183,6 +185,7 @@
 
   function renderLobby(lobby) {
     state.mode = state.playerId !== null ? 'player' : 'lobby';
+    phaseEl.textContent = PHASE_LABELS[lobby.phase] || lobby.phase;
     lobbyOverlay.hidden = false;
     var html = '';
     for (var i = 0; i < lobby.seats.length; i++) {

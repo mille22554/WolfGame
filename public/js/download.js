@@ -32,8 +32,15 @@
     }
   }
 
-  var ws = new WebSocket('ws://' + location.host);
-  ws.onmessage = function (ev) {
+  function connectWS() {
+    var ws;
+    try {
+      ws = new WebSocket('ws://' + location.host);
+    } catch (e) {
+      setTimeout(connectWS, 3000);
+      return;
+    }
+    ws.onmessage = function (ev) {
     var msg;
     try {
       msg = JSON.parse(ev.data);
@@ -60,6 +67,10 @@
       } else {
         textEl.textContent = fmtMB(msg.downloaded || 0) + ' MB';
       }
+    } else if (msg.state === 'starting') {
+      llamaActive = true;
+      cancelRedirect();
+      statusEl.textContent = '啟動執行環境…';
     } else if (msg.state === 'ready') {
       if (msg.stage === 'llama-server') {
         llamaReady = true;
@@ -87,8 +98,16 @@
       retryBtn.hidden = false;
     }
   };
+    ws.onclose = function () {
+      // 斷線 3 秒後重連（下載中斷線否則頁面凍結；同 models.js）
+      cancelRedirect();
+      setTimeout(connectWS, 3000);
+    };
+  }
 
   retryBtn.addEventListener('click', function () {
     location.reload();
   });
+
+  connectWS();
 })();

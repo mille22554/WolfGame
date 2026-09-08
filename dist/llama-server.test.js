@@ -153,6 +153,62 @@ test('start()：slow fake → 輪詢等待後 resolve', async () => {
         await mgr.stop();
     }
 });
+test('start()：首次 crash → 重啟迴圈廣播 starting（含重啟次數）→ 再次 spawn 即 ready', async () => {
+    // crash 一次後轉 healthy 的 fake（以檔案計數跨進程狀態；刪掉 tryPort 內重啟 onStatus 即失敗）
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-restart-'));
+    const bin = path.join(dir, 'fake-restart.mjs');
+    const stateFile = path.join(dir, 'count.txt');
+    fs.writeFileSync(bin, `
+import fs from 'node:fs';
+import http from 'node:http';
+const file = process.env.FAKE_RESTART_STATE;
+const crashes = Number(process.env.FAKE_RESTART_CRASHES ?? '1');
+let n = 0;
+try { n = Number(fs.readFileSync(file, 'utf-8') || '0'); } catch {}
+fs.writeFileSync(file, String(n + 1));
+if (n < crashes) { console.error('fake crash for restart test'); process.exit(1); }
+const args = process.argv.slice(2);
+const pi = args.indexOf('--port');
+const port = pi >= 0 ? Number(args[pi + 1]) : 3001;
+const hi = args.indexOf('--host');
+const host = hi >= 0 ? args[hi + 1] : '127.0.0.1';
+http.createServer((req, res) => {
+  if (req.url === '/health') { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"status":"ok"}'); }
+  else { res.writeHead(404); res.end(); }
+}).listen(port, host);
+`);
+    const port = await freePort();
+    const events = [];
+    const prevState = process.env.FAKE_RESTART_STATE;
+    const prevTimes = process.env.FAKE_RESTART_CRASHES;
+    process.env.FAKE_RESTART_STATE = stateFile;
+    process.env.FAKE_RESTART_CRASHES = '1';
+    const mgr = new LlamaServerManager({
+        binPath: bin, modelPath: 'x.gguf', port,
+        healthTimeoutMs: 15000, healthIntervalMs: 100, maxRestarts: 3,
+        onStatus: (status, info) => { events.push({ status, info }); },
+    });
+    try {
+        const r = await mgr.start();
+        assert.equal(r.reused, false);
+        // start() 進入即 starting → 重啟迴圈再一次 starting（重啟中）→ healthy 後 ready
+        assert.deepEqual(events.map((e) => e.status), ['starting', 'starting', 'ready']);
+        assert.match(events[1].info ?? '', /重啟中/);
+        assert.equal(mgr.isRunning(), true);
+    }
+    finally {
+        if (prevState === undefined)
+            delete process.env.FAKE_RESTART_STATE;
+        else
+            process.env.FAKE_RESTART_STATE = prevState;
+        if (prevTimes === undefined)
+            delete process.env.FAKE_RESTART_CRASHES;
+        else
+            process.env.FAKE_RESTART_CRASHES = prevTimes;
+        await mgr.stop();
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
 test('stop()：spawn 實例 → child 被殺；reused → no-op', async () => {
     const restore = withFakeMode('healthy');
     const port = await freePort();

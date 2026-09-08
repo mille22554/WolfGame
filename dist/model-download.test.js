@@ -130,4 +130,60 @@ test('downloadModelFile：中斷（server 中途斷線）→ throw + tmp 清理'
         fs.rmSync(dir, { recursive: true, force: true });
     }
 });
+test('downloadModelFile：停滯（連上無資料）→ 下載停滯超時 abort + tmp 清理', async (t) => {
+    const prev = process.env.DOWNLOAD_STALL_TIMEOUT_MS;
+    process.env.DOWNLOAD_STALL_TIMEOUT_MS = '50';
+    t.after(() => {
+        if (prev === undefined)
+            delete process.env.DOWNLOAD_STALL_TIMEOUT_MS;
+        else
+            process.env.DOWNLOAD_STALL_TIMEOUT_MS = prev;
+    });
+    // 連上但永不回應任何 bytes
+    const { server, port } = await withServer((_req, _res) => { });
+    const dir = mkTempDir();
+    try {
+        await assert.rejects(() => downloadModelFile(`http://localhost:${port}/stall.gguf`, dir), /下載停滯超時/);
+        assert.ok(!fs.existsSync(path.join(dir, 'stall.gguf.tmp')));
+        assert.ok(!fs.existsSync(path.join(dir, 'stall.gguf')));
+    }
+    finally {
+        server.closeAllConnections?.();
+        server.close();
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+test('downloadModelFile：極慢但持續有資料 → 成功（每 chunk 重置停滯計時）', async (t) => {
+    const prev = process.env.DOWNLOAD_STALL_TIMEOUT_MS;
+    process.env.DOWNLOAD_STALL_TIMEOUT_MS = '200';
+    t.after(() => {
+        if (prev === undefined)
+            delete process.env.DOWNLOAD_STALL_TIMEOUT_MS;
+        else
+            process.env.DOWNLOAD_STALL_TIMEOUT_MS = prev;
+    });
+    // 每 50ms 吐 1 byte，共 6 bytes（總耗時 > 單次停滯上限，但每 chunk 重置故不應超時）
+    const { server, port } = await withServer((_req, res) => {
+        res.writeHead(200);
+        let n = 0;
+        const timer = setInterval(() => {
+            n++;
+            res.write('x');
+            if (n >= 6) {
+                clearInterval(timer);
+                res.end();
+            }
+        }, 50);
+    });
+    const dir = mkTempDir();
+    try {
+        const p = await downloadModelFile(`http://localhost:${port}/slow.gguf`, dir);
+        assert.equal(fs.readFileSync(p, 'utf-8'), 'xxxxxx');
+        assert.ok(!fs.existsSync(p + '.tmp'));
+    }
+    finally {
+        server.close();
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
 //# sourceMappingURL=model-download.test.js.map
