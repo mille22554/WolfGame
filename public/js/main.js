@@ -36,6 +36,7 @@
   };
 
   var TOKEN_KEY = 'ww-token';
+  var NAME_KEY = 'ww-name';
 
   var ws = null;
   var retryMs = 1000;
@@ -76,6 +77,12 @@
   var lobbyCount = document.getElementById('lobby-count');
   var lobbySpecCount = document.getElementById('lobby-spec-count');
   var lobbySpectators = document.getElementById('lobby-spectators');
+  var mynameInput = document.getElementById('myname-input');
+  var mynameBtn = document.getElementById('myname-btn');
+  var nameMask = document.getElementById('name-mask');
+  var nameMaskInput = document.getElementById('name-mask-input');
+  var nameMaskBtn = document.getElementById('name-mask-btn');
+  var nameMaskError = document.getElementById('name-mask-error');
   var spectateBtn = document.getElementById('spectate-btn');
   var lobbyWatchHint = document.getElementById('lobby-watch-hint');
   var chatLog = document.getElementById('lobby-chat-log');
@@ -136,6 +143,11 @@
     lobbyErrorTimer = setTimeout(function () {
       lobbyError.hidden = true;
     }, 4000);
+    // 取名遮罩可見時同步顯示（擋住大廳，錯誤也要看得到）
+    if (nameMask && !nameMask.hidden && nameMaskError) {
+      nameMaskError.textContent = text;
+      nameMaskError.hidden = false;
+    }
   }
 
   function rememberClientId(msg) {
@@ -191,6 +203,19 @@
           } catch (e) { /* ignore */ }
         }
         state.selectedTarget = null;
+        send({ type: 'REQUEST_SNAPSHOT' });
+      } else if (msg.type === 'NAME_SET') {
+        rememberClientId(msg);
+        if (msg.token) {
+          state.token = msg.token;
+          try {
+            localStorage.setItem(TOKEN_KEY, msg.token);
+          } catch (e) { /* ignore */ }
+        }
+        if (msg.name !== undefined && msg.name !== null) {
+          applyConfirmedName(String(msg.name));
+        }
+        if (nameMaskError) nameMaskError.hidden = true;
         send({ type: 'REQUEST_SNAPSHOT' });
       } else if (msg.type === 'JOIN_REJECTED') {
         showLobbyError(friendlyReason(msg.reason));
@@ -265,6 +290,9 @@
 
   function friendlyReason(reason) {
     var r = String(reason || '操作被拒絕');
+    if (/名稱已被使用|重名|duplicate/i.test(r)) return '這名字有人用了，換一個吧';
+    if (/名稱不可為空|不能空白|不可為空/i.test(r)) return '名字不能空白喔';
+    if (/尚未參戰/.test(r)) return '你還沒參戰，先參戰或先取名吧';
     if (/only host/i.test(r) || /host/.test(r)) return '只有房主可以操作喔';
     if (/game started/i.test(r)) return '遊戲已經開打了，乖乖觀戰吧';
     if (/seat taken|occupied|taken|已有人|已佔用/i.test(r)) return '這位置剛被搶走，再按一次參戰';
@@ -320,9 +348,15 @@
     try {
       var v = lobbyName && lobbyName.value ? lobbyName.value.trim() : '';
       if (v) names.push(v);
+      var v2 = mynameInput && mynameInput.value ? mynameInput.value.trim() : '';
+      if (v2) names.push(v2);
+      var v3 = nameMaskInput && nameMaskInput.value ? nameMaskInput.value.trim() : '';
+      if (v3) names.push(v3);
     } catch (e) { /* ignore */ }
     var seat = state.lobby ? mySeat(state.lobby) : null;
     if (seat && seat.name) names.push(String(seat.name));
+    var me = state.lobby ? mySpectatorEntry(state.lobby) : null;
+    if (me && me.name) names.push(String(me.name));
     return names;
   }
 
@@ -440,6 +474,58 @@
     updateStartButton();
   }
 
+  // ---------- 取名閘門＋改名 ----------
+
+  // 我的觀眾席（clientId 定位；舊後端無 clientId 時退回存檔暱稱比對）
+  function mySpectatorEntry(lobby) {
+    var list = lobby.spectators;
+    if (!Array.isArray(list)) return null;
+    if (state.clientId !== null && state.clientId !== undefined && state.clientId !== '') {
+      for (var i = 0; i < list.length; i++) {
+        var s = list[i];
+        if (s && typeof s === 'object' && String(s.clientId) === String(state.clientId)) return s;
+      }
+      return null;
+    }
+    var saved = '';
+    try {
+      saved = localStorage.getItem(NAME_KEY) || '';
+    } catch (e) { /* ignore */ }
+    saved = saved.trim();
+    if (!saved) return null;
+    var names = spectatorNames(lobby);
+    for (var j = 0; j < names.length; j++) {
+      if (names[j] === saved) return { name: saved };
+    }
+    return null;
+  }
+
+  // 尚未命名＝沒座位＋觀眾名單無我 → 遮罩擋住大廳互動
+  function needsNaming(lobby) {
+    if (isSeated(lobby)) return false;
+    return !mySpectatorEntry(lobby);
+  }
+
+  function applyConfirmedName(name) {
+    try {
+      localStorage.setItem(NAME_KEY, name);
+    } catch (e) { /* ignore */ }
+    if (lobbyName && !lobbyName.value) lobbyName.value = name;
+    if (mynameInput && document.activeElement !== mynameInput) mynameInput.value = name;
+    if (nameMaskInput && document.activeElement !== nameMaskInput) nameMaskInput.value = name;
+  }
+
+  function submitName(inputEl) {
+    var name = inputEl && inputEl.value ? inputEl.value.trim().slice(0, 12) : '';
+    if (!name) {
+      showLobbyError('名字不能空白喔');
+      return;
+    }
+    var payload = { type: 'SET_NAME', name: name };
+    if (state.token) payload.token = state.token;
+    send(payload);
+  }
+
   function spectatorNames(lobby) {
     var list = lobby.spectators;
     if (!Array.isArray(list)) return [];
@@ -500,6 +586,30 @@
     renderHostControls(lobby);
     renderEngineCorner();
     renderChatLog();
+
+    // 取名閘門：未命名先擋大廳互動，送出暱稱成為具名觀眾後才放行
+    if (nameMask) {
+      var need = needsNaming(lobby);
+      if (need && nameMask.hidden) {
+        try {
+          var sn = localStorage.getItem(NAME_KEY) || '';
+          if (sn && nameMaskInput && !nameMaskInput.value) nameMaskInput.value = sn.slice(0, 12);
+        } catch (e) { /* ignore */ }
+        if (nameMaskError) nameMaskError.hidden = true;
+      }
+      nameMask.hidden = !need;
+    }
+    // 具名後預填參戰暱稱欄，參戰不用重打
+    var meEntry = mySpectatorEntry(lobby);
+    var mySeatEntry = mySeat(lobby);
+    var confirmed = (mySeatEntry && mySeatEntry.name) || (meEntry && meEntry.name) || '';
+    if (confirmed) {
+      try {
+        localStorage.setItem(NAME_KEY, confirmed);
+      } catch (e) { /* ignore */ }
+      if (lobbyName && !lobbyName.value) lobbyName.value = confirmed;
+      if (mynameInput && document.activeElement !== mynameInput && !mynameInput.value) mynameInput.value = confirmed;
+    }
   }
 
   function renderSeats(lobby) {
@@ -678,15 +788,52 @@
   }
 
   try {
-    var savedName = localStorage.getItem('ww-name');
-    if (savedName && lobbyName && !lobbyName.value) lobbyName.value = savedName;
+    var savedName = localStorage.getItem(NAME_KEY);
+    if (savedName) {
+      if (lobbyName && !lobbyName.value) lobbyName.value = savedName;
+      if (mynameInput && !mynameInput.value) mynameInput.value = savedName;
+      if (nameMaskInput && !nameMaskInput.value) nameMaskInput.value = savedName;
+    }
   } catch (e) { /* ignore */ }
   if (lobbyName) {
     lobbyName.addEventListener('input', function () {
       if (lobbyName.value.length > 12) lobbyName.value = lobbyName.value.slice(0, 12);
       try {
-        localStorage.setItem('ww-name', lobbyName.value);
+        localStorage.setItem(NAME_KEY, lobbyName.value);
       } catch (e) { /* ignore */ }
+    });
+  }
+  if (mynameInput) {
+    mynameInput.addEventListener('input', function () {
+      if (mynameInput.value.length > 12) mynameInput.value = mynameInput.value.slice(0, 12);
+    });
+    mynameInput.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        submitName(mynameInput);
+      }
+    });
+  }
+  if (mynameBtn) {
+    mynameBtn.addEventListener('click', function () {
+      submitName(mynameInput);
+    });
+  }
+  if (nameMaskInput) {
+    nameMaskInput.addEventListener('input', function () {
+      if (nameMaskInput.value.length > 12) nameMaskInput.value = nameMaskInput.value.slice(0, 12);
+      if (nameMaskError) nameMaskError.hidden = true;
+    });
+    nameMaskInput.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        submitName(nameMaskInput);
+      }
+    });
+  }
+  if (nameMaskBtn) {
+    nameMaskBtn.addEventListener('click', function () {
+      submitName(nameMaskInput);
     });
   }
 

@@ -42,6 +42,11 @@
           <label for="lobby-name">暱稱</label>
           <input id="lobby-name" type="text" placeholder="取個暱稱吧（參戰必填）" maxlength="12" autocomplete="off">
         </div>
+        <div class="lobby-nick-row">
+          <label for="myname-input">我的名稱</label>
+          <input id="myname-input" type="text" placeholder="大廳顯示名稱（可隨時改）" maxlength="12" autocomplete="off">
+          <button id="myname-btn" type="button" class="btn-small">改名</button>
+        </div>
         <div id="lobby-seats"></div>
         <p class="hint">按「參戰」自動配位加入；想休息就按自己座位的「離座」去觀戰，隨時回來。</p>
       </section>
@@ -83,6 +88,17 @@
       </section>
     </div>
     <p class="hint">選好座位後由房主按開始遊戲；沒人入座時按開始即開純 AI 局。</p>
+    <div id="name-mask" hidden>
+      <div id="name-mask-box">
+        <h3>先取個名字吧</h3>
+        <p class="hint">進大廳前先取名，之後可隨時在「我的名稱」更改。</p>
+        <div class="lobby-nick-row">
+          <input id="name-mask-input" type="text" placeholder="取個暱稱吧（12 字內）" maxlength="12" autocomplete="off">
+          <button id="name-mask-btn" type="button" class="btn-primary btn-small">進入大廳</button>
+        </div>
+        <div id="name-mask-error" class="error" hidden></div>
+      </div>
+    </div>
   </div>
 </div>
 <div id="disconnect-overlay" hidden>

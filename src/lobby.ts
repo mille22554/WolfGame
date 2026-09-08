@@ -43,6 +43,10 @@ export class LobbyManager {
   private limbo = new Map<string, { playerId: number; name: string }>(); // 離座暫存（座位已空）
   private spectators = new Map<string, LobbySpectator>();
   private specSeq = 0;
+  // token 綁定：穩定鍵（token 優先，否則 clientId）→ 固定編號，remove 後保留，參戰／離席／重連沿用不遞增
+  private specNumByKey = new Map<string, number>();
+  private clientToken = new Map<string, string>(); // clientId → token（具名觀眾／座位 token）
+  private customNameByToken = new Map<string, string>(); // token → 自定暱稱（SET_NAME；server 端唯一來源）
   private chat: LobbyChatEntry[] = [];
   private engineStatus: EngineStatus = { state: 'idle' };
   private _randomCount = false;
@@ -202,17 +206,101 @@ export class LobbyManager {
     return seat.name;
   }
 
-  addSpectator(clientId: string): LobbySpectator {
+  /** 觀眾進場：同穩定鍵沿用固定編號（token 優先）；無名→觀眾N，具名→自定暱稱 */
+  addSpectator(clientId: string, token?: string): LobbySpectator {
+    const tok = token ?? this.clientToken.get(clientId);
     const found = this.spectators.get(clientId);
-    if (found) return found;
-    this.specSeq += 1;
-    const sp = { clientId, name: `觀眾${this.specSeq}` };
+    if (found) {
+      if (tok !== undefined) {
+        // 舊 entry 補上 token 綁定（沿用原編號，不遞增）
+        const prev = this.specNumByKey.get(clientId);
+        if (prev !== undefined && !this.specNumByKey.has(tok)) this.specNumByKey.set(tok, prev);
+        this.clientToken.set(clientId, tok);
+        const custom = this.customNameByToken.get(tok);
+        if (custom !== undefined) found.name = custom;
+      }
+      return found;
+    }
+    const key = tok ?? clientId;
+    let n = this.specNumByKey.get(key);
+    if (n === undefined) {
+      // 無名 clientId 先取號，具名時把號碼帶到 token（轉移，不遞增）
+      const carried = tok !== undefined ? this.specNumByKey.get(clientId) : undefined;
+      if (carried !== undefined) {
+        n = carried;
+        this.specNumByKey.set(tok!, n);
+      } else {
+        this.specSeq += 1;
+        n = this.specSeq;
+        this.specNumByKey.set(key, n);
+      }
+    }
+    if (tok !== undefined) this.clientToken.set(clientId, tok);
+    const custom = tok !== undefined ? this.customNameByToken.get(tok) : undefined;
+    const sp = { clientId, name: custom ?? `觀眾${n}` };
     this.spectators.set(clientId, sp);
     return sp;
   }
 
   removeSpectator(clientId: string): void {
+    // 只下架在線名單；編號＋具名保留（token 綁定，重連／回席沿用）
     this.spectators.delete(clientId);
+  }
+
+  /** 參戰時把觀眾身分（編號＋具名）帶到新座位 token，離席回原編號 */
+  adoptSpectatorIdentity(clientId: string, prevToken: string | undefined, newToken: string): void {
+    const n = (prevToken !== undefined ? this.specNumByKey.get(prevToken) : undefined)
+      ?? this.specNumByKey.get(clientId);
+    if (n !== undefined && !this.specNumByKey.has(newToken)) this.specNumByKey.set(newToken, n);
+    if (prevToken !== undefined) {
+      const nm = this.customNameByToken.get(prevToken);
+      if (nm !== undefined && !this.customNameByToken.has(newToken)) this.customNameByToken.set(newToken, nm);
+    }
+    this.clientToken.set(clientId, newToken);
+  }
+
+  /**
+   * 取名／改名（SET_NAME 後端）：
+   * 空名拒收、超過 12 字截斷、與名單可見他人重名拒收。
+   * 參戰者改座位名（同步 token 具名，離席沿用）；觀眾記 token→名並即時上架名單。
+   * 舊聊天紀錄只存字串，不回寫（保留原名）。
+   */
+  setName(clientId: string, opts: { playerId?: number; token?: string; name: string }): { name: string; token: string } {
+    const clean = opts.name.trim().slice(0, 12);
+    if (clean.length === 0) throw new Error('名稱不可為空');
+    for (const s of this.seats) {
+      if (s.controlledBy === 'human' && s.name !== '' && s.playerId !== opts.playerId && s.name === clean) {
+        throw new Error('名稱已被使用');
+      }
+    }
+    for (const [cid, sp] of this.spectators) {
+      if (cid !== clientId && sp.name === clean) throw new Error('名稱已被使用');
+    }
+    if (opts.playerId !== undefined) {
+      const seat = this.seats[opts.playerId - 1];
+      if (!seat || seat.controlledBy !== 'human') throw new Error('尚未參戰');
+      seat.name = clean;
+      const tok = opts.token ?? seat.token ?? this.clientToken.get(clientId) ?? randomUUID();
+      this.customNameByToken.set(tok, clean);
+      this.clientToken.set(clientId, tok);
+      const carried = this.specNumByKey.get(clientId);
+      if (carried !== undefined && !this.specNumByKey.has(tok)) this.specNumByKey.set(tok, carried);
+      return { name: clean, token: tok };
+    }
+    const tok = opts.token ?? this.clientToken.get(clientId) ?? randomUUID();
+    this.customNameByToken.set(tok, clean);
+    this.clientToken.set(clientId, tok);
+    this.addSpectator(clientId, tok);
+    const sp = this.spectators.get(clientId);
+    if (sp) sp.name = clean;
+    return { name: clean, token: tok };
+  }
+
+  /** 觀眾斷線重連：同 token 拿回原編號＋原名；未知 token 回 undefined */
+  restoreSpectator(clientId: string, token: string): LobbySpectator | undefined {
+    if (!this.specNumByKey.has(token) && !this.customNameByToken.has(token)) return undefined;
+    this.clientToken.set(clientId, token);
+    return this.addSpectator(clientId, token);
   }
 
   addChat(from: string, text: string): LobbyChatEntry {

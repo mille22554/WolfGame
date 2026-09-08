@@ -137,6 +137,78 @@ test('觀戰者：自動命名觀眾N，去重，移除', () => {
   assert.equal(l.snapshot().spectators.length, 1);
 });
 
+test('觀眾編號 token 綁定：參戰→離席回原編號，不遞增', () => {
+  const l = new LobbyManager(6);
+  const a = l.addSpectator('c1');
+  assert.equal(a.name, '觀眾1');
+  const { token } = l.join(1, 'A');
+  l.adoptSpectatorIdentity('c1', undefined, token);
+  l.removeSpectator('c1');
+  l.leave(1);
+  const back = l.addSpectator('c1', token);
+  assert.equal(back.name, '觀眾1'); //  regression：曾是觀眾2（specSeq 重加遞增）
+});
+
+test('具名觀眾參戰→離席：沿用同一編號＋原名', () => {
+  const l = new LobbyManager(6);
+  const named = l.setName('c1', { name: '小明' });
+  assert.equal(named.name, '小明');
+  const first = l.snapshot().spectators.find((s) => s.clientId === 'c1')!;
+  assert.equal(first.name, '小明');
+  const { token: seatToken } = l.join(2, '小明');
+  l.adoptSpectatorIdentity('c1', named.token, seatToken);
+  l.removeSpectator('c1');
+  assert.equal(l.snapshot().spectators.length, 0);
+  l.leave(2);
+  const back = l.addSpectator('c1', seatToken);
+  assert.equal(back.name, '小明');
+  // 再進一位無名觀眾應為觀眾2（編號未被重複消耗）
+  const other = l.addSpectator('c2');
+  assert.equal(other.name, '觀眾2');
+});
+
+test('restoreSpectator：同 token 重連拿回原編號＋原名；未知 token 回 undefined', () => {
+  const l = new LobbyManager(6);
+  const named = l.setName('c1', { name: '阿水' });
+  l.removeSpectator('c1'); // 模擬斷線下架（編號＋具名保留）
+  const sp = l.restoreSpectator('c2', named.token);
+  assert.ok(sp);
+  assert.equal(sp!.name, '阿水');
+  assert.equal(l.snapshot().spectators.length, 1);
+  assert.equal(l.restoreSpectator('c3', 'unknown-token'), undefined);
+});
+
+test('SET_NAME：空名拒收、超過 12 字截斷', () => {
+  const l = new LobbyManager(6);
+  assert.throws(() => l.setName('c1', { name: '   ' }), /不可為空/);
+  const r = l.setName('c1', { name: '123456789012345' });
+  assert.equal(r.name, '123456789012');
+  assert.ok(r.token.length > 0);
+  assert.equal(l.snapshot().spectators.find((s) => s.clientId === 'c1')!.name, '123456789012');
+});
+
+test('SET_NAME：與他人重名拒收（座位／觀眾），自己沿用舊名放行', () => {
+  const l = new LobbyManager(6);
+  l.join(1, '老大');
+  l.setName('c9', { name: '小明' });
+  assert.throws(() => l.setName('c8', { name: '老大' }), /已被使用/);
+  assert.throws(() => l.setName('c8', { name: '小明' }), /已被使用/);
+  assert.throws(() => l.setName('c8', { playerId: 2, name: '老大' }), /已被使用/);
+  assert.throws(() => l.setName('c8', { playerId: 2, name: '全新名' }), /尚未參戰/);
+  // 自己重送同名放行
+  assert.equal(l.setName('c9', { name: '小明' }).name, '小明');
+});
+
+test('SET_NAME 改名即時更新名單（座位＋觀眾）', () => {
+  const l = new LobbyManager(6);
+  const { token } = l.join(1, '老大');
+  l.setName('c-seat', { playerId: 1, token, name: '新老大' });
+  assert.equal(l.snapshot().seats[0].name, '新老大');
+  l.setName('c1', { name: '小明' });
+  l.setName('c1', { name: '大明' });
+  assert.equal(l.snapshot().spectators.find((s) => s.clientId === 'c1')!.name, '大明');
+});
+
 test('聊天：上限 50 則、500 字、空訊息拒絕', () => {
   const l = new LobbyManager(6);
   assert.throws(() => l.addChat('A', '   '), /不可為空/);

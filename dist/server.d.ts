@@ -66,7 +66,7 @@ export declare function findAvailablePort(start: number): Promise<number>;
 export declare function openBrowser(url: string): void;
 /** Phase 2：registry → engine/大廳的操作回呼（startServer 注入；大廳先於引擎存在） */
 export interface RegistryActions {
-    join(clientId: string, playerId: number, name?: string): {
+    join(clientId: string, playerId: number, name?: string, prevToken?: string): {
         accepted: boolean;
         reason?: string;
         token?: string;
@@ -76,10 +76,18 @@ export interface RegistryActions {
         reason?: string;
         playerId?: number;
         token?: string;
+        spectator?: boolean;
+        name?: string;
     };
-    spectate(clientId: string, playerId: number): {
+    spectate(clientId: string, playerId: number, token?: string): {
         accepted: boolean;
         reason?: string;
+    };
+    setName(clientId: string, playerId: number | undefined, token: string | undefined, name: string): {
+        accepted: boolean;
+        reason?: string;
+        name?: string;
+        token?: string;
     };
     setPlayerCount(clientId: string, count: number): {
         accepted: boolean;
@@ -89,7 +97,7 @@ export interface RegistryActions {
         accepted: boolean;
         reason?: string;
     };
-    chat(clientId: string, playerId: number | undefined, text: string): {
+    chat(clientId: string, playerId: number | undefined, text: string, token?: string): {
         accepted: boolean;
         reason?: string;
     };

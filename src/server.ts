@@ -263,12 +263,13 @@ export function openBrowser(url: string): void {
 
 /** Phase 2：registry → engine/大廳的操作回呼（startServer 注入；大廳先於引擎存在） */
 export interface RegistryActions {
-  join(clientId: string, playerId: number, name?: string): { accepted: boolean; reason?: string; token?: string };
-  reconnect(clientId: string, token: string): { accepted: boolean; reason?: string; playerId?: number; token?: string };
-  spectate(clientId: string, playerId: number): { accepted: boolean; reason?: string };
+  join(clientId: string, playerId: number, name?: string, prevToken?: string): { accepted: boolean; reason?: string; token?: string };
+  reconnect(clientId: string, token: string): { accepted: boolean; reason?: string; playerId?: number; token?: string; spectator?: boolean; name?: string };
+  spectate(clientId: string, playerId: number, token?: string): { accepted: boolean; reason?: string };
+  setName(clientId: string, playerId: number | undefined, token: string | undefined, name: string): { accepted: boolean; reason?: string; name?: string; token?: string };
   setPlayerCount(clientId: string, count: number): { accepted: boolean; reason?: string };
   setRandomCount(clientId: string, enabled: boolean): { accepted: boolean; reason?: string };
-  chat(clientId: string, playerId: number | undefined, text: string): { accepted: boolean; reason?: string };
+  chat(clientId: string, playerId: number | undefined, text: string, token?: string): { accepted: boolean; reason?: string };
   startLobbyGame(clientId: string): { accepted: boolean; reason?: string };
   humanEvent(event: GameEvent): { accepted: boolean; reason?: string };
   disconnectPlayer(playerId: number): void;
@@ -356,8 +357,9 @@ export class WebSocketRegistry implements ClientRegistry {
   }
 
   sendLobby(lobby: LobbySnapshot): void {
-    const msg: ServerToClientMessage = { type: 'LOBBY', lobby };
+    // per-client 信封附 clientId：前端 host 比對＋「我的觀眾席」定位用；快照本體全員一致
     for (const c of this.clients) {
+      const msg: ServerToClientMessage = { type: 'LOBBY', lobby, clientId: c.clientId };
       try {
         c.ws.send(JSON.stringify(msg));
       } catch { /* 單一客戶端失敗不影響其他人 */ }
@@ -402,7 +404,7 @@ export class WebSocketRegistry implements ClientRegistry {
         // 大廳階段一律送大廳快照（等候大廳先於引擎存在）
         const lobby = this.opts.getLobbySnapshot?.();
         if (!lobby) return;
-        msg = { type: 'LOBBY', lobby };
+        msg = { type: 'LOBBY', lobby, clientId: c.clientId };
       } else if (c.gmView) {
         msg = { type: 'SNAPSHOT', snapshot: buildGMSnapshot(state), gmView: true };
       } else if (c.playerId !== undefined) {
@@ -414,7 +416,7 @@ export class WebSocketRegistry implements ClientRegistry {
       // engine 尚未就緒 → 大廳快照（等候大廳先於引擎存在）；無提供者則略過
       const lobby = this.opts.getLobbySnapshot?.();
       if (!lobby) return;
-      msg = { type: 'LOBBY', lobby };
+      msg = { type: 'LOBBY', lobby, clientId: c.clientId };
     }
     try {
       c.ws.send(JSON.stringify(msg));
@@ -456,7 +458,7 @@ export class WebSocketRegistry implements ClientRegistry {
     // 大廳訊號：首個遊戲頁訊息決定 host＋啟動自動開局 timer。
     // 純 WS 連線（模型管理／下載頁只監聽 MODEL_STATUS 不發訊）不觸發。
     if (msg.type === 'REQUEST_SNAPSHOT' || msg.type === 'RECONNECT' || msg.type === 'JOIN'
-      || msg.type === 'SPECTATE' || msg.type === 'SET_PLAYER_COUNT' || msg.type === 'SET_RANDOM_COUNT'
+      || msg.type === 'SPECTATE' || msg.type === 'SET_NAME' || msg.type === 'SET_PLAYER_COUNT' || msg.type === 'SET_RANDOM_COUNT'
       || msg.type === 'CHAT_SEND' || msg.type === 'START_GAME' || msg.type === 'SET_GM_VIEW') {
       this.opts.onLobbySignal?.(client.clientId);
     }
@@ -481,7 +483,7 @@ export class WebSocketRegistry implements ClientRegistry {
     // 延遲初始化重試：先前因模型未就緒而連線的 client，下載完成後無需重連，
     // 任意遊戲訊息（除 PONG/LEAVE/大廳訊息）都可觸發 ensure，成功後繼續處理本次訊息。
     // 大廳訊息（JOIN/SPECTATE/人數/隨機/聊天/GM 檢視）不觸發引擎：等候大廳先於引擎存在。
-    const lobbyOnly = msg.type === 'JOIN' || msg.type === 'SPECTATE'
+    const lobbyOnly = msg.type === 'JOIN' || msg.type === 'SPECTATE' || msg.type === 'SET_NAME'
       || msg.type === 'SET_PLAYER_COUNT' || msg.type === 'SET_RANDOM_COUNT'
       || msg.type === 'CHAT_SEND' || msg.type === 'SET_GM_VIEW';
     if (this.opts.ensureReady && msg.type !== 'PONG' && msg.type !== 'LEAVE' && !lobbyOnly) {
@@ -523,14 +525,14 @@ export class WebSocketRegistry implements ClientRegistry {
           send({ type: 'JOIN_REJECTED', reason: 'bad seat' });
           break;
         }
-        const r = actions.join(client.clientId, msg.playerId, msg.name);
+        const r = actions.join(client.clientId, msg.playerId, msg.name, client.token);
         if (!r.accepted || r.token === undefined) {
           send({ type: 'JOIN_REJECTED', reason: r.reason ?? 'join failed' });
           break;
         }
         client.playerId = msg.playerId;
         client.token = r.token;
-        send({ type: 'JOINED', playerId: msg.playerId, token: r.token });
+        send({ type: 'JOINED', playerId: msg.playerId, token: r.token, clientId: client.clientId });
         break;
       }
       case 'RECONNECT': {
@@ -541,13 +543,45 @@ export class WebSocketRegistry implements ClientRegistry {
           break;
         }
         const r = actions.reconnect(client.clientId, msg.token);
-        if (!r.accepted || r.playerId === undefined || r.token === undefined) {
+        if (!r.accepted) {
           send({ type: 'JOIN_REJECTED', reason: r.reason ?? 'unknown token' });
           break;
         }
-        client.playerId = r.playerId;
+        if (r.playerId !== undefined && r.token !== undefined) {
+          client.playerId = r.playerId;
+          client.token = r.token;
+          send({ type: 'JOINED', playerId: r.playerId, token: r.token, clientId: client.clientId });
+          break;
+        }
+        // 大廳觀眾重連：同 token 拿回原編號＋原名（無座位，故回 NAME_SET）
+        if (r.spectator && r.token !== undefined) {
+          client.playerId = undefined;
+          client.token = r.token;
+          send({ type: 'NAME_SET', name: r.name ?? '', token: r.token, clientId: client.clientId });
+          break;
+        }
+        send({ type: 'JOIN_REJECTED', reason: r.reason ?? 'unknown token' });
+        break;
+      }
+      case 'SET_NAME': {
+        const actions = this.opts.actions;
+        if (!actions) return;
+        if (actions.isStarted()) {
+          send({ type: 'ACTION_REJECTED', reason: 'game started' });
+          break;
+        }
+        if (typeof msg.name !== 'string') {
+          send({ type: 'ACTION_REJECTED', reason: 'bad name' });
+          break;
+        }
+        const token = client.token ?? msg.token;
+        const r = actions.setName(client.clientId, client.playerId, token, msg.name);
+        if (!r.accepted || r.token === undefined || r.name === undefined) {
+          send({ type: 'ACTION_REJECTED', reason: r.reason ?? 'rename failed' });
+          break;
+        }
         client.token = r.token;
-        send({ type: 'JOINED', playerId: r.playerId, token: r.token });
+        send({ type: 'NAME_SET', name: r.name, token: r.token, clientId: client.clientId });
         break;
       }
       case 'START_GAME': {
@@ -560,7 +594,7 @@ export class WebSocketRegistry implements ClientRegistry {
       case 'SPECTATE': {
         const actions = this.opts.actions;
         if (!actions || client.playerId === undefined) return;
-        const r = actions.spectate(client.clientId, client.playerId);
+        const r = actions.spectate(client.clientId, client.playerId, client.token);
         if (!r.accepted) {
           send({ type: 'ACTION_REJECTED', reason: r.reason ?? 'rejected' });
           break;
@@ -594,7 +628,7 @@ export class WebSocketRegistry implements ClientRegistry {
         const actions = this.opts.actions;
         if (!actions) return;
         if (typeof msg.text !== 'string') return;
-        const r = actions.chat(client.clientId, client.playerId, msg.text);
+        const r = actions.chat(client.clientId, client.playerId, msg.text, client.token);
         if (!r.accepted) send({ type: 'ACTION_REJECTED', reason: r.reason ?? 'rejected' });
         break;
       }
@@ -981,10 +1015,11 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
       }
     },
     actions: {
-      join: (clientId, playerId, name) => {
+      join: (clientId, playerId, name, prevToken) => {
         if (started || engine) return { accepted: false, reason: 'game started' };
         try {
           const { token } = lobby.join(playerId, name);
+          lobby.adoptSpectatorIdentity(clientId, prevToken, token);
           lobby.removeSpectator(clientId);
           registry.sendLobby(lobby.snapshot());
           return { accepted: true, token };
@@ -996,10 +1031,18 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
         if (!started || !engine) {
           // 大廳內重連：拿回座位（斷線保留／limbo）
           const back = lobby.reclaim(token);
-          if (!back) return { accepted: false, reason: 'unknown token' };
-          lobby.removeSpectator(clientId);
-          registry.sendLobby(lobby.snapshot());
-          return { accepted: true, playerId: back.playerId, token };
+          if (back) {
+            lobby.removeSpectator(clientId);
+            registry.sendLobby(lobby.snapshot());
+            return { accepted: true, playerId: back.playerId, token };
+          }
+          // 座位拿不回（或純觀眾 token）：同 token 拿回原觀眾編號＋原名
+          const sp = lobby.restoreSpectator(clientId, token);
+          if (sp) {
+            registry.sendLobby(lobby.snapshot());
+            return { accepted: true, token, spectator: true, name: sp.name };
+          }
+          return { accepted: false, reason: 'unknown token' };
         }
         const pid = lobby.lookupToken(token);
         if (pid === undefined) return { accepted: false, reason: 'unknown token' };
@@ -1008,12 +1051,23 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
         // 死亡 → RECONNECT 被拒，client 變觀戰者，仍回 JOINED 讓其知道身分
         return { accepted: true, playerId: pid, token };
       },
-      spectate: (clientId, playerId) => {
+      spectate: (clientId, playerId, token) => {
         if (started || engine) return { accepted: false, reason: 'game started' };
         lobby.leave(playerId);
-        lobby.addSpectator(clientId);
+        // 同 token 回原觀眾編號（首次離席則把無名號碼帶到 token，不遞增）
+        lobby.addSpectator(clientId, token);
         registry.sendLobby(lobby.snapshot());
         return { accepted: true };
+      },
+      setName: (clientId, playerId, token, name) => {
+        if (started || engine) return { accepted: false, reason: 'game started' };
+        try {
+          const r = lobby.setName(clientId, { playerId, token, name });
+          registry.sendLobby(lobby.snapshot());
+          return { accepted: true, name: r.name, token: r.token };
+        } catch (err) {
+          return { accepted: false, reason: err instanceof Error ? err.message : 'rename failed' };
+        }
       },
       setPlayerCount: (clientId, count) => {
         const h = lobby.hostClientId;
@@ -1035,10 +1089,10 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
         registry.sendLobby(lobby.snapshot());
         return { accepted: true };
       },
-      chat: (clientId, playerId, text) => {
+      chat: (clientId, playerId, text, token) => {
         if (started || engine) return { accepted: false, reason: 'game started' };
         const from = (playerId !== undefined ? lobby.seatName(playerId) : undefined)
-          ?? lobby.addSpectator(clientId).name;
+          ?? lobby.addSpectator(clientId, token).name;
         try {
           const entry = lobby.addChat(from, text);
           broadcast({ type: 'CHAT_MESSAGE', from: entry.from, text: entry.text, ts: entry.ts });

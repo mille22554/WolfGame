@@ -655,6 +655,7 @@ aside {
    圓角 10-12px、明顯按鈕邊框、hover/pressed/focus 回饋
    ============================================ */
 #lobby-panel {
+  position: relative;
   max-width: 920px;
   width: calc(100vw - 32px);
   max-height: 92vh;
@@ -918,6 +919,45 @@ aside {
 .engine-dot.pulse { background: #ffe08a; animation: pill-pulse 1.2s ease-in-out infinite; }
 .engine-dot.ok { background: #8affc1; }
 .engine-dot.bad { background: #ff5c5c; }
+/* 取名遮罩（擋住大廳互動）＋我的名稱列：沿用 lobby-nick-row 樣式 */
+#name-mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+  border-radius: 16px;
+}
+#name-mask[hidden] { display: none; }
+#name-mask-box {
+  background: #14161c;
+  border: 1px solid #4d5878;
+  border-radius: 12px;
+  padding: 20px 22px;
+  max-width: 340px;
+  width: calc(100% - 32px);
+  text-align: center;
+}
+#name-mask-box h3 { margin: 0 0 6px; }
+#name-mask-box .lobby-nick-row { margin-top: 12px; }
+#myname-input, #name-mask-input {
+  flex: 1;
+  min-width: 0;
+  background: #1a1e29;
+  color: #e8eaf0;
+  border: 1px solid #4d5878;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 14px;
+}
+#name-mask-error {
+  margin: 8px 0 0;
+  color: #ff9d9d;
+  font-size: 13px;
+}
+#name-mask-error[hidden] { display: none; }
 /* 窄版面：三區垂直堆疊，不跑版 */
 @media (max-width: 760px) {
   #lobby-panel { padding: 16px 14px; max-height: 94vh; }

@@ -453,10 +453,17 @@ export type ServerToClientMessage = {
 } | {
     type: 'LOBBY';
     lobby: LobbySnapshot;
+    clientId?: string;
 } | {
     type: 'JOINED';
     playerId: number;
     token: string;
+    clientId?: string;
+} | {
+    type: 'NAME_SET';
+    name: string;
+    token: string;
+    clientId?: string;
 } | {
     type: 'JOIN_REJECTED';
     reason: string;
@@ -501,6 +508,10 @@ export type ClientToServerMessage = {
 } | {
     type: 'RECONNECT';
     token: string;
+} | {
+    type: 'SET_NAME';
+    name: string;
+    token?: string;
 } | {
     type: 'START_GAME';
 } | {

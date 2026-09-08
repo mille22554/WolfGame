@@ -451,8 +451,9 @@ export interface SchedulerContext {
 /** 前端 WS 協定：伺服器 → 客戶端（Phase 2 擴充） */
 export type ServerToClientMessage =
   | { type: 'SNAPSHOT'; snapshot: PlayerSnapshot | SpectatorSnapshot | GMSnapshot; gmView: boolean }
-  | { type: 'LOBBY'; lobby: LobbySnapshot }
-  | { type: 'JOINED'; playerId: number; token: string }
+  | { type: 'LOBBY'; lobby: LobbySnapshot; clientId?: string }
+  | { type: 'JOINED'; playerId: number; token: string; clientId?: string }
+  | { type: 'NAME_SET'; name: string; token: string; clientId?: string }
   | { type: 'JOIN_REJECTED'; reason: string }
   | { type: 'ACTION_REJECTED'; reason: string }
   | { type: 'MODEL_STATUS'; state: 'downloading' | 'starting' | 'ready' | 'error'; stage?: 'llama-server' | 'model'; downloaded?: number; total?: number; info?: string; error?: string }
@@ -469,6 +470,7 @@ export type ClientToServerMessage =
   | { type: 'LEAVE' }
   | { type: 'JOIN'; playerId: number; name?: string }
   | { type: 'RECONNECT'; token: string }
+  | { type: 'SET_NAME'; name: string; token?: string }
   | { type: 'START_GAME' }
   | { type: 'SPECTATE' }
   | { type: 'SET_PLAYER_COUNT'; count: number }

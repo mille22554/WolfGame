@@ -420,6 +420,112 @@ test('開局時斷線未歸 → 座位轉 AI（不斷真人 gate）', async () =
         await h.shutdown('test');
     }
 });
+test('離席回原觀眾編號：參戰→離席聊天仍是觀眾1（非觀眾2）', async () => {
+    const h = await boot();
+    try {
+        const ws = await connect(h.port);
+        await waitFor(ws, (m) => m.type === 'LOBBY');
+        send(ws, { type: 'CHAT_SEND', text: 'hi' });
+        const first = await waitFor(ws, (m) => m.type === 'CHAT_MESSAGE' && m.text === 'hi');
+        assert.equal(first.from, '觀眾1');
+        send(ws, { type: 'JOIN', playerId: 1, name: 'S1' });
+        await waitFor(ws, (m) => m.type === 'JOINED');
+        send(ws, { type: 'SPECTATE' });
+        await waitFor(ws, (m) => m.type === 'LOBBY' && m.lobby.seats[0].controlledBy === 'empty'
+            && (m.lobby.spectators ?? []).length === 1);
+        send(ws, { type: 'CHAT_SEND', text: 'yo' });
+        const second = await waitFor(ws, (m) => m.type === 'CHAT_MESSAGE' && m.text === 'yo');
+        assert.equal(second.from, '觀眾1'); // regression：曾變觀眾2
+        ws.close();
+        await new Promise((r) => setTimeout(r, 50));
+    }
+    finally {
+        await h.shutdown('test');
+    }
+});
+test('SET_NAME：具名→LOBBY 名單；空名／重名拒收；超長截斷', async () => {
+    const h = await boot();
+    try {
+        const a = await connect(h.port);
+        await waitFor(a, (m) => m.type === 'LOBBY');
+        send(a, { type: 'SET_NAME', name: '阿水' });
+        const ok = await waitFor(a, (m) => m.type === 'NAME_SET');
+        assert.equal(ok.name, '阿水');
+        assert.ok(ok.token);
+        const lobby = await waitFor(a, (m) => m.type === 'LOBBY' && (m.lobby.spectators ?? []).some((s) => s.name === '阿水'));
+        assert.ok(lobby.lobby.spectators.some((s) => s.name === '阿水'));
+        // 空名拒收
+        send(a, { type: 'SET_NAME', name: '   ' });
+        const rejEmpty = await waitFor(a, (m) => m.type === 'ACTION_REJECTED');
+        assert.ok(rejEmpty.reason);
+        // 重名拒收
+        const b = await connect(h.port);
+        await waitFor(b, (m) => m.type === 'LOBBY');
+        send(b, { type: 'SET_NAME', name: '阿水' });
+        const rejDup = await waitFor(b, (m) => m.type === 'ACTION_REJECTED');
+        assert.match(rejDup.reason, /已被使用/);
+        // 超長截斷為 12 字
+        send(b, { type: 'SET_NAME', name: '123456789012345' });
+        const cut = await waitFor(b, (m) => m.type === 'NAME_SET');
+        assert.equal(cut.name, '123456789012');
+        a.close();
+        b.close();
+        await new Promise((r) => setTimeout(r, 50));
+    }
+    finally {
+        await h.shutdown('test');
+    }
+});
+test('改名即時更新名單：座位改名→LOBBY＋之後聊天用新名', async () => {
+    const h = await boot();
+    try {
+        const a = await connect(h.port);
+        await waitFor(a, (m) => m.type === 'LOBBY');
+        send(a, { type: 'JOIN', playerId: 1, name: '老大' });
+        await waitFor(a, (m) => m.type === 'JOINED');
+        send(a, { type: 'CHAT_SEND', text: 'before' });
+        const m1 = await waitFor(a, (m) => m.type === 'CHAT_MESSAGE' && m.text === 'before');
+        assert.equal(m1.from, '老大'); // 舊紀錄保留原名
+        send(a, { type: 'SET_NAME', name: '新老大' });
+        const renamed = await waitFor(a, (m) => m.type === 'NAME_SET');
+        assert.equal(renamed.name, '新老大');
+        const lobby = await waitFor(a, (m) => m.type === 'LOBBY' && m.lobby.seats[0].name === '新老大');
+        assert.equal(lobby.lobby.seats[0].name, '新老大');
+        send(a, { type: 'CHAT_SEND', text: 'after' });
+        const m2 = await waitFor(a, (m) => m.type === 'CHAT_MESSAGE' && m.text === 'after');
+        assert.equal(m2.from, '新老大'); // 之後的訊息用新名
+        a.close();
+        await new Promise((r) => setTimeout(r, 50));
+    }
+    finally {
+        await h.shutdown('test');
+    }
+});
+test('觀眾 token 重連：同 token 拿回原名，不另增觀眾', async () => {
+    const h = await boot();
+    try {
+        const a = await connect(h.port);
+        await waitFor(a, (m) => m.type === 'LOBBY');
+        send(a, { type: 'SET_NAME', name: '漂流者' });
+        const ok = await waitFor(a, (m) => m.type === 'NAME_SET');
+        const token = ok.token;
+        a.close();
+        await new Promise((r) => setTimeout(r, 100));
+        const c = await connect(h.port);
+        await waitFor(c, (m) => m.type === 'LOBBY');
+        send(c, { type: 'RECONNECT', token });
+        const back = await waitFor(c, (m) => m.type === 'NAME_SET');
+        assert.equal(back.name, '漂流者');
+        assert.equal(back.token, token);
+        const lobby = await waitFor(c, (m) => m.type === 'LOBBY' && (m.lobby.spectators ?? []).some((s) => s.name === '漂流者'));
+        assert.equal(lobby.lobby.spectators.filter((s) => s.name === '漂流者').length, 1);
+        c.close();
+        await new Promise((r) => setTimeout(r, 50));
+    }
+    finally {
+        await h.shutdown('test');
+    }
+});
 test('timer/host 只認遊戲頁訊號：純 WS 連線無 host、無開局', async () => {
     const h = await boot();
     try {
