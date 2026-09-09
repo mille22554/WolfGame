@@ -5,32 +5,26 @@
 
 ---
 
-## 1. [ ] 拔除 quiet 參數 + 修正純 AI 局白等 CD 60s 的 bug
+## 1. [ ] 白板更新驅動迴圈（取代 quiet/CD 等待）
 
-### 問題
-白天討論有兩個延遲，但只有一個是用戶要的：
+### 迴圈（用戶定案）
+- 白板更新 → 開工生產（除上輪發言者外全員草稿，見第 2 項）＋CD 重啟。
+- 生產完成 → 暫存，不直接播。
+- CD 到有貨 → 播出（播出即白板更新，迴圈回去）。
+- CD 到沒貨 → 等做好馬上播。
+- 中間白板又更新 → 暫存作廢＋生產用新白板重跑＋CD 重啟（版本作廢機制沿用）。
+- 同一時間只有一條生產線＋一個暫存位，不會疊跑。
 
-| 延遲 | 位置 | 來源 | 決定 |
-|------|------|------|------|
-| **CD 60s** | `ai-scheduler.ts:56` (`cdMs`) | 用戶要的真人節奏（閱讀/打字時間） | 保留，但純 AI 局跳過（見下） |
-| **quiet 20s** | `ai-scheduler.ts:57` (`quietMs`) | Phase 1 自帶預設（git 可查），用戶從沒要求過 | **整組拔除** |
-
-quiet 當初設計是怕 AI 打斷正在打字的真人，但混合局裡真人靠按鈕發言/跳過，管線本來就在等真人動作，搶話場景不存在。沒人要、沒場景的參數，條件跳過不如整組刪除。
-
-CD 的 bug 是真的：跳過條件 `allAliveHumansSkipped`（`game-state.ts:161-164`）要求「有真人且全部跳過」，**純 AI 局（無真人）時回傳 false**，導致每則發言白等 60s（有幾則浪費幾分鐘；日發言數由收斂機制決定，無硬上限，見第 2 項）。
-
-### 修正方向
-- **拔除 quiet**：刪 `quietMs`（scheduler 選項＋`QUIET_THRESHOLD_MS` env＋`tick` 內等待邏輯）、測試裡約十處構造一併簡化。
-- **純 AI 局（無存活真人）** → 跳過 CD（修 `allAliveHumansSkipped` 調用處或函數本身）。
-- **有真人** → CD 60s 原樣保留。
-
-### 不改碼應急
-設 `QUIET_THRESHOLD_MS=0` 即等於關掉 quiet（CD 的 bug 仍需修碼）。
+### 參數
+- CD 60s（真人節奏，用戶確認不動）。
+- 純 AI：CD=0，做好就播（不是拿掉計時器，否則沒人開槍）。
+- quiet 整組拔除（scheduler 規則＋`QUIET_THRESHOLD_MS` env＋測試構造）。
+- 跳過按鈕（`HUMAN_SKIP`／`allAliveHumansSkipped`）連函數一起清（待用戶確認：新迴圈裡沉默即同意，按鈕無作用）。
 
 ### 相關檔案
-- `src/ai-scheduler.ts`（`tick`、`broadcastAfterCd`、選項定義）
-- `src/game-state.ts`（`allAliveHumansSkipped`）
-- `src/ai-scheduler.test.ts`（約十處 `quietMs` 構造）
+- `src/ai-scheduler.ts`（tick、生產迴圈、暫存播出、版本作廢沿用）
+- `src/game-state.ts`（`allAliveHumansSkipped` 刪除）
+- 測試：`ai-scheduler.test.ts`（約十處 `quietMs` 構造）、`full-game.test.ts`（L89）、`human-discussion.test.ts`（L89-106 釘住舊語義，一併改）
 
 ---
 
