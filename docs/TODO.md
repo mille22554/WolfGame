@@ -147,27 +147,38 @@ GM 檢視（僅觀戰可點）除了玩家列表，也應顯示**夜晚所有行
 
 ## 5. [ ] 開局 / 角色行動慢 — 效能改善（調查完成，未套用）
 
-### 根因（已調查）
-1. **`LLAMA_SERVER_PARALLEL=1` 單槽序列化**（最大元凶）— 所有 AI 呼叫串行
-2. **討論管線每則 3 次串行 LLM + 人為延遲**（見任務 1 的 quiet/CD bug）
-3. **開局惰性載模型** — 模型/binary/引擎延遲到首次開局
-4. **token 預算偏大**（judge 300 / expand 150）
-5. **失敗路徑空等** gate timeout
-
-### 註：模型是 4B（gemma-3-4b-it-roleplay-tuned-v2.Q6_K，~3GB），不是 9B
-explorer 早期報告誤用 9B 速度（8.7 tok/s），實際 4B 約 20-40 tok/s。但結構性原因（PARALLEL=1、人為延遲）不變。
-
-### 改善建議（未套用，待用戶決定）
-- `LLAMA_SERVER_PARALLEL=4~8`（**有爭議**：本機 4 核下 @oracle 認為平行不增吞吐只加交錯、建議維持 1；待實測判定，先照既定方案走，成效不彰再試本條）
-- `SPEECH_CD_MS=8000`、`QUIET_THRESHOLD_MS=5000`（**注意**：用戶已確認真人 CD 60s 不動；quiet 20s 非用戶要求，可移除）
-- judge 300→150、expand/speech 150→100、vote/night 100→60
-- 模型預熱（server 啟動就載）
-- 失敗快退
-
-### 實測與模型註記（本機）
-- 本機（i3-14100＋32GB＋UHD 內顯，CPU 推理，threads=8）實測 Qwen3-4B-Q4_K_M 生成 **11.3 tok/s**，未達上面寫的 20-40。
-- gemma-3-4b-it-roleplay-tuned-v2.Q6_K 是**別台機器（RTX 3060）的資訊**，本機跑的是 Qwen3-4B-Q4_K_M。
+### 機器與數據（兩台分開標）
+- **內顯機（本機）**：i3-14100 4C/8T、32GB、UHD 730 無獨顯；模型 Qwen3-4B-Q4_K_M，CPU 推理；實測生成 **11.3 tok/s**（threads=8）。threads=4、thinking 洩漏、PARALLEL 對比皆未測。
+- **3060 機（別台）**：RTX 3060（顯存待確認）；模型 gemma-3-4b-it-roleplay-tuned-v2.Q6_K；回報 4B 約 20-40 tok/s（測試條件待確認，GPU 跑 4B 照理更快）。
 - @oracle 比較結論：**兩台都推薦 Qwen3-4B**（本機維持 Q4_K_M；3060 可升量化）。gemma 中文弱、RP 調校是英文資料、格式遵循弱、Q6_K 在 CPU 更慢；唯一優勢（無 thinking）不足以翻盤。切換成本：llama-server 模式改 `LLM_MODEL_URI` 一行；worker 模式還硬編碼 `QwenChatWrapper`，換模型要改碼。
+
+### 根因（@oracle 診斷，以內顯機為準）
+1. **prompt 太長 × 每次全量 prefill**（佔每輪約八成）：每次呼叫獨立 request、無 KV 重用；expand 5-8K tokens，4 核 prefill 約 50-100 tok/s，單次 60-120 秒。
+2. **一次發言打太多**：6 AI＝8 次呼叫（pre-speech×6＋judge＋expand），每次都付全額 prefill。
+3. **threads=8 超訂**（4 實體核），浪費 10-30%。
+4. **tokens/sec 物理上限**：expand 150 tokens 也要 8-15 秒。
+5. **ctx 8192 幾乎無影響**：KV 讀取相對權重可忽略，不要調錯方向。
+6. **開局惰性載模型**：模型/binary/引擎延遲到首次開局。
+7. **失敗路徑空等** gate timeout。
+- 註：`PARALLEL=1` 是否元凶有爭議。原調查稱單槽序列化是最大元凶；@oracle 認為四核下平行不增吞吐只加交錯。待實測判定（見待跑驗證）。
+
+### 已定決策
+- CD 60s 不動（真人節奏，用戶確認）。
+- quiet 整組拔除（見第 1 項）。
+- 模型不換（兩台都 Qwen）。
+- PARALLEL 先維持 1，實測後再定。
+
+### 改善建議（未套用）
+- `LLAMA_SERVER_THREADS=4`（env，零風險，先測）。
+- prompt 預算縮減（expand 8000→4000、`PRE_SPEECH_BUDGET` 3000→2000，需改碼，最大槓桿）。
+- 管線裁剪（草稿少跳過 judge；maxTokens expand→100、judge→200，需改碼）。
+- 模型預熱（server 啟動就載）。
+- 失敗快退。
+
+### 待跑驗證
+1. threads 4 對比（內顯機）。
+2. thinking 洩漏確認（正常中文輸出）。
+3. PARALLEL 1 vs 4 對比（內顯機，判定兩派誰對）。
 
 ---
 
