@@ -193,6 +193,22 @@ GM 檢視（僅觀戰可點）除了玩家列表，也應顯示**夜晚所有行
 
 ---
 
+## 6. [ ] GM 檢視顯示 flag 統計
+
+### 需求
+GM 檢視（僅觀戰可點）除了玩家列表與白板，也應顯示每輪 AI 決策 flag 統計（決定投誰／棄票／資訊不足各幾筆），供除錯與驗證收斂。
+
+### 現況
+- flag 永不進白板（廣播前清洗），GM 白板與一般視角相同，看不到 flag。
+- flag 存在 `ai-scheduler.ts` 內部（`AIDecision`），`GMSnapshot`（`types.ts:263`）無此欄位，前端無從顯示。
+
+### 所需改動
+**後端**（`game-state.ts` `buildGMSnapshot` + `types.ts` `GMSnapshot`）：帶每輪 flag 統計（決定／棄票／資訊不足計數，可含各玩家投票標的）。
+
+**前端**（`main.js` `renderSpectator(snapshot, isGm)`）：GM 分支加 flag 統計區塊。
+
+---
+
 ## 已完成（本次會話）
 
 - [x] **修復 WebSocket 心跳誤殺**（`src/server.ts` `pingCheck`）— 先發 PING 後檢查、門檻改 `interval+timeout`
