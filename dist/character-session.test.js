@@ -66,6 +66,18 @@ test('截斷：超長討論 → 先丟 daySummary 再丟當天最舊', () => {
     assert.ok(!truncated.includes('發言0'), '當天最舊討論應被丟棄');
     assert.ok(truncated.includes('發言59'), '最新討論應保留');
 });
+test('buildPrompt 預設預算 4000：超量輸入截到 ≤4000（daySummaries 機制保留）', () => {
+    const s = discussionState();
+    const speaker = aliveIds(s)[0];
+    const filler = '填充'.repeat(50); // 每則約 100+ 字，60 則遠超預算
+    for (let i = 0; i < 60; i++) {
+        transition(s, { type: 'HUMAN_SPEAK', playerId: speaker, text: `發言${i}${filler}` });
+    }
+    s.daySummaries.push('摘要標記' + filler);
+    const prompt = buildPrompt(s, speaker, 'speech');
+    assert.ok(prompt.length <= 4000, `預設預算 prompt ${prompt.length} 字元應 ≤ 4000`);
+    assert.ok(prompt.includes('發言59'), '最新討論應保留');
+});
 test('summarizeDay 格式：top3 指控 + 投票結果', () => {
     const s = discussionState();
     const ids = aliveIds(s);
@@ -77,7 +89,7 @@ test('summarizeDay 格式：top3 指控 + 投票結果', () => {
     assert.ok(summary.includes(`第${s.day}天摘要`));
     assert.ok(summary.includes(`P${b}`));
 });
-test('buildPreSpeechPrompt：輕量段落齊全、≤ 3000 字元', () => {
+test('buildPreSpeechPrompt：輕量段落齊全、≤ 2000 字元', () => {
     const s = discussionState();
     const speaker = aliveIds(s)[0];
     transition(s, { type: 'HUMAN_SPEAK', playerId: speaker, text: '大家早安，今天多聽聽' });

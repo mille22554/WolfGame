@@ -12,7 +12,7 @@ export declare function buildPrompt(state: GameState, playerId: number, kind: Pr
  * summarizeDay：啟發式摘要 — top3 指控（被最多人點名）+ 投票結果
  */
 export declare function summarizeDay(state: GameState, day: number): string;
-export declare const PRE_SPEECH_BUDGET = 3000;
+export declare const PRE_SPEECH_BUDGET = 2000;
 export declare const PRE_SPEECH_RECENT = 5;
 export declare const PRE_SPEECH_PERSONA_MAX = 500;
 /**

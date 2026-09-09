@@ -4,8 +4,19 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { Worker } from 'worker_threads';
-import { WorkerDispatcher } from './worker-dispatcher.js';
+import { WorkerDispatcher, KIND_DEFAULTS } from './worker-dispatcher.js';
 import type { WorkerToMainMessage } from './types.js';
+
+test('KIND_DEFAULTS 推理參數調優值：expand 100、judge 200、speech 100（其餘不動）', () => {
+  assert.equal(KIND_DEFAULTS.expand.maxTokens, 100);
+  assert.equal(KIND_DEFAULTS.expand.temperature, 0.8);
+  assert.equal(KIND_DEFAULTS.judge.maxTokens, 200);
+  assert.equal(KIND_DEFAULTS.judge.temperature, 0.3);
+  assert.equal(KIND_DEFAULTS.pre_speech.maxTokens, 100);
+  assert.equal(KIND_DEFAULTS.speech.maxTokens, 100);
+  assert.equal(KIND_DEFAULTS.vote.maxTokens, 100);
+  assert.equal(KIND_DEFAULTS.night.maxTokens, 100);
+});
 
 const WORKER_URL = new URL('./worker.js', import.meta.url);
 const MOCK_ENV = { ...process.env, LLM_PROVIDER: 'mock' };

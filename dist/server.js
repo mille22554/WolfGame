@@ -8,7 +8,6 @@
 import * as http from 'http';
 import * as net from 'net';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { exec } from 'child_process';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -18,7 +17,7 @@ import { WorkerDispatcher } from './worker-dispatcher.js';
 import { createGameState, buildGMSnapshot, buildPlayerSnapshot, buildSpectatorSnapshot, } from './game-state.js';
 import { DEFAULT_LLAMACPP_MODEL_URI, getDefaultModelsDir, OpenAICompatibleProvider, } from './llm.js';
 import { downloadModelFile } from './model-download.js';
-import { LlamaServerManager, ensureLlamaServer, ensureLlamaServerPair, startLlamaServerWithFallback, getDefaultBinDir, readBackendPreference, writeBackendPreference, effectiveBackendPreference, defaultGpuLayers, DEFAULT_LLAMA_SERVER_RELEASE, DEFAULT_LLAMA_SERVER_PORT, DEFAULT_LLAMA_SERVER_HOST, } from './llama-server.js';
+import { LlamaServerManager, ensureLlamaServer, ensureLlamaServerPair, startLlamaServerWithFallback, getDefaultBinDir, readBackendPreference, writeBackendPreference, effectiveBackendPreference, defaultGpuLayers, defaultThreads, DEFAULT_LLAMA_SERVER_RELEASE, DEFAULT_LLAMA_SERVER_PORT, DEFAULT_LLAMA_SERVER_HOST, } from './llama-server.js';
 import { OpenAICompatibleDispatcher, MockDispatcher } from './llm-dispatcher.js';
 import { getResourceRoot } from './utils.js';
 import { LobbyManager } from './lobby.js';
@@ -1251,7 +1250,7 @@ export async function startServer(options = {}) {
                 port: llamaServerPort,
                 host: llamaServerHost,
                 ctxSize: options.llamaServerCtxSize ?? envInt('LLAMA_SERVER_CTX_SIZE', 8192),
-                threads: options.llamaServerThreads ?? envInt('LLAMA_SERVER_THREADS', os.cpus().length),
+                threads: options.llamaServerThreads ?? envInt('LLAMA_SERVER_THREADS', defaultThreads()),
                 parallel: options.llamaServerParallel ?? envInt('LLAMA_SERVER_PARALLEL', 1),
                 idleTimeout: options.llamaServerIdleTimeout ?? envInt('LLAMA_SERVER_IDLE_TIMEOUT', 600), // 已棄用：b10361 不支援，不轉 flag
                 // 2.38GB 模型載入動輒數分鐘：健康等待放寬至 300s（可用 env 覆寫），避免誤殺

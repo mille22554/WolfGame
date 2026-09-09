@@ -27,7 +27,7 @@ import { downloadModelFile } from './model-download.js';
 import {
   LlamaServerManager, ensureLlamaServer, ensureLlamaServerPair, startLlamaServerWithFallback,
   getDefaultBinDir, readBackendPreference, writeBackendPreference, effectiveBackendPreference,
-  defaultGpuLayers,
+  defaultGpuLayers, defaultThreads,
   DEFAULT_LLAMA_SERVER_RELEASE, DEFAULT_LLAMA_SERVER_PORT, DEFAULT_LLAMA_SERVER_HOST,
   type BackendPreference,
 } from './llama-server.js';
@@ -64,7 +64,7 @@ export interface ServerOptions {
   llamaServerPort?: number;        // env LLAMA_SERVER_PORT，預設 3001
   llamaServerHost?: string;        // env LLAMA_SERVER_HOST，預設 127.0.0.1
   llamaServerCtxSize?: number;     // env LLAMA_SERVER_CTX_SIZE，預設 8192
-  llamaServerThreads?: number;     // env LLAMA_SERVER_THREADS，預設 os.cpus().length
+  llamaServerThreads?: number;     // env LLAMA_SERVER_THREADS，預設 defaultThreads()（實體核啟發式）
   llamaServerParallel?: number;    // env LLAMA_SERVER_PARALLEL，預設 1
   llamaServerIdleTimeout?: number; // 已棄用，無作用（b10361 不支援 --idle-timeout，保留相容）
   llamaServerRelease?: string;     // env LLAMA_SERVER_RELEASE，預設 'b10361'
@@ -1295,7 +1295,7 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
         port: llamaServerPort,
         host: llamaServerHost,
         ctxSize: options.llamaServerCtxSize ?? envInt('LLAMA_SERVER_CTX_SIZE', 8192),
-        threads: options.llamaServerThreads ?? envInt('LLAMA_SERVER_THREADS', os.cpus().length),
+        threads: options.llamaServerThreads ?? envInt('LLAMA_SERVER_THREADS', defaultThreads()),
         parallel: options.llamaServerParallel ?? envInt('LLAMA_SERVER_PARALLEL', 1),
         idleTimeout: options.llamaServerIdleTimeout ?? envInt('LLAMA_SERVER_IDLE_TIMEOUT', 600), // 已棄用：b10361 不支援，不轉 flag
         // 2.38GB 模型載入動輒數分鐘：健康等待放寬至 300s（可用 env 覆寫），避免誤殺

@@ -8,7 +8,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import AdmZip from 'adm-zip';
-import { LlamaServerManager, ensureLlamaServer, ensureLlamaServerPair, startLlamaServerWithFallback, llamaServerDownloadUrl, llamaServerDirName, pruneOtherVariantDirs, migrateLegacyLlamaDir, gpuLayersForVram, reducedGpuLayers, defaultGpuLayers, isGpuCrashError, readBackendPreference, writeBackendPreference, effectiveBackendPreference, FULL_GPU_LAYERS, REDUCED_GPU_LAYERS, } from './llama-server.js';
+import { LlamaServerManager, ensureLlamaServer, ensureLlamaServerPair, startLlamaServerWithFallback, llamaServerDownloadUrl, llamaServerDirName, pruneOtherVariantDirs, migrateLegacyLlamaDir, gpuLayersForVram, reducedGpuLayers, defaultGpuLayers, defaultThreads, isGpuCrashError, readBackendPreference, writeBackendPreference, effectiveBackendPreference, FULL_GPU_LAYERS, REDUCED_GPU_LAYERS, } from './llama-server.js';
 const FAKE_SRC = `
 import http from 'node:http';
 const args = process.argv.slice(2);
@@ -729,6 +729,24 @@ http.createServer((req, res) => {
         await mgr2.stop();
         fs.rmSync(dir, { recursive: true, force: true });
     }
+});
+test('defaultThreads：實體核啟發式（邏輯核一半，上限 8，下限 1）', () => {
+    assert.equal(defaultThreads(1), 1);
+    assert.equal(defaultThreads(2), 1);
+    assert.equal(defaultThreads(4), 2);
+    assert.equal(defaultThreads(8), 4); // 目標機器 i3-14100：8 線程→4，不再超訂
+    assert.equal(defaultThreads(12), 6);
+    assert.equal(defaultThreads(16), 8);
+    assert.equal(defaultThreads(32), 8); // 多核機器不傷：封頂 8
+    assert.equal(defaultThreads(0), 1);
+});
+test('LlamaServerManager：未指定 threads 用啟發式預設；顯式指定照用', () => {
+    const heuristic = defaultThreads();
+    assert.ok(heuristic >= 1 && heuristic <= 8);
+    const a = new LlamaServerManager({ binPath: 'x.exe', modelPath: 'm.gguf' });
+    assert.equal(a.options.threads, heuristic);
+    const b = new LlamaServerManager({ binPath: 'x.exe', modelPath: 'm.gguf', threads: 2 });
+    assert.equal(b.options.threads, 2);
 });
 test('整合：真實 llama-server.exe（不存在時 skip）', async (t) => {
     const { getDefaultBinDir } = await import('./llama-server.js');

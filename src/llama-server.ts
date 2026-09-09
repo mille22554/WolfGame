@@ -23,6 +23,17 @@ export function getDefaultBinDir(): string {
   return path.join(getDataDir(), 'bin');
 }
 
+/**
+ * 預設推理線程數（啟發式）：瞄準實體核 ≈ 邏輯核一半，上限 8、下限 1。
+ * 背景：llama.cpp CPU 推理超訂（threads > 實體核）只增上下文切換，不加吞吐；
+ * 8 線程跑 4 核（i3-14100）實測浪費 10-30%。多核機器不受傷（16 線程→8，32 線程→8）。
+ * env LLAMA_SERVER_THREADS 照樣覆寫（server.ts／LlamaServerManagerOptions.threads 最高優先）。
+ */
+export function defaultThreads(logicalCpus: number = os.cpus().length): number {
+  const n = Number.isFinite(logicalCpus) ? Math.floor(logicalCpus) : 4;
+  return Math.max(1, Math.min(8, Math.floor(n / 2)));
+}
+
 // ============================================
 // 後端變體（CPU / Vulkan GPU；不做 CUDA）
 // ============================================
@@ -334,7 +345,7 @@ export class LlamaServerManager {
       port: options.port ?? DEFAULT_LLAMA_SERVER_PORT,
       host: options.host ?? DEFAULT_LLAMA_SERVER_HOST,
       ctxSize: options.ctxSize ?? 8192,
-      threads: options.threads ?? os.cpus().length,
+      threads: options.threads ?? defaultThreads(),
       parallel: options.parallel ?? 1,
       idleTimeout: options.idleTimeout ?? 600,
       healthTimeoutMs: options.healthTimeoutMs ?? 120000,

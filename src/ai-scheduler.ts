@@ -292,8 +292,10 @@ export class SpeechScheduler implements AIScheduler {
         return;
       }
 
-      // ---- JUDGE：全盲裁判 ----
-      const scores = await this.judge(token, cur1, drafts);
+      // ---- JUDGE：全盲裁判（草稿 ≤3 直接跳過，全部同分純隨機挑，新穎性不生效） ----
+      const scores = drafts.length <= 3
+        ? new Map(drafts.map((d) => [d.slot, 5]))
+        : await this.judge(token, cur1, drafts);
       if (token !== this.prodToken) return;
       const cur2 = this.ctx.getState();
       if (cur2.phase !== 'DAY_DISCUSSION_OPEN') return;
@@ -318,6 +320,7 @@ export class SpeechScheduler implements AIScheduler {
       try {
         full = stripDecisionFlags((await this.ctx.llm.generate(expandPrompt, {
           temperature: this.options.expandTemp,
+          maxTokens: 100,
         })).trim());
       } catch {
         this.scheduleRetry();
@@ -413,7 +416,7 @@ export class SpeechScheduler implements AIScheduler {
     try {
       raw = await this.ctx.llm.generate(prompt, {
         temperature: this.options.judgeTemp,
-        maxTokens: 300,
+        maxTokens: 200,
       });
     } catch {
       return new Map(drafts.map((d) => [d.slot, 5]));

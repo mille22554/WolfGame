@@ -74,11 +74,11 @@ function privateKnowledgeLines(state, playerId) {
     }
     return lines;
 }
-export function buildPrompt(state, playerId, kind, budget = 8000) {
+export function buildPrompt(state, playerId, kind, budget = 4000) {
     const player = state.players.find((p) => p.id === playerId);
     if (!player)
         throw new Error(`找不到玩家 P${playerId}`);
-    const maxChars = budget ?? 8000;
+    const maxChars = budget ?? 4000;
     const maxCurrentDayEntries = 60;
     // --- 固定部分 ---
     const personaId = player.personality || `p${playerId}`;
@@ -172,7 +172,7 @@ export function summarizeDay(state, day) {
 // ============================================
 // Phase 1：預發言 / 裁判 / 展開 prompt
 // ============================================
-export const PRE_SPEECH_BUDGET = 3000; // 字元預算
+export const PRE_SPEECH_BUDGET = 2000; // 字元預算
 export const PRE_SPEECH_RECENT = 5; // 最近幾則
 export const PRE_SPEECH_PERSONA_MAX = 500; // 人格精簡上限
 /**

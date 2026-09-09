@@ -7,12 +7,12 @@
  */
 import { Worker } from 'worker_threads';
 import { randomUUID } from 'crypto';
-// 各 kind 預設參數（規格指定：預發言 temp 0.7/maxTokens 100；裁判 temp 0.3/maxTokens 300；展開 temp 0.8）
+// 各 kind 預設參數（規格指定：預發言 temp 0.7/maxTokens 100；裁判 temp 0.3/maxTokens 200；展開 temp 0.8/maxTokens 100）
 export const KIND_DEFAULTS = {
     pre_speech: { temperature: 0.7, maxTokens: 100 },
-    judge: { temperature: 0.3, maxTokens: 300 },
-    expand: { temperature: 0.8, maxTokens: 150 },
-    speech: { temperature: 0.8, maxTokens: 150 },
+    judge: { temperature: 0.3, maxTokens: 200 },
+    expand: { temperature: 0.8, maxTokens: 100 },
+    speech: { temperature: 0.8, maxTokens: 100 },
     vote: { temperature: 0.3, maxTokens: 100 },
     night: { temperature: 0.3, maxTokens: 100 },
 };

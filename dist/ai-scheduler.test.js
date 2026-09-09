@@ -37,13 +37,13 @@ class MockLLM {
     constructor(fn) {
         this.fn = fn;
     }
-    async generate(prompt) {
+    async generate(prompt, config) {
         const kind = prompt.includes('【裁判任務】')
             ? 'judge'
             : prompt.includes('【你的預發言草稿】')
                 ? 'expand'
                 : 'pre_speech';
-        this.calls.push({ kind, prompt });
+        this.calls.push({ kind, prompt, config });
         return this.fn(prompt);
     }
     async requestSpeech() {
@@ -445,9 +445,9 @@ test('新穎性懲罰：重複內容被降分（4 人局，墊底者不在 top3�
         sch.stop();
     }
 });
-test('少候選人照跑完整管線（含裁判；runDirect 特例已刪除）', async () => {
+test('管線裁剪：草稿 ≤3 跳過 judge（直接展開照播）；4 草稿以上仍跑裁判', async () => {
+    // 2 候選人 → 跳過 judge
     const s = discussionState(6);
-    // 只留 2 個存活 AI
     let kept = 0;
     for (const p of s.players) {
         if (p.controlledBy === 'ai' && p.alive && kept < 2) {
@@ -466,9 +466,55 @@ test('少候選人照跑完整管線（含裁判；runDirect 特例已刪除）'
         await flushN(3);
         mock.timers.tick(1000);
         await flush();
-        assert.ok(llm.kinds().includes('judge'), '少候選人仍應呼叫裁判');
+        assert.ok(!llm.kinds().includes('judge'), '2 草稿應跳過裁判');
+        assert.ok(llm.kinds().includes('expand'), '仍應展開');
         assert.equal(events[0].type, 'AI_SPEECH_DONE');
         assert.equal(events[1].type, 'AI_READY_VOTE');
+    }
+    finally {
+        sch.stop();
+    }
+    // 4 候選人 → 跑裁判
+    const s2 = discussionState(6);
+    let kept2 = 0;
+    for (const p of s2.players) {
+        if (p.controlledBy === 'ai' && p.alive && kept2 < 4) {
+            kept2++;
+            continue;
+        }
+        if (p.controlledBy === 'ai')
+            p.alive = false;
+    }
+    assert.equal(s2.players.filter((p) => p.alive && p.controlledBy === 'ai').length, 4);
+    const llm2 = defaultMock();
+    const { ctx: ctx2, events: events2 } = makeCtx(s2, llm2);
+    const sch2 = new SpeechScheduler(ctx2, { cdMs: 1000 });
+    try {
+        sch2.onPhaseEntered(s2);
+        await flushN(3);
+        mock.timers.tick(1000);
+        await flush();
+        assert.ok(llm2.kinds().includes('judge'), '4 草稿應跑裁判');
+        assert.equal(events2[0].type, 'AI_SPEECH_DONE');
+    }
+    finally {
+        sch2.stop();
+    }
+});
+test('管線裁剪：maxTokens judge=200、expand=100、pre_speech=100', async () => {
+    const s = discussionState(9);
+    const llm = defaultMock();
+    const { ctx } = makeCtx(s, llm);
+    const sch = new SpeechScheduler(ctx, { cdMs: 1000 });
+    try {
+        sch.onPhaseEntered(s);
+        await flushN(3);
+        mock.timers.tick(1000);
+        await flush();
+        const cfgs = new Map(llm.calls.map((c) => [c.kind, c.config?.maxTokens]));
+        assert.equal(cfgs.get('pre_speech'), 100);
+        assert.equal(cfgs.get('judge'), 200);
+        assert.equal(cfgs.get('expand'), 100);
     }
     finally {
         sch.stop();

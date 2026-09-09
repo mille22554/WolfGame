@@ -7,6 +7,13 @@ export declare const DEFAULT_LLAMA_SERVER_RELEASE = "b10361";
 export declare const DEFAULT_LLAMA_SERVER_PORT = 2064;
 export declare const DEFAULT_LLAMA_SERVER_HOST = "127.0.0.1";
 export declare function getDefaultBinDir(): string;
+/**
+ * 預設推理線程數（啟發式）：瞄準實體核 ≈ 邏輯核一半，上限 8、下限 1。
+ * 背景：llama.cpp CPU 推理超訂（threads > 實體核）只增上下文切換，不加吞吐；
+ * 8 線程跑 4 核（i3-14100）實測浪費 10-30%。多核機器不受傷（16 線程→8，32 線程→8）。
+ * env LLAMA_SERVER_THREADS 照樣覆寫（server.ts／LlamaServerManagerOptions.threads 最高優先）。
+ */
+export declare function defaultThreads(logicalCpus?: number): number;
 /** llama-server 二進位變體 */
 export type LlamaServerVariant = 'cpu' | 'vulkan';
 /** 模型管理頁三檔（手動覆寫；優先序：選項 hook ＞ 持久化手動 ＞ env ＞ auto） */

@@ -87,12 +87,12 @@ export function buildPrompt(
   state: GameState,
   playerId: number,
   kind: PromptKind,
-  budget = 8000,
+  budget = 4000,
 ): string {
   const player = state.players.find((p) => p.id === playerId);
   if (!player) throw new Error(`找不到玩家 P${playerId}`);
 
-  const maxChars = budget ?? 8000;
+  const maxChars = budget ?? 4000;
   const maxCurrentDayEntries = 60;
 
   // --- 固定部分 ---
@@ -199,7 +199,7 @@ export function summarizeDay(state: GameState, day: number): string {
 // Phase 1：預發言 / 裁判 / 展開 prompt
 // ============================================
 
-export const PRE_SPEECH_BUDGET = 3000;        // 字元預算
+export const PRE_SPEECH_BUDGET = 2000;        // 字元預算
 export const PRE_SPEECH_RECENT = 5;           // 最近幾則
 export const PRE_SPEECH_PERSONA_MAX = 500;    // 人格精簡上限
 
