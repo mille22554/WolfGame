@@ -45,7 +45,7 @@ AI 發言回應應帶「決策 flag」，讓中控（SpeechScheduler）知道每
 1. **「目前資訊太少，我無法決定要棄票或投某人」** → 資訊不足，需繼續討論
 2. **「目前資訊已足夠，我決定棄票/投XXX」** → 已準備好投票
 
-當**所有存活 AI 都 ready**（有投票標的）時，討論自然收斂 → `CLOSE_DISCUSSION` → 投票。
+當**所有存活玩家都 ready**（AI 有投票標的、真人已確認）時，討論自然收斂 → 直接進投票（不經 `CLOSING`）。
 
 **關鍵限制**：flag 是給中控看的內部決策狀態，可夾在 pre-speech 草稿（內部未公開），但**不可寫入白板（discussionLog）**，否則洩漏投票意圖。
 
@@ -75,7 +75,7 @@ AI 在 pre-speech 草稿結尾附加：
 | 檔案 | 變更 |
 |------|------|
 | `src/types.ts` | 加 `AI_READY_VOTE` 事件；`voteReady` 註解改「真人 + AI」 |
-| `src/game-state.ts` | `allAlivePlayersReady`；`AI_READY_VOTE` handler；`CLOSE_DISCUSSION` 改用統一 ready；移除 `CLOSING` 階段；`applyReconnect` 移出 voteReady |
+| `src/game-state.ts` | `allAlivePlayersReady`；`AI_READY_VOTE` handler；收斂直進投票（移除 `CLOSING` 階段與 `CLOSE_DISCUSSION` 路徑）；`applyReconnect` 移出 voteReady |
 | `src/ai-scheduler.ts` | `AIDecision` 型別、`parseDecisionFlag`、`updateDecisions`、`checkConvergence`、`enqueueNewlyDecided`、`checkAllPlayersReady`；改 `collectPreSpeeches`/`runPipeline`/`runDirect`/`tick`/`onPhaseEntered` |
 | `src/character-session.ts` | `buildPreSpeechPrompt` 任務指令加 flag 格式 |
 | `src/server.ts` | 移除 `autoCloseTimer` + `speechesPerDay` |
@@ -94,12 +94,12 @@ AI 在 pre-speech 草稿結尾附加：
 1. **無 flag／解析失敗也要計入安全閥**：否則模型不照格式吐時，純 AI 局永遠卡在討論（移除 speechesPerDay 後唯一的收斂保證，必須對任何輸出都有界）。
 2. **regex 重寫**：跳脫方括號（已修正）＋全形/半形冒號都要收＋剝離用全域匹配（防中置 flag 殘留進白板洩漏投票意圖）。
 3. **runDirect 對所有存活 AI 出草稿**：現況只給隨機一個 AI 出草稿，≤2 人時另一個永遠沒 flag → 卡死（只選一個展開即可）。
-4. **CLOSING 競態**：CLOSING 不收 AI_READY_VOTE，晚到的 ready 被拒 → 卡死。二選一：CLOSING 也接受，或保證先送完所有 ready 再 CLOSE_DISCUSSION。
+4. **CLOSING 競態**（已決議：CLOSING 整個拿掉，本條作廢）：原分析指 CLOSING 不收 AI_READY_VOTE、晚到的 ready 被拒會卡死；決議後無 CLOSING，改走自由發言裡的統一檢查，晚到的 ready 照收。
 5. **AI_READY_VOTE 語義定死**：發言成功廣播後才 enqueue、不帶 boardVersion、decided 單向不反悔、全 decided 後管線停止空轉。
 6. **expand 輸出也要清洗 flag**：模型可能自行輸出 flag，broadcast 前過一次 pattern（廉價保險）。剝離位置統一在 `collectPreSpeeches` 回傳前，不要各消費點各自剝離。
 
 ### 附帶建議
-- 混合局真人不按 ready 會卡在 CLOSING（舊問題）：把 `closingTimeoutMs` 接上，或確認前端有 HUMAN_SKIP 逃生鈕。
+- 混合局真人不按 ready 會一直等（原來卡在 CLOSING，現改為在自由發言裡等）：等待加超時（`closingTimeoutMs` 接到統一等待上），或確認前端有 HUMAN_SKIP 逃生鈕。
 - 本項依賴第 1 項先做：否則 5 輪收斂＝400 秒純白等，慢到不可用。
 - 心理準備：純 AI 局一天可能跑 25-45 分鐘（收斂設計的代價）。
 
