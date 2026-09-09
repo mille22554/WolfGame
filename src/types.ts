@@ -272,6 +272,27 @@ export interface GMSnapshot {
   voteReady: number[];
   takenOver: number[];            // 掛機接管中座位（GM 視角區分原生 AI 與接管）
   idleCounts: Record<number, number>;   // 掛機計數（GM 視角可見，驗收用）
+  // --- GM 白板同步（與一般視角 boardHtml 相容） ---
+  nightResult: string | null;
+  deadPlayers: { id: number; name: string; cause: string; day: number }[];
+  winner: Team | null;
+  gameOver: boolean;
+  // --- 夜間行動全覽 ---
+  nightActions: NightAction[];
+  seerChecks: { seerId: number; targetId: number; result: Team; day: number }[];
+  guardProtects: { guardId: number; targetId: number; day: number }[];
+  masonChatLog: MasonChatEntry[];
+  // --- GM 玩家列表顯示：personality id → 顯示名（AI 座位顯示 AI 角色名） ---
+  personalityNames: Record<string, string>;
+  // --- GM 除錯用：每輪 AI 決策 flag 統計（未注入時 undefined） ---
+  flagStats?: FlagStats;
+}
+
+/** 每輪 AI 決策 flag 統計（scheduler 維護，供 GM 檢視除錯與驗證收斂） */
+export interface FlagStats {
+  decided: number;    // 決定投誰（target 為玩家編號）
+  abstain: number;    // 棄票（target 為 abstain，含安全閥強制）
+  uncertain: number;  // 資訊不足
 }
 
 // ============================================

@@ -21,7 +21,7 @@
  *   transition 統一檢查全員 ready → 直進投票（無 CLOSING）。
  */
 import type { AIScheduler } from './engine.js';
-import type { GameState, SchedulerContext } from './types.js';
+import type { FlagStats, GameState, SchedulerContext } from './types.js';
 export type AIDecision = {
     status: 'decided';
     target: number | 'abstain';
@@ -66,6 +66,7 @@ export declare class SpeechScheduler implements AIScheduler {
     private cdTimer;
     private retryTimer;
     private uncertainCounts;
+    private decisions;
     constructor(ctx: SchedulerContext, options?: SpeechSchedulerOptions);
     onPhaseEntered(state: GameState): void;
     onBoardUpdated(state: GameState): void;
@@ -88,6 +89,8 @@ export declare class SpeechScheduler implements AIScheduler {
     private collectPreSpeeches;
     /** 決策更新：decided 覆蓋標的＋清空計數；資訊不足累計，達安全閥強制 decided:abstain */
     private updateDecision;
+    /** GM 除錯用：每輪 AI 決策 flag 統計（決定投誰／棄票／資訊不足各幾筆） */
+    flagStats(): FlagStats;
     private judge;
     /** CD 到有貨 → 播出；播出成功且 decided → enqueue AI_READY_VOTE（統一檢查由 transition 執行） */
     private broadcastStash;

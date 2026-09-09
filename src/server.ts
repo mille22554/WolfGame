@@ -36,7 +36,7 @@ import { getResourceRoot } from './utils.js';
 import { LobbyManager } from './lobby.js';
 import type {
   GameState, GameEvent, LLMDispatcher, ClientRegistry, PlayerSnapshot, SpectatorSnapshot,
-  LobbySnapshot, ServerToClientMessage, ClientToServerMessage,
+  FlagStats, LobbySnapshot, ServerToClientMessage, ClientToServerMessage,
 } from './types.js';
 
 // ============================================
@@ -293,6 +293,7 @@ export interface WebSocketRegistryOptions {
   getLobbySnapshot?: () => LobbySnapshot;  // 等候大廳：engine 未就緒/SETUP 時的快照來源
   onLobbySignal?: (clientId: string) => void;  // 首個遊戲頁訊號：決定 host＋啟動自動開局 timer
   onClientLeave?: (clientId: string, playerId?: number) => void;
+  getFlagStats?: () => FlagStats;  // GM 除錯：每輪 AI 決策 flag 統計來源（scheduler 閉包注入）
 }
 
 interface TrackedClient {
@@ -317,8 +318,8 @@ export function isTakeoverFiltered(client: { takeoverFiltered?: boolean }, msgTy
 }
 
 export class WebSocketRegistry implements ClientRegistry {
-  private readonly opts: Required<Omit<WebSocketRegistryOptions, 'onZeroClientsTimeout' | 'onLastClientLeave' | 'actions' | 'ensureReady' | 'getLobbySnapshot' | 'onLobbySignal' | 'onClientLeave'>>
-    & Pick<WebSocketRegistryOptions, 'onZeroClientsTimeout' | 'onLastClientLeave' | 'actions' | 'ensureReady' | 'getLobbySnapshot' | 'onLobbySignal' | 'onClientLeave'>;
+  private readonly opts: Required<Omit<WebSocketRegistryOptions, 'onZeroClientsTimeout' | 'onLastClientLeave' | 'actions' | 'ensureReady' | 'getLobbySnapshot' | 'onLobbySignal' | 'onClientLeave' | 'getFlagStats'>>
+    & Pick<WebSocketRegistryOptions, 'onZeroClientsTimeout' | 'onLastClientLeave' | 'actions' | 'ensureReady' | 'getLobbySnapshot' | 'onLobbySignal' | 'onClientLeave' | 'getFlagStats'>;
   private readonly clients = new Set<TrackedClient>();
   private clientSeq = 0;
   private zeroTimer: ReturnType<typeof setTimeout> | null = null;
@@ -337,6 +338,7 @@ export class WebSocketRegistry implements ClientRegistry {
       getLobbySnapshot: opts.getLobbySnapshot,
       onLobbySignal: opts.onLobbySignal,
       onClientLeave: opts.onClientLeave,
+      getFlagStats: opts.getFlagStats,
     };
     wss.on('connection', (ws) => void this.onConnection(ws));
     this.pingTimer = setInterval(() => this.pingCheck(), this.opts.pingIntervalMs);
@@ -365,7 +367,7 @@ export class WebSocketRegistry implements ClientRegistry {
     for (const c of this.clients) {
       if (c.playerId !== undefined) continue;   // Phase 2：只送給觀戰者（未選座）
       const msg: ServerToClientMessage = c.gmView
-        ? { type: 'SNAPSHOT', snapshot: buildGMSnapshot(this.opts.getState()), gmView: true }
+        ? { type: 'SNAPSHOT', snapshot: buildGMSnapshot(this.opts.getState(), this.opts.getFlagStats?.()), gmView: true }
         : { type: 'SNAPSHOT', snapshot, gmView: false };
       try {
         c.ws.send(JSON.stringify(msg));
@@ -438,7 +440,7 @@ export class WebSocketRegistry implements ClientRegistry {
         if (!lobby) return;
         msg = { type: 'LOBBY', lobby, clientId: c.clientId };
       } else if (c.gmView) {
-        msg = { type: 'SNAPSHOT', snapshot: buildGMSnapshot(state), gmView: true };
+        msg = { type: 'SNAPSHOT', snapshot: buildGMSnapshot(state, this.opts.getFlagStats?.()), gmView: true };
       } else if (c.playerId !== undefined) {
         msg = { type: 'SNAPSHOT', snapshot: buildPlayerSnapshot(state, c.playerId), gmView: false };
       } else {
@@ -1113,6 +1115,7 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
       lobbyClients.add(clientId);
       if (lobby.hostClientId === undefined) lobby.setHost(clientId);
     },
+    getFlagStats: () => scheduler?.flagStats() ?? { decided: 0, abstain: 0, uncertain: 0 },
     onClientLeave: (clientId, playerId) => {
       lobbyClients.delete(clientId);
       lobbySeatByClient.delete(clientId);

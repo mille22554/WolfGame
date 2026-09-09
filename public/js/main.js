@@ -879,7 +879,8 @@
 
   // ---------- 白板 / 玩家卡片共用 ----------
 
-  function boardHtml(snapshot) {
+  // onlyToday：GM 視角白板只顯示當天對話（GM snapshot 含全部天數，避免與下方對話紀錄區塊重複；一般快照無 day 欄位不受影響）
+  function boardHtml(snapshot, onlyToday) {
     var html = '';
     if (snapshot.nightResult) {
       html += '<div class="msg night">' + esc(snapshot.nightResult) + '</div>';
@@ -893,6 +894,7 @@
     }
     var log = snapshot.discussionLog || [];
     for (var j = 0; j < log.length; j++) {
+      if (onlyToday && log[j].day !== undefined && log[j].day !== snapshot.day) continue;
       html += '<div class="msg">P' + log[j].playerId + '：' + esc(log[j].text) + '</div>';
     }
     var votes = snapshot.votes || [];
@@ -922,10 +924,13 @@
     var html = '<h2>玩家</h2>';
     var gmPlayers = snapshot.players || null;
     if (gmPlayers) {
+      var pnameMap = snapshot.personalityNames || {};
       for (var g = 0; g < gmPlayers.length; g++) {
         var gp = gmPlayers[g];
         var cls = gp.alive ? 'alive' : 'dead';
-        html += '<div class="' + cls + '">P' + gp.id + ' ' + esc(gp.name) + '（' + esc(gp.role) + '）</div>';
+        var roleZh = ROLE_DISPLAY[gp.role] || gp.role;
+        var dispName = gp.controlledBy === 'ai' ? (pnameMap[gp.personality] || gp.name) : gp.name;
+        html += '<div class="' + cls + '">P' + gp.id + ' ' + esc(dispName) + '（' + esc(roleZh) + '）</div>';
       }
       return html;
     }
@@ -982,13 +987,79 @@
 
   // ---------- 觀戰 ----------
 
+  // GM 夜間行動區塊：nightActions（當夜提交）＋ seer/guard/mason 跨天累積，按 day 分組
+  function gmNightHtml(snapshot) {
+    var html = '<h2>夜間行動</h2>';
+    html += '<div class="msg">註：白板投票統計為跨天累計（GM 全覽語義）</div>';
+    var acts = snapshot.nightActions || [];
+    if (acts.length === 0) {
+      html += '<div class="msg">本夜尚無提交</div>';
+    } else {
+      var labels = { wolf_kill: '人狼襲擊', seer_check: '查驗', guard_protect: '守護' };
+      for (var i = 0; i < acts.length; i++) {
+        var a = acts[i];
+        html += '<div class="msg">P' + a.actorId + '→P' + a.targetId + '（' + esc(labels[a.type] || a.type) + '）</div>';
+      }
+    }
+    html += gmGroupedHtml(snapshot.seerChecks, '查驗紀錄', function (c) {
+      return 'P' + c.seerId + ' 查驗 P' + c.targetId + '=' + (c.result === 'werewolf' ? '人狼' : '村人');
+    });
+    html += gmGroupedHtml(snapshot.guardProtects, '守護紀錄', function (g) {
+      return 'P' + g.guardId + ' 守護 P' + g.targetId;
+    });
+    html += gmGroupedHtml(snapshot.masonChatLog, '共有者夜聊', function (m) {
+      return 'P' + m.playerId + '：' + esc(m.text);
+    });
+    return html;
+  }
+
+  // 通用 day 分組渲染（seer/guard/mason/對話共用）
+  function gmGroupedHtml(entries, title, fmt) {
+    var html = '<h2>' + esc(title) + '</h2>';
+    var list = entries || [];
+    if (list.length === 0) return html + '<div class="msg">無</div>';
+    var byDay = {};
+    var days = [];
+    for (var i = 0; i < list.length; i++) {
+      var d = list[i].day;
+      if (!byDay[d]) { byDay[d] = []; days.push(d); }
+      byDay[d].push(list[i]);
+    }
+    days.sort(function (a, b) { return a - b; });
+    for (var k = 0; k < days.length; k++) {
+      html += '<div class="msg">第 ' + days[k] + ' 天</div>';
+      var arr = byDay[days[k]];
+      for (var j = 0; j < arr.length; j++) {
+        html += '<div class="msg">' + fmt(arr[j]) + '</div>';
+      }
+    }
+    return html;
+  }
+
+  // GM 對話紀錄：全部 discussionLog 按 day 分組
+  function gmDiscussHtml(snapshot) {
+    return gmGroupedHtml(snapshot.discussionLog, '對話紀錄', function (e) {
+      return 'P' + e.playerId + '：' + esc(e.text);
+    });
+  }
+
+  // GM 除錯用：每輪 AI 決策 flag 統計（無資料時不渲染）
+  function gmFlagHtml(snapshot) {
+    var fs = snapshot.flagStats;
+    if (!fs) return '';
+    return '<h2>AI 決策</h2><div class="msg">AI 決策（每玩家最新）：決定投誰 '
+      + esc(fs.decided) + '／棄票 ' + esc(fs.abstain) + '／資訊不足 ' + esc(fs.uncertain) + '</div>';
+  }
+
   function renderSpectator(snapshot, isGm) {
     hideLobby();
     gmBtn.hidden = false;
     meEl.hidden = true;
     dayEl.textContent = '第 ' + snapshot.day + ' 天';
     phaseEl.textContent = PHASE_LABELS[snapshot.phase] || snapshot.phase;
-    boardEl.innerHTML = boardHtml(snapshot);
+    var html = boardHtml(snapshot, isGm);
+    if (isGm) html += gmNightHtml(snapshot) + gmDiscussHtml(snapshot) + gmFlagHtml(snapshot);
+    boardEl.innerHTML = html;
     boardEl.scrollTop = boardEl.scrollHeight;
     playersEl.innerHTML = playersHtml(snapshot, false);
       controlsBody.innerHTML = '<div class="msg">觀戰中…（真人請在大廳按參戰加入）</div>';

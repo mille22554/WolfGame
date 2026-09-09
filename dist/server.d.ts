@@ -8,7 +8,7 @@
 import * as http from 'http';
 import { WebSocketServer } from 'ws';
 import { type BackendPreference } from './llama-server.js';
-import type { GameState, GameEvent, LLMDispatcher, ClientRegistry, PlayerSnapshot, SpectatorSnapshot, LobbySnapshot } from './types.js';
+import type { GameState, GameEvent, LLMDispatcher, ClientRegistry, PlayerSnapshot, SpectatorSnapshot, FlagStats, LobbySnapshot } from './types.js';
 export interface ServerLLM extends LLMDispatcher {
     start(): Promise<void>;
     shutdown(): Promise<void>;
@@ -130,6 +130,7 @@ export interface WebSocketRegistryOptions {
     getLobbySnapshot?: () => LobbySnapshot;
     onLobbySignal?: (clientId: string) => void;
     onClientLeave?: (clientId: string, playerId?: number) => void;
+    getFlagStats?: () => FlagStats;
 }
 /**
  * 接管過濾判定（純函式，單向：只擋真人→server 的遊戲操作；server→真人推送不受影響）。

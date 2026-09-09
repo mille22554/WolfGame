@@ -11,7 +11,7 @@
 import {
   GameState, Player, Role, Team, Phase, GameEvent, PendingGate,
   PlayerSnapshot, GMSnapshot, SpectatorSnapshot, LobbySnapshot, TransitionResult, Effect,
-  NightAction, NightActionType, SeerResult, SCHEMA_VERSION,
+  NightAction, NightActionType, SeerResult, FlagStats, SCHEMA_VERSION,
 } from './types.js';
 import { assignRolesToPlayers, getAlivePlayers, getAliveWerewolves } from './assignment.js';
 import { resolveNightActions } from './night.js';
@@ -954,7 +954,18 @@ export function buildSpectatorSnapshot(state: GameState): SpectatorSnapshot {
 // buildGMSnapshot（GM 全貌，含 role/team/controlledBy）
 // ============================================
 
-export function buildGMSnapshot(state: GameState): GMSnapshot {
+export function buildGMSnapshot(state: GameState, flagStats?: FlagStats): GMSnapshot {
+  // 白板欄位：與 buildPublicFields 同推導（GM 白板與一般視角同步）
+  const deadPlayers = state.deathHistory.map((d) => {
+    const pl = state.players.find((p) => p.id === d.playerId);
+    return { id: d.playerId, name: pl?.name ?? `P${d.playerId}`, cause: d.cause, day: d.day };
+  });
+  let nightResult: string | null = null;
+  const wolfKills = state.deathHistory.filter((d) => d.cause === 'wolf_kill');
+  const lastKill = wolfKills[wolfKills.length - 1];
+  if (lastKill && lastKill.day === state.day) {
+    nightResult = `昨晚 P${lastKill.playerId} 遇襲身亡`;
+  }
   return {
     phase: state.phase,
     day: state.day,
@@ -967,6 +978,16 @@ export function buildGMSnapshot(state: GameState): GMSnapshot {
     voteReady: [...state.voteReady],
     takenOver: [...state.takenOver],
     idleCounts: { ...state.idleCounts },
+    nightResult,
+    deadPlayers,
+    winner: state.winner,
+    gameOver: state.gameOver,
+    nightActions: state.nightActions.map((a) => ({ ...a })),
+    seerChecks: state.seerChecks.map((c) => ({ ...c })),
+    guardProtects: state.guardProtects.map((g) => ({ ...g })),
+    masonChatLog: state.masonChatLog.map((m) => ({ ...m })),
+    personalityNames: Object.fromEntries(personalities.map((p) => [p.id, p.name])),
+    flagStats,
   };
 }
 

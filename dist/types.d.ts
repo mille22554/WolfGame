@@ -317,6 +317,36 @@ export interface GMSnapshot {
     voteReady: number[];
     takenOver: number[];
     idleCounts: Record<number, number>;
+    nightResult: string | null;
+    deadPlayers: {
+        id: number;
+        name: string;
+        cause: string;
+        day: number;
+    }[];
+    winner: Team | null;
+    gameOver: boolean;
+    nightActions: NightAction[];
+    seerChecks: {
+        seerId: number;
+        targetId: number;
+        result: Team;
+        day: number;
+    }[];
+    guardProtects: {
+        guardId: number;
+        targetId: number;
+        day: number;
+    }[];
+    masonChatLog: MasonChatEntry[];
+    personalityNames: Record<string, string>;
+    flagStats?: FlagStats;
+}
+/** 每輪 AI 決策 flag 統計（scheduler 維護，供 GM 檢視除錯與驗證收斂） */
+export interface FlagStats {
+    decided: number;
+    abstain: number;
+    uncertain: number;
 }
 export interface TransitionResult {
     state: GameState;

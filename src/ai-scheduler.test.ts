@@ -758,6 +758,52 @@ test('安全閥：連續資訊不足達上限 → 強制 decided，發言成功�
   }
 });
 
+test('flagStats：decided／棄票／資訊不足計數＋隔天歸零', async () => {
+  const s = discussionState(6);
+  const llm = new MockLLM((prompt) => {
+    if (prompt.includes('【裁判任務】')) return judgeBySlotDesc(prompt);
+    if (prompt.includes('【你的預發言草稿】')) return '展開文本';
+    const m = prompt.match(/你是 P(\d+)/);
+    const id = m ? parseInt(m[1], 10) : 1;
+    if (id % 3 === 1) return `P${id}：投P2。\n[決定:投P2]`;
+    if (id % 3 === 2) return `P${id}：棄票。\n[決定:棄票]`;
+    return `P${id}：資訊還不足，想再聽聽大家的說法。`;
+  });
+  const { ctx } = makeCtx(s, llm);
+  const sch = new SpeechScheduler(ctx, { cdMs: 600000 });
+  try {
+    sch.onPhaseEntered(s);
+    await flushN(3);
+    const exp = { decided: 0, abstain: 0, uncertain: 0 };
+    for (const p of s.players) {
+      if (!p.alive || p.controlledBy !== 'ai') continue;
+      if (p.id % 3 === 1) exp.decided++;
+      else if (p.id % 3 === 2) exp.abstain++;
+      else exp.uncertain++;
+    }
+    assert.deepEqual(sch.flagStats(), exp);
+    // 隔天進場 → 同步歸零（後續非同步生產尚未跑，不影響斷言）
+    sch.onPhaseEntered({ ...s, day: s.day + 1 });
+    assert.deepEqual(sch.flagStats(), { decided: 0, abstain: 0, uncertain: 0 });
+  } finally {
+    sch.stop();
+  }
+});
+
+test('flagStats：安全閥強制 abstain 計入棄票', async () => {
+  const s = discussionState(6);
+  const { ctx } = makeCtx(s, uncertainMock());
+  const sch = new SpeechScheduler(ctx, { cdMs: 600000, maxUncertainRounds: 1 });
+  try {
+    sch.onPhaseEntered(s);
+    await flushN(3);
+    const aliveAi = s.players.filter((p) => p.alive && p.controlledBy === 'ai').length;
+    assert.deepEqual(sch.flagStats(), { decided: 0, abstain: aliveAi, uncertain: 0 });
+  } finally {
+    sch.stop();
+  }
+});
+
 // ---------- Phase 2：全真人跳過 → 立即管線 ----------
 
 function mixedDiscussionState(): GameState {

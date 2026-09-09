@@ -218,6 +218,7 @@ export class WebSocketRegistry {
             getLobbySnapshot: opts.getLobbySnapshot,
             onLobbySignal: opts.onLobbySignal,
             onClientLeave: opts.onClientLeave,
+            getFlagStats: opts.getFlagStats,
         };
         wss.on('connection', (ws) => void this.onConnection(ws));
         this.pingTimer = setInterval(() => this.pingCheck(), this.opts.pingIntervalMs);
@@ -247,7 +248,7 @@ export class WebSocketRegistry {
             if (c.playerId !== undefined)
                 continue; // Phase 2：只送給觀戰者（未選座）
             const msg = c.gmView
-                ? { type: 'SNAPSHOT', snapshot: buildGMSnapshot(this.opts.getState()), gmView: true }
+                ? { type: 'SNAPSHOT', snapshot: buildGMSnapshot(this.opts.getState(), this.opts.getFlagStats?.()), gmView: true }
                 : { type: 'SNAPSHOT', snapshot, gmView: false };
             try {
                 c.ws.send(JSON.stringify(msg));
@@ -323,7 +324,7 @@ export class WebSocketRegistry {
                 msg = { type: 'LOBBY', lobby, clientId: c.clientId };
             }
             else if (c.gmView) {
-                msg = { type: 'SNAPSHOT', snapshot: buildGMSnapshot(state), gmView: true };
+                msg = { type: 'SNAPSHOT', snapshot: buildGMSnapshot(state, this.opts.getFlagStats?.()), gmView: true };
             }
             else if (c.playerId !== undefined) {
                 msg = { type: 'SNAPSHOT', snapshot: buildPlayerSnapshot(state, c.playerId), gmView: false };
@@ -1048,6 +1049,7 @@ export async function startServer(options = {}) {
             if (lobby.hostClientId === undefined)
                 lobby.setHost(clientId);
         },
+        getFlagStats: () => scheduler?.flagStats() ?? { decided: 0, abstain: 0, uncertain: 0 },
         onClientLeave: (clientId, playerId) => {
             lobbyClients.delete(clientId);
             lobbySeatByClient.delete(clientId);

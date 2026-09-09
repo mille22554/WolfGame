@@ -4,7 +4,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createGameState, transition, buildPlayerSnapshot, buildGMSnapshot, buildSpectatorSnapshot, getNightActors } from './game-state.js';
-import { Role, Team } from './types.js';
+import { Role, Team, NightActionType } from './types.js';
+import { personalities } from './personalities.js';
 function joinAll(state, count) {
     for (let i = 0; i < count; i++)
         transition(state, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
@@ -156,6 +157,21 @@ test('GM snapshot 完整（含 role/team/controlledBy）', () => {
     const s = createGameState(6);
     joinAll(s, 6);
     transition(s, { type: 'START_GAME' });
+    // 構造夜間行動＋夜聊＋死亡，驗證新欄位
+    const seer = s.players.find((p) => p.role === Role.SEER);
+    const guard = s.players.find((p) => p.role === Role.GUARD);
+    const wolf = s.players.find((p) => p.role === Role.WEREWOLF);
+    const victim = aliveIds(s).find((id) => s.players.find((p) => p.id === id).role === Role.VILLAGER);
+    for (const pid of getNightActors(s)) {
+        const target = pid === wolf.id ? victim : pid === seer.id ? wolf.id : aliveIds(s).filter((id) => id !== pid)[0];
+        transition(s, { type: 'AI_NIGHT_DONE', playerId: pid, targetId: target });
+    }
+    const mason = s.players.find((p) => p.role === Role.MASON);
+    void mason;
+    transition(s, { type: 'RESOLVE_NIGHT' });
+    // day1 守衛不可行動（getNightActors 排除 guard），手動補一筆守護＋夜聊驗證透傳
+    s.guardProtects.push({ guardId: guard.id, targetId: victim, day: 1 });
+    s.masonChatLog.push({ playerId: victim, text: '測試夜聊', day: 1 });
     const gm = buildGMSnapshot(s);
     assert.equal(gm.players.length, 6);
     for (const p of gm.players) {
@@ -168,6 +184,36 @@ test('GM snapshot 完整（含 role/team/controlledBy）', () => {
     assert.ok('voteReady' in gm);
     assert.deepEqual(gm.takenOver, []);
     assert.deepEqual(gm.idleCounts, {});
+    // 新欄位存在且內容正確
+    assert.ok(Array.isArray(gm.nightActions));
+    const wolfAct = gm.nightActions.find((a) => a.type === NightActionType.WOLF_KILL);
+    assert.ok(wolfAct);
+    assert.equal(wolfAct.actorId, wolf.id);
+    assert.equal(wolfAct.targetId, victim);
+    const seerAct = gm.nightActions.find((a) => a.type === NightActionType.SEER_CHECK);
+    assert.ok(seerAct);
+    assert.equal(seerAct.actorId, seer.id);
+    assert.equal(seerAct.targetId, wolf.id);
+    assert.ok(gm.seerChecks.length >= 1);
+    assert.equal(gm.seerChecks[0].seerId, seer.id);
+    assert.equal(gm.seerChecks[0].targetId, wolf.id);
+    assert.equal(gm.seerChecks[0].result, Team.WEREWOLF);
+    assert.equal(gm.guardProtects.length, 1);
+    assert.equal(gm.guardProtects[0].guardId, guard.id);
+    assert.equal(gm.masonChatLog.length, 1);
+    assert.equal(gm.masonChatLog[0].text, '測試夜聊');
+    assert.ok(gm.personalityNames);
+    const aiPlayer = s.players.find((p) => p.controlledBy === 'ai');
+    const expected = personalities.find((p) => p.id === aiPlayer.personality);
+    assert.equal(gm.personalityNames[aiPlayer.personality], expected.name);
+    assert.ok(gm.deadPlayers.some((d) => d.id === victim && d.cause === 'wolf_kill'));
+    assert.ok(gm.nightResult && gm.nightResult.includes(`P${victim}`));
+    assert.equal(gm.winner, null);
+    assert.equal(gm.gameOver, false);
+    // flagStats：未傳時 undefined，傳入時透傳
+    assert.equal(gm.flagStats, undefined);
+    const gmWithFlags = buildGMSnapshot(s, { decided: 2, abstain: 1, uncertain: 3 });
+    assert.deepEqual(gmWithFlags.flagStats, { decided: 2, abstain: 1, uncertain: 3 });
 });
 test('接管標記進快照：you.takenOver＋GM takenOver', () => {
     const s = createGameState(6);

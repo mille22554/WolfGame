@@ -98,6 +98,7 @@ export class SpeechScheduler {
     cdTimer = null;
     retryTimer = null;
     uncertainCounts = new Map();
+    decisions = new Map(); // 每玩家最新有效決策（含安全閥強制 abstain）
     constructor(ctx, options) {
         this.ctx = ctx;
         this.options = {
@@ -119,6 +120,7 @@ export class SpeechScheduler {
             if (state.day !== this.lastDay) {
                 this.lastDay = state.day;
                 this.uncertainCounts.clear();
+                this.decisions.clear();
             }
             this.lastSeenBoardVersion = state.boardVersion;
             this.resetCycle();
@@ -370,16 +372,34 @@ export class SpeechScheduler {
     updateDecision(playerId, d) {
         if (d.status === 'decided') {
             this.uncertainCounts.delete(playerId);
+            this.decisions.set(playerId, d);
             return d;
         }
         const n = (this.uncertainCounts.get(playerId) ?? 0) + 1;
         if (n >= this.options.maxUncertainRounds) {
             this.uncertainCounts.delete(playerId);
             const forced = { status: 'decided', target: 'abstain' };
+            this.decisions.set(playerId, forced);
             return forced;
         }
         this.uncertainCounts.set(playerId, n);
+        this.decisions.set(playerId, d);
         return d;
+    }
+    /** GM 除錯用：每輪 AI 決策 flag 統計（決定投誰／棄票／資訊不足各幾筆） */
+    flagStats() {
+        let decided = 0;
+        let abstain = 0;
+        let uncertain = 0;
+        for (const d of this.decisions.values()) {
+            if (d.status === 'uncertain')
+                uncertain++;
+            else if (d.target === 'abstain')
+                abstain++;
+            else
+                decided++;
+        }
+        return { decided, abstain, uncertain };
     }
     async judge(token, state, drafts) {
         const summary = summarizeDay(state, state.day);
