@@ -65,7 +65,7 @@ AI 在 pre-speech 草稿結尾附加：
 每輪除上輪發言者外全員寫草稿，中控挑一個上白板；人數無關，`runDirect` 特例刪除。
 
 #### 安全閥（非任意上限）
-連續 `maxUncertainRounds`（預設 5）次「資訊不足」→ 強制 `decided:abstain`。是「思考 N 輪後決定」，不是時間上限。無有效 flag／解析失敗一律計入資訊不足計數（否則永不收斂）。
+連續 `maxUncertainRounds`（預設 5）次「資訊不足」→ 強制 `decided:abstain`。是「思考 N 輪後決定」，不是時間上限。解析分兩層：先正規解析，失敗走寬鬆二次解析（關鍵字兜底：抓到投 Pn pattern 認 decided；抓到不確定類詞認 uncertain；不用 LLM，避免本地成本）。都抓不到才計入資訊不足計數。安全閥只計真正的資訊不足，格式問題在解析層解決，不冤枉格式小錯的草稿。
 
 #### 移除
 - `server.ts:1360-1377` `autoCloseTimer`
