@@ -5,6 +5,21 @@
  */
 import * as path from 'path';
 import { getDataDir } from './utils.js';
+/** Qwen3 關閉思考輸出後綴（/completion 手動包模板驗證有效：空 think 塊＋正常發言） */
+export const NO_THINK_SUFFIX = '/no_think';
+/**
+ * user 訊息尾附加 /no_think（冪等）：
+ * - 空字串原樣回傳
+ * - 尾部（去尾空白後）已有後綴則不重複附加
+ * - 否則去尾空白＋換行＋後綴
+ */
+export function withNoThink(content) {
+    if (content === '')
+        return content;
+    if (content.trimEnd().endsWith(NO_THINK_SUFFIX))
+        return content;
+    return `${content.trimEnd()}\n${NO_THINK_SUFFIX}`;
+}
 const DEFAULT_BASE_URL = 'http://localhost:2064/v1';
 const DEFAULT_MODEL = 'gemini-3.6-flash';
 /**
@@ -22,6 +37,8 @@ export class OpenAICompatibleProvider {
     }
     async chat(messages, config) {
         const url = `${this.baseURL.replace(/\/$/, '')}/chat/completions`;
+        // Qwen3 /no_think：只動 server 主路徑的 user 訊息；system/assistant 原樣送出
+        const noThinkMessages = messages.map((m) => m.role === 'user' ? { ...m, content: withNoThink(m.content) } : m);
         let res;
         try {
             res = await fetch(url, {
@@ -32,7 +49,7 @@ export class OpenAICompatibleProvider {
                 },
                 body: JSON.stringify({
                     model: this.model,
-                    messages,
+                    messages: noThinkMessages,
                     temperature: config?.temperature ?? 0.8,
                     max_tokens: config?.maxTokens ?? 300,
                 }),

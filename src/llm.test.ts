@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as http from 'node:http';
-import { OpenAICompatibleProvider, MockProvider } from './llm.js';
+import { OpenAICompatibleProvider, MockProvider, NO_THINK_SUFFIX, withNoThink } from './llm.js';
 
 interface FakeOpts {
   status?: number;
@@ -107,4 +107,39 @@ test('MockProvider：投票/夜晚/一般 prompt → 確定性回應', async () 
   assert.match(await m.chat([{ role: 'user', content: '今晚請選擇 P5' }]), /P5/);
   assert.match(await m.chat([{ role: 'user', content: '夜晚查驗 P2' }]), /P2/);
   assert.match(await m.chat([{ role: 'user', content: '請發言 P7' }]), /P7/);
+});
+
+test('withNoThink：後綴存在且 user 內容尾附加換行＋後綴', () => {
+  assert.equal(NO_THINK_SUFFIX, '/no_think');
+  assert.equal(withNoThink('hi'), 'hi\n/no_think');
+  assert.equal(withNoThink('hi   \n  '), 'hi\n/no_think');
+});
+
+test('withNoThink：冪等（尾部已有不重複附加）', () => {
+  const once = withNoThink('hi');
+  assert.equal(withNoThink(once), once);
+  assert.equal(withNoThink('hi\n/no_think'), 'hi\n/no_think');
+  assert.equal(withNoThink('hi\n/no_think   '), 'hi\n/no_think   ');
+});
+
+test('withNoThink：空字串原樣回傳', () => {
+  assert.equal(withNoThink(''), '');
+});
+
+test('OpenAICompatibleProvider：user 加後綴、非 user 不動', async () => {
+  let seen: { messages?: Array<{ role: string; content: string }> } = {};
+  const { port, close } = await withFakeServer({ onRequest: (b) => { seen = b as typeof seen; } });
+  try {
+    const p = new OpenAICompatibleProvider({ baseURL: `http://localhost:${port}/v1`, model: 'm' });
+    await p.chat([
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'asst' },
+    ]);
+    assert.equal(seen.messages?.[0].content, 'sys');
+    assert.equal(seen.messages?.[1].content, 'hi\n/no_think');
+    assert.equal(seen.messages?.[2].content, 'asst');
+  } finally {
+    await close();
+  }
 });

@@ -18,6 +18,15 @@ export interface OpenAICompatibleOptions {
     model?: string;
     apiKey?: string;
 }
+/** Qwen3 關閉思考輸出後綴（/completion 手動包模板驗證有效：空 think 塊＋正常發言） */
+export declare const NO_THINK_SUFFIX = "/no_think";
+/**
+ * user 訊息尾附加 /no_think（冪等）：
+ * - 空字串原樣回傳
+ * - 尾部（去尾空白後）已有後綴則不重複附加
+ * - 否則去尾空白＋換行＋後綴
+ */
+export declare function withNoThink(content: string): string;
 /**
  * OpenAI 相容 Provider（預設指向本地代理 http://localhost:3001/v1）
  */
