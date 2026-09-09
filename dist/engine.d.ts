@@ -16,6 +16,7 @@ export interface EngineOptions {
     scheduler?: AIScheduler;
     registry?: ClientRegistry;
     saveDebounceMs?: number;
+    onGameOver?: (state: GameState) => void;
 }
 export interface AIScheduler {
     onBoardUpdated(state: GameState): void;

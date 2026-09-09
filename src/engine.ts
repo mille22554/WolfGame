@@ -25,6 +25,7 @@ export interface EngineOptions {
   scheduler?: AIScheduler;    // Phase 1 實作（發言選擇機制）
   registry?: ClientRegistry;  // web 模式需要
   saveDebounceMs?: number;    // 存檔 debounce，預設 5000（測試可調小）
+  onGameOver?: (state: GameState) => void;   // 遊戲結束掛鉤（僅觸發一次；server 用來安排回大廳）
 }
 
 export interface AIScheduler {
@@ -108,6 +109,7 @@ export class GameEngine {
   private processEvent(event: GameEvent): TransitionResult {
     const prevPhase = this.state.phase;
     const prevBoardVersion = this.state.boardVersion;
+    const prevGameOver = this.state.gameOver;
     const result = transition(this.state, event);
     if (!result.accepted) return result;
     for (const effect of result.effects) {
@@ -143,6 +145,10 @@ export class GameEngine {
           break;
         }
       }
+    }
+    // 遊戲結束：通知外部（server）安排回大廳，僅觸發一次
+    if (this.state.gameOver && !prevGameOver) {
+      this.options.onGameOver?.(this.state);
     }
     // Phase 2：任何 boardVersion 變更（含 HUMAN_SPEAK）即時通知 scheduler（CD 重置）
     if (this.state.boardVersion !== prevBoardVersion && this.options.scheduler) {

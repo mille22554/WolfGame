@@ -89,7 +89,7 @@ export declare class SpeechScheduler implements AIScheduler {
     private collectPreSpeeches;
     /** 決策更新：decided 覆蓋標的＋清空計數；資訊不足累計，達安全閥強制 decided:abstain */
     private updateDecision;
-    /** GM 除錯用：每輪 AI 決策 flag 統計（決定投誰／棄票／資訊不足各幾筆） */
+    /** GM 除錯用：每輪 AI 決策 flag 統計（每玩家最新決策，非累計筆數；決定投誰／棄票／資訊不足各幾筆） */
     flagStats(): FlagStats;
     private judge;
     /** CD 到有貨 → 播出；播出成功且 decided → enqueue AI_READY_VOTE（統一檢查由 transition 執行） */

@@ -437,4 +437,140 @@ test('zeroClientShutdownMs: 0 → 停用自動退出（含斷開路徑；150ms �
         await h.shutdown('test');
     }
 });
+// 輪詢等待（訊息先緩衝，避免 LOBBY 在 waiter 掛上前遺失的競態）
+async function waitForCond(cond, timeoutMs, what) {
+    const t0 = Date.now();
+    while (!cond()) {
+        if (Date.now() - t0 > timeoutMs)
+            throw new Error(what);
+        await new Promise((r) => setTimeout(r, 50));
+    }
+}
+// 決策型 mock：預發言帶 decided flag 快速收斂；投票/夜間選最低存活（解析 prompt 公開知識）
+function parseAliveIds(prompt) {
+    const m = prompt.match(/存活玩家：([^；。\n]+)/);
+    if (!m)
+        return [];
+    return [...m[1].matchAll(/P(\d+)/g)].map((x) => parseInt(x[1], 10));
+}
+function lowestExcept(ids, exclude) {
+    const sorted = ids.filter((id) => id !== exclude).sort((a, b) => a - b);
+    return sorted[0] ?? exclude;
+}
+function decidingMockDispatcher() {
+    return {
+        async start() { },
+        async shutdown() { },
+        async generate(prompt) {
+            if (prompt.includes('【裁判任務】')) {
+                const slots = [];
+                for (const m of prompt.matchAll(/^(\d+)\.\s/gm))
+                    slots.push(parseInt(m[1], 10));
+                return slots.map((s, i) => `${s}: ${8 - (i % 8)}`).join('\n');
+            }
+            if (prompt.includes('【你的預發言草稿】'))
+                return 'P0：「聽完發言，我會審慎投票。」';
+            const m = prompt.match(/你是 P(\d+)/);
+            const id = m ? parseInt(m[1], 10) : 1;
+            const target = lowestExcept(parseAliveIds(prompt), id);
+            return `P${id}：「我在意 P${target} 的發言。」\n[決定:投P${target}]`;
+        },
+        async requestSpeech(pid) {
+            return { text: `P${pid}：「補充發言。」` };
+        },
+        async requestVote(playerId, prompt) {
+            return { targetId: lowestExcept(parseAliveIds(prompt), playerId) };
+        },
+        async requestNightAction(playerId, prompt) {
+            return { targetId: lowestExcept(parseAliveIds(prompt), playerId) };
+        },
+    };
+}
+test('遊戲結束 → 延遲後自動回大廳（座位保留、可再開一局）', async () => {
+    const prevCd = process.env.SPEECH_CD_MS;
+    process.env.SPEECH_CD_MS = '30'; // 真人局加速 scheduler 節奏（純 AI 局本就 CD=0）
+    const h = await boot({ gameOverReturnMs: 100, dispatcherFactory: () => decidingMockDispatcher() });
+    try {
+        const ws = new WebSocket(`ws://localhost:${h.port}`);
+        const seen = [];
+        let joined = false;
+        let speakDay = 0;
+        const lowestAlive = (alive, self) => {
+            const sorted = (alive ?? []).map((p) => p.id).filter((id) => id !== self).sort((a, b) => a - b);
+            return sorted[0] ?? self;
+        };
+        ws.on('open', () => ws.send(JSON.stringify({ type: 'REQUEST_SNAPSHOT' })));
+        ws.on('message', (data) => {
+            let msg;
+            try {
+                msg = JSON.parse(String(data));
+            }
+            catch {
+                return;
+            }
+            if (msg.type === 'PING') {
+                ws.send(JSON.stringify({ type: 'PONG' }));
+                return;
+            }
+            seen.push(msg);
+            // 真人入座開局（座位保留驗證需要 human 座位；純 AI 局大廳座位本就全 empty）
+            if (msg.type === 'LOBBY' && !joined) {
+                joined = true;
+                ws.send(JSON.stringify({ type: 'JOIN', playerId: 1, name: 'H1' }));
+                return;
+            }
+            if (msg.type === 'JOINED') {
+                ws.send(JSON.stringify({ type: 'START_GAME' }));
+                return;
+            }
+            // 駕駛真人座位：夜間/投票行動、討論發言＋準備（防掛機接管、避免 gate 卡 timeout）
+            const snap = msg.type === 'SNAPSHOT' ? msg.snapshot : undefined;
+            if (!snap?.you || !snap.alivePlayers?.some((p) => p.id === 1))
+                return;
+            if (snap.phase === 'DAY_DISCUSSION_OPEN') {
+                if (snap.day !== undefined && snap.day !== speakDay) {
+                    speakDay = snap.day;
+                    ws.send(JSON.stringify({ type: 'HUMAN_SPEAK', text: `P1：第${snap.day}天多聽發言。` }));
+                }
+                ws.send(JSON.stringify({ type: 'HUMAN_READY_VOTE' }));
+            }
+            else if (snap.you.canAct && (snap.phase === 'NIGHT_COLLECTING' || snap.phase === 'DAY_VOTING_COLLECTING')) {
+                const kind = snap.phase === 'NIGHT_COLLECTING' ? 'HUMAN_NIGHT_ACTION' : 'HUMAN_VOTE';
+                ws.send(JSON.stringify({ type: kind, targetId: lowestAlive(snap.alivePlayers, 1) }));
+            }
+        });
+        await new Promise((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error('連線逾時')), 5000);
+            ws.on('open', () => {
+                clearTimeout(timer);
+                resolve();
+            });
+            ws.on('error', reject);
+        });
+        // 1 真人＋5 AI 跑到遊戲結束
+        await waitForCond(() => seen.some((m) => m.type === 'SNAPSHOT' && m.snapshot?.phase === 'GAME_OVER_FINAL'), 90000, '等遊戲結束逾時');
+        const overIdx = seen.findIndex((m) => m.type === 'SNAPSHOT' && m.snapshot?.phase === 'GAME_OVER_FINAL');
+        // 延遲後自動回大廳：started=false、真人座位保留
+        await waitForCond(() => seen.some((m, i) => i > overIdx && m.type === 'LOBBY'), 5000, '等自動回大廳逾時');
+        const back = seen.find((m, i) => i > overIdx && m.type === 'LOBBY');
+        assert.equal(back.lobby.started, false);
+        assert.equal(back.lobby.seats.length, 6);
+        const seat1 = back.lobby.seats.find((s) => s.playerId === 1);
+        assert.equal(seat1.controlledBy, 'human', '真人座位保留');
+        assert.equal(seat1.name, 'H1');
+        // 可再開一局：START_GAME → 回到夜晚（server 已重置，不再拒絕）
+        const mark = seen.length;
+        ws.send(JSON.stringify({ type: 'START_GAME' }));
+        await waitForCond(() => seen.some((m, i) => i >= mark && m.type === 'SNAPSHOT' && m.snapshot?.phase === 'NIGHT_COLLECTING'), 15000, '等再開局逾時');
+        ws.close();
+        await new Promise((r) => setTimeout(r, 50));
+    }
+    finally {
+        if (prevCd === undefined)
+            delete process.env.SPEECH_CD_MS;
+        else
+            process.env.SPEECH_CD_MS = prevCd;
+        await h.shutdown('test');
+    }
+});
 //# sourceMappingURL=server.test.js.map

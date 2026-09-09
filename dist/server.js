@@ -960,6 +960,10 @@ export async function startServer(options = {}) {
         }
         catch { /* ignore */ }
         scheduler?.stop();
+        if (gameOverTimer) {
+            clearTimeout(gameOverTimer);
+            gameOverTimer = null;
+        }
         registry.stop();
         if (dispatcher) {
             try {
@@ -989,6 +993,23 @@ export async function startServer(options = {}) {
     // 開局唯一入口：大廳開始遊戲鈕（host 按下）；無自動開局 timer
     let started = false;
     let starting = false;
+    let gameOverTimer = null;
+    // 遊戲結束：保留座位，延遲後自動回大廳（結果畫面由最後一次快照呈現）
+    function scheduleLobbyReturn() {
+        if (gameOverTimer)
+            return;
+        const ms = options.gameOverReturnMs ?? 10000;
+        gameOverTimer = setTimeout(() => {
+            gameOverTimer = null;
+            engine?.close();
+            engine = null;
+            started = false;
+            registry.sendLobby(lobby.snapshot());
+        }, ms);
+        if (typeof gameOverTimer.unref === 'function') {
+            gameOverTimer.unref();
+        }
+    }
     // 開局：heavy（dispatcher）就緒後，用當下大廳人數建 engine 並灌入座位
     async function runStartGame() {
         if ((started && engine) || starting)
@@ -1006,7 +1027,7 @@ export async function startServer(options = {}) {
             // 斷線未歸的真人座位先轉 AI（否則 HUMAN_JOIN 進遊戲，gate 等無連線者卡死）
             lobby.fillDisconnectedAsAi();
             try {
-                engine = new GameEngine({ mode: 'web', llm: dispatcher, scheduler, registry }, createGameState(count));
+                engine = new GameEngine({ mode: 'web', llm: dispatcher, scheduler, registry, onGameOver: () => scheduleLobbyReturn() }, createGameState(count));
                 for (const s of lobby.seatsForStart()) {
                     if (s.controlledBy === 'human') {
                         engine.enqueue({ type: 'HUMAN_JOIN', playerId: s.playerId, name: s.name === '' ? undefined : s.name });

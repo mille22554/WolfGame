@@ -78,6 +78,7 @@ export class GameEngine {
     processEvent(event) {
         const prevPhase = this.state.phase;
         const prevBoardVersion = this.state.boardVersion;
+        const prevGameOver = this.state.gameOver;
         const result = transition(this.state, event);
         if (!result.accepted)
             return result;
@@ -116,6 +117,10 @@ export class GameEngine {
                     break;
                 }
             }
+        }
+        // 遊戲結束：通知外部（server）安排回大廳，僅觸發一次
+        if (this.state.gameOver && !prevGameOver) {
+            this.options.onGameOver?.(this.state);
         }
         // Phase 2：任何 boardVersion 變更（含 HUMAN_SPEAK）即時通知 scheduler（CD 重置）
         if (this.state.boardVersion !== prevBoardVersion && this.options.scheduler) {

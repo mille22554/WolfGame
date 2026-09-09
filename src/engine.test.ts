@@ -167,6 +167,47 @@ test('ScriptedGM：啟發式完整局跑通（確定性策略）', () => {
   engine.close();
 });
 
+test('onGameOver：進入 GAME_OVER_FINAL 時觸發一次，結束後事件不再觸發', () => {
+  let calls = 0;
+  const engine = new GameEngine({ mode: 'gm', onGameOver: () => { calls++; } }, createGameState(6));
+  for (let i = 0; i < 6; i++) engine.enqueue({ type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  engine.enqueue({ type: 'START_GAME' });
+  engine.drain();
+  const lowestExcept = (exclude: number): number =>
+    aliveIds(engine.getState()).filter((id) => id !== exclude).sort((a, b) => a - b)[0];
+  let steps = 0;
+  while (!engine.getState().gameOver && steps < 200) {
+    steps++;
+    const s = engine.getState();
+    if (s.phase === 'NIGHT_COLLECTING') {
+      for (const pid of getNightActors(s)) {
+        engine.enqueue({ type: 'AI_NIGHT_DONE', playerId: pid, targetId: lowestExcept(pid) });
+      }
+      engine.drain();
+    } else if (s.phase === 'DAY_DISCUSSION_OPEN') {
+      for (const p of s.players.filter((x) => x.alive)) {
+        engine.enqueue({ type: 'AI_READY_VOTE', playerId: p.id });
+      }
+      engine.drain();
+    } else if (s.phase === 'DAY_VOTING_COLLECTING') {
+      const sorted = aliveIds(engine.getState()).sort((a, b) => a - b);
+      for (const v of aliveIds(engine.getState())) {
+        engine.enqueue({ type: 'AI_VOTE_DONE', playerId: v, targetId: v === sorted[0] ? sorted[1] : sorted[0] });
+      }
+      engine.drain();
+    } else {
+      engine.drain();
+    }
+  }
+  assert.ok(engine.getState().gameOver, `應分出勝負（steps=${steps}）`);
+  assert.equal(engine.getState().phase, 'GAME_OVER_FINAL');
+  assert.equal(calls, 1);
+  engine.enqueue({ type: 'ADVANCE_DAY' });
+  engine.drain();
+  assert.equal(calls, 1, '結束後事件被忽略，不重複觸發');
+  engine.close();
+});
+
 test('Phase 2：boardVersion 變更 → scheduler.onBoardUpdated 被呼叫', () => {
   const notified: GameState[] = [];
   const fakeScheduler = {

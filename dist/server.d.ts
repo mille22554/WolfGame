@@ -24,6 +24,7 @@ export interface ServerOptions {
     zeroClientShutdownMs?: number;
     pingIntervalMs?: number;
     pingTimeoutMs?: number;
+    gameOverReturnMs?: number;
     exitProcess?: boolean;
     onShutdown?: (reason: string) => void;
     llamaServerPort?: number;

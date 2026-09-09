@@ -59,6 +59,7 @@ export interface ServerOptions {
   zeroClientShutdownMs?: number;    // env ZERO_CLIENT_SHUTDOWN_MS，預設 60000；<=0 停用自動退出（dev 用）
   pingIntervalMs?: number;          // env PING_INTERVAL_MS，預設 30000
   pingTimeoutMs?: number;           // env PING_TIMEOUT_MS，預設 10000
+  gameOverReturnMs?: number;        // 遊戲結束後自動回大廳延遲，預設 10000（測試可調小）
   exitProcess?: boolean;            // 預設 true；測試設 false
   onShutdown?: (reason: string) => void;
   llamaServerPort?: number;        // env LLAMA_SERVER_PORT，預設 3001
@@ -1029,6 +1030,10 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
       engine?.save();
     } catch { /* ignore */ }
     scheduler?.stop();
+    if (gameOverTimer) {
+      clearTimeout(gameOverTimer);
+      gameOverTimer = null;
+    }
     registry.stop();
     if (dispatcher) {
       try {
@@ -1056,6 +1061,23 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
   // 開局唯一入口：大廳開始遊戲鈕（host 按下）；無自動開局 timer
   let started = false;
   let starting = false;
+  let gameOverTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // 遊戲結束：保留座位，延遲後自動回大廳（結果畫面由最後一次快照呈現）
+  function scheduleLobbyReturn(): void {
+    if (gameOverTimer) return;
+    const ms = options.gameOverReturnMs ?? 10000;
+    gameOverTimer = setTimeout(() => {
+      gameOverTimer = null;
+      engine?.close();
+      engine = null;
+      started = false;
+      registry.sendLobby(lobby.snapshot());
+    }, ms);
+    if (typeof (gameOverTimer as unknown as { unref?: () => void }).unref === 'function') {
+      (gameOverTimer as unknown as { unref: () => void }).unref();
+    }
+  }
 
   // 開局：heavy（dispatcher）就緒後，用當下大廳人數建 engine 並灌入座位
   async function runStartGame(): Promise<void> {
@@ -1074,7 +1096,7 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
       lobby.fillDisconnectedAsAi();
       try {
         engine = new GameEngine(
-          { mode: 'web', llm: dispatcher, scheduler, registry },
+          { mode: 'web', llm: dispatcher, scheduler, registry, onGameOver: () => scheduleLobbyReturn() },
           createGameState(count),
         );
         for (const s of lobby.seatsForStart()) {

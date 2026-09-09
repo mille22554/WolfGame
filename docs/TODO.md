@@ -215,3 +215,4 @@ GM 檢視（僅觀戰可點）除了玩家列表與白板，也應顯示每輪 A
 - [x] **修復 SHUTDOWN 訊息覆蓋 + 無限重連**（`main.js`）— `left=true` 停止重連
 - [x] **修復壞 token 無限重連**（`main.js`）— `JOIN_REJECTED` 清 token
 - [x] **冒煙測試通過**（`npm run smoke:pkg`）
+- [x] **修復遊戲結束後卡死（自動回大廳）** — `engine.ts` 新增 `onGameOver` 掛鉤（`processEvent` 偵測 `gameOver` 由 false→true，僅觸發一次）；`server.ts` 以 `gameOverReturnMs`（預設 10 秒）延遲後重置（`engine.close()`＋`engine=null`＋`started=false`）並重推 `LOBBY`，座位保留可直接再開一局；前端免改（收到 `LOBBY` 且 `started===false` 即自動 `renderLobby`）

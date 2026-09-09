@@ -386,7 +386,7 @@ export class SpeechScheduler {
         this.decisions.set(playerId, d);
         return d;
     }
-    /** GM 除錯用：每輪 AI 決策 flag 統計（決定投誰／棄票／資訊不足各幾筆） */
+    /** GM 除錯用：每輪 AI 決策 flag 統計（每玩家最新決策，非累計筆數；決定投誰／棄票／資訊不足各幾筆） */
     flagStats() {
         let decided = 0;
         let abstain = 0;
