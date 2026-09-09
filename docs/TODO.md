@@ -41,6 +41,8 @@ AI 發言回應應帶「決策 flag」，讓中控（SpeechScheduler）知道每
 
 當**所有存活玩家都 ready**（AI 有投票標的、真人已確認）時，討論自然收斂 → 直接進投票（不經 `CLOSING`）。
 
+流程：當任何人 ready → 檢查是否所有人 ready；是，進投票；否，繼續討論。ready 兩種來源：真人按 ready 按鈕；AI 草稿 ready 檢定。
+
 **關鍵限制**：flag 是給中控看的內部決策狀態，可夾在 pre-speech 草稿（內部未公開），但**不可寫入白板（discussionLog）**，否則洩漏投票意圖。
 
 ### Oracle 設計（已完成，待實作）
@@ -59,7 +61,13 @@ AI 在 pre-speech 草稿結尾附加：
 每輪除上輪發言者外全員寫草稿，中控挑一個上白板；人數無關，`runDirect` 特例刪除。
 
 #### 安全閥（非任意上限）
-連續 `maxUncertainRounds`（預設 100）次「資訊不足」→ 強制 `decided:abstain`。這裡的次是指同一 AI 連續幾次草稿，不是遊戲輪次。不要用死上限逼 AI 早決定，五次草稿資訊本來就不夠，一百純粹是防卡死的底線。解析分兩層：先正規解析，失敗走寬鬆二次解析（關鍵字兜底：抓到投 Pn pattern 認 decided；抓到不確定類詞認 uncertain；不用 LLM，避免本地成本）。都抓不到才計入資訊不足計數。安全閥只計真正的資訊不足，格式問題在解析層解決，不冤枉格式小錯的草稿。
+連續 `maxUncertainRounds`（預設 100）次「資訊不足」→ 強制 `decided:abstain`。這裡的次是指同一 AI 連續幾次草稿，不是遊戲輪次。不要用死上限逼 AI 早決定，五次草稿資訊本來就不夠，一百純粹是防卡死的底線。解析分兩層：先正規解析，失敗走寬鬆二次解析（關鍵字兜底：抓到決策語境的投 Pn（我投／決定投／要投）認 decided；抓到不確定類詞認 uncertain；不用 LLM，避免本地成本）。都抓不到才計入資訊不足計數。安全閥只計真正的資訊不足，格式問題在解析層解決，不冤枉格式小錯的草稿。
+
+#### 掛機規則
+AI 每次 CD 到發話計一次；任一真人發話／跳過／收回 ready 即清空；計數到 10，該真人視為掛機，視同斷線，AI 接管座位（沿用斷線路徑，可重連拿回）。接管只發生在未定真人身上（已 ready 的不用管）。
+
+#### 接管 UX
+server 推接管通知；前端橫幅（你掛機了，AI 暫代）＋拿回座位鈕（走 `RECONNECT`）；拿回後回到未定，重新決定；已進投票／結束按現況重連語義處理。
 
 #### 移除
 - `server.ts:1360-1377` `autoCloseTimer`
@@ -70,10 +78,12 @@ AI 在 pre-speech 草稿結尾附加：
 |------|------|
 | `src/types.ts` | 加 `AI_READY_VOTE` 事件；`voteReady` 註解改「真人 + AI」 |
 | `src/game-state.ts` | `allAlivePlayersReady`；`AI_READY_VOTE` handler；收斂直進投票（移除 `CLOSING` 階段與 `CLOSE_DISCUSSION` 路徑）；`applyReconnect` 移出 voteReady |
-| `src/ai-scheduler.ts` | `AIDecision` 型別、`parseDecisionFlag`、`updateDecisions`、`checkConvergence`、`enqueueNewlyDecided`、`checkAllPlayersReady`；改 `collectPreSpeeches`/`runPipeline`/`runDirect`/`tick`/`onPhaseEntered` |
+| `src/ai-scheduler.ts` | `AIDecision` 型別、`parseDecisionFlag`、`updateDecisions`、`checkConvergence`、`enqueueNewlyDecided`、`checkAllPlayersReady`；改 `collectPreSpeeches`/`runPipeline`/`tick`/`onPhaseEntered`；刪除 `runDirect` 特例（全員草稿） |
 | `src/character-session.ts` | `buildPreSpeechPrompt` 任務指令加 flag 格式 |
 | `src/server.ts` | 移除 `autoCloseTimer` + `speechesPerDay` |
-| 測試 | `ai-scheduler.test.ts`、`server.test.ts`、`server-human.test.ts`、`full-game.test.ts`、`mixed-game.test.ts` |
+| `src/gm.ts` | `vote` 指令改灌滿 ready（幫所有人點頭→統一檢查→投票→投票事件），`CLOSE_DISCUSSION` 移除 |
+| `public/js/main.js` | `CLOSING` UI 分支清理（L1097）＋`DAY_DISCUSSION_CLOSING` 標籤（L11）＋ready 收回按鈕＋掛機橫幅與拿回座位鈕 |
+| 測試 | `ai-scheduler.test.ts`、`server.test.ts`、`server-human.test.ts`、`full-game.test.ts`、`mixed-game.test.ts`、`game-state.test.ts`、`engine.test.ts`、`human-discussion.test.ts`、`human-reconnect.test.ts`、`snapshot.test.ts` |
 
 ### 設計決策（用戶已確認）
 - flag 格式 OK
@@ -83,6 +93,9 @@ AI 在 pre-speech 草稿結尾附加：
 - CLOSING 拿掉（含 GM 喊關），混合局等真人用統一檢查取代
 - 草稿規則：除上輪發言者外全員寫草稿，中控挑一個上白板
 - ready 單向不退名單，但投票標的每輪可變（新 flag 覆蓋）；管線照跑直到統一檢查全過（純 AI 全定了即投票）
+- ready 可收回（沿用 `HUMAN_UNREADY_VOTE`）；收回視為活動，回到未定
+- 掛機規則：10 次計數後 AI 接管（見上）；接管 UX 見上
+- `gm vote` 改灌滿 ready（幫所有人點頭→統一檢查→投票→投票事件）
 
 ### Oracle 複查結論（可做，但要改 6 處）
 1. **無 flag／解析失敗也要計入安全閥**：否則模型不照格式吐時，純 AI 局永遠卡在討論（移除 speechesPerDay 後唯一的收斂保證，必須對任何輸出都有界）。
@@ -93,8 +106,8 @@ AI 在 pre-speech 草稿結尾附加：
 6. **expand 輸出也要清洗 flag**：模型可能自行輸出 flag，broadcast 前過一次 pattern（廉價保險）。剝離位置統一在 `collectPreSpeeches` 回傳前，不要各消費點各自剝離。
 
 ### 附帶建議
-- 混合局真人不按 ready 會一直等（原來卡在 CLOSING，現改為在自由發言裡等）：等待加超時（`closingTimeoutMs` 接到統一等待上），或確認前端有 HUMAN_SKIP 逃生鈕。
-- 本項依賴第 1 項先做：否則 5 輪收斂＝400 秒純白等，慢到不可用。
+- 混合局真人不按 ready：走掛機規則（10 次計數後 AI 接管），不再另接待收尾超時；`HUMAN_SKIP` 逃生鈕隨跳過按鈕刪除案處理（待用戶確認）。
+- 本項依賴第 1 項先做：否則 100 輪收斂＝8000 秒純白等，慢到不可用。
 - 心理準備：純 AI 局一天可能跑 25-45 分鐘（收斂設計的代價）。
 
 ---
