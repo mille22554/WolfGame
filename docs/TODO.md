@@ -68,7 +68,7 @@ AI 在 pre-speech 草稿結尾附加：
 AI 每次 CD 到發話計一次；計數只對未定真人，已 ready 直接清空並列入計數對象外，收回從零重算；任一真人發話／跳過／收回 ready 即清空（計數放 game-state，由 transition 清零；跳過與收回不 bump 白板版本，另接鉤子）；計數到 10，該真人視為掛機，視同斷線，AI 接管座位（沿用斷線路徑，可重連拿回）。
 
 #### 接管 UX
-server 推接管通知（`IDLE_TAKEOVER`：transition 計數到 10 時回傳 effect，engine 執行切座位＋發事件，server 轉播，payload 帶 playerId 與原因）；被接管者頁面多一個 panel（AI 接管中＋回歸按鈕走 `RECONNECT`），其他人沿用 AI 座位顯示；快照帶接管標記（重整頁面 panel 才回得來）；拿回後回到未定，重新決定；已進投票／結束按現況重連語義處理。
+server 推接管通知（`IDLE_TAKEOVER`：transition 計數到 10 時回傳 effect，engine 執行切座位＋發事件，server 轉播，payload 帶 playerId 與原因）；被接管者頁面多一個 panel（AI 接管中＋回歸按鈕走 `RECONNECT`），其他人沿用 AI 座位顯示；快照帶接管標記（重整頁面 panel 才回得來）；panel 以快照標記為準渲染（每次快照重算，多頁籤一致）；接管後該真人 WS 只收 `RECONNECT`，其他遊戲訊息忽略；拿回後回到未定，重新決定；已進投票／結束按現況重連語義處理。
 
 #### 移除
 - `server.ts:1360-1377` `autoCloseTimer`
@@ -77,10 +77,11 @@ server 推接管通知（`IDLE_TAKEOVER`：transition 計數到 10 時回傳 eff
 ### 變更檔案清單
 | 檔案 | 變更 |
 |------|------|
-| `src/types.ts` | 加 `AI_READY_VOTE` 事件；加接管通知事件（如 `IDLE_TAKEOVER`）；`voteReady` 註解改「真人 + AI」 |
+| `src/types.ts` | 加 `AI_READY_VOTE` 事件；加接管通知事件（如 `IDLE_TAKEOVER`）；快照加接管標記欄位（區分原生 AI 與掛機接管）；`voteReady` 註解改「真人 + AI」 |
 | `src/game-state.ts` | `allAlivePlayersReady`；`AI_READY_VOTE` handler；收斂直進投票（移除 `CLOSING` 階段與 `CLOSE_DISCUSSION` 路徑）；`applyReconnect` 移出 voteReady |
 | `src/ai-scheduler.ts` | `AIDecision` 型別、`parseDecisionFlag`、`updateDecisions`、`checkConvergence`、`enqueueNewlyDecided`、`checkAllPlayersReady`；改 `collectPreSpeeches`/`runPipeline`/`tick`/`onPhaseEntered`；刪除 `runDirect` 特例（全員草稿） |
 | `src/character-session.ts` | `buildPreSpeechPrompt` 任務指令加 flag 格式 |
+| `src/engine.ts` | transition 回傳 effect 機制，engine 執行切座位＋發事件（接管鏈用） |
 | `src/server.ts` | 移除 `autoCloseTimer` + `speechesPerDay` |
 | `src/gm.ts` | `vote` 指令改灌滿 ready（幫所有人點頭→統一檢查→投票→投票事件），`CLOSE_DISCUSSION` 移除 |
 | `public/js/main.js` | `CLOSING` UI 分支清理（L1097）＋`DAY_DISCUSSION_CLOSING` 標籤（L11）＋ready 收回按鈕＋掛機橫幅與拿回座位鈕 |
