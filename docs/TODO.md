@@ -14,6 +14,7 @@
 - CD 到沒貨 → 等做好馬上播。
 - 中間白板又更新 → 暫存作廢＋生產用新白板重跑＋CD 重啟（版本作廢機制沿用）。
 - 同一時間只有一條生產線＋一個暫存位，不會疊跑。
+- 生產失敗 → N 秒後重試（N 待用戶確認）；重試前不播出、不推進掛機計數。
 
 ### 參數
 - CD 60s（真人節奏，用戶確認不動）。
@@ -24,7 +25,7 @@
 ### 相關檔案
 - `src/ai-scheduler.ts`（tick、生產迴圈、暫存播出、版本作廢沿用）
 - `src/game-state.ts`（`allAliveHumansSkipped` 刪除）
-- 測試：`ai-scheduler.test.ts`（約十處 `quietMs` 構造）、`full-game.test.ts`（L89）、`human-discussion.test.ts`（L89-106 釘住舊語義，一併改）
+- 測試：`ai-scheduler.test.ts`（約十處 `quietMs` 構造）、`full-game.test.ts`（L89）、`human-discussion.test.ts`（L89-106 釘住舊語義，一併改）、`mixed-game.test.ts`（L7/L67 用 `allAliveHumansSkipped`）
 
 ---
 
@@ -52,19 +53,19 @@ AI 在 pre-speech 草稿結尾附加：
 ```
 [決定:投P3] / [決定:棄票] / [決定:資訊不足]
 ```
-中控用 regex `/\[決定:(投P(\d+)|棄票|資訊不足)\]\s*$/` 解析（注意方括號必須跳脫，原 `[...]` 寫法只會匹配單一字元），剝離後才進 judge/expand，**flag 永不洩漏**。全形/半形冒號都要收；剝離用全域匹配（防中置 flag 殘留）；剝離點統一在收草稿回傳前，broadcast 前再洗一次 expand 輸出。
+中控用 regex `/\[決定[:：](投P\s*\d+|棄票|資訊不足)\]/g` 解析（注意方括號必須跳脫，全形/半形冒號都要收，全域匹配防中置 flag 殘留；另備結尾錨定版），剝離後才進 judge/expand，**flag 永不洩漏**。剝離點統一在收草稿回傳前，broadcast 前再洗一次 expand 輸出。
 
 #### 統一 ready 機制（用戶調整：混合局 AI flag 視同真人準備投票）
 新增事件 `AI_READY_VOTE { playerId }`，AI decided 時中控 enqueue，transition 把 AI 加入 `voteReady`。`allAliveHumansReady` 改名 `allAlivePlayersReady`，檢查**所有存活玩家**（真人 + AI）ready。`CLOSING` 整個拿掉（GM 喊關那條一起刪，從沒人用過）；混合局等真人用自由發言裡的統一檢查取代，全員齊直接進投票。
 
 #### 草稿規則（用戶定案）
-每輪除上輪發言者外全員寫草稿，中控挑一個上白板；人數無關，`runDirect` 特例刪除。
+每輪除上輪發言者外全員寫草稿，中控挑一個上白板；人數無關，`runDirect` 特例刪除。候選為空（僅上輪發言者一人存活）時不生產，等真人講話，不連發；此場景掛機計數凍結為已知且接受。
 
 #### 安全閥（非任意上限）
 連續 `maxUncertainRounds`（預設 100）次「資訊不足」→ 強制 `decided:abstain`。這裡的次是指同一 AI 連續幾次草稿，不是遊戲輪次。不要用死上限逼 AI 早決定，五次草稿資訊本來就不夠，一百純粹是防卡死的底線。解析分兩層：先正規解析，失敗走寬鬆二次解析（關鍵字兜底：抓到決策語境的投 Pn（我投／決定投／要投）認 decided；抓到不確定類詞認 uncertain；不用 LLM，避免本地成本）。都抓不到才計入資訊不足計數。安全閥只計真正的資訊不足，格式問題在解析層解決，不冤枉格式小錯的草稿。
 
 #### 掛機規則
-AI 每次 CD 到發話計一次；任一真人發話／跳過／收回 ready 即清空；計數到 10，該真人視為掛機，視同斷線，AI 接管座位（沿用斷線路徑，可重連拿回）。接管只發生在未定真人身上（已 ready 的不用管）。
+AI 每次 CD 到發話計一次；任一真人發話／跳過／收回 ready 即清空（計數放 game-state，由 transition 清零；跳過與收回不 bump 白板版本，另接鉤子）；計數到 10，該真人視為掛機，視同斷線，AI 接管座位（沿用斷線路徑，可重連拿回）。接管只發生在未定真人身上（已 ready 的不用管）。
 
 #### 接管 UX
 server 推接管通知；前端橫幅（你掛機了，AI 暫代）＋拿回座位鈕（走 `RECONNECT`）；拿回後回到未定，重新決定；已進投票／結束按現況重連語義處理。
@@ -76,7 +77,7 @@ server 推接管通知；前端橫幅（你掛機了，AI 暫代）＋拿回座�
 ### 變更檔案清單
 | 檔案 | 變更 |
 |------|------|
-| `src/types.ts` | 加 `AI_READY_VOTE` 事件；`voteReady` 註解改「真人 + AI」 |
+| `src/types.ts` | 加 `AI_READY_VOTE` 事件；加接管通知事件（如 `IDLE_TAKEOVER`）；`voteReady` 註解改「真人 + AI」 |
 | `src/game-state.ts` | `allAlivePlayersReady`；`AI_READY_VOTE` handler；收斂直進投票（移除 `CLOSING` 階段與 `CLOSE_DISCUSSION` 路徑）；`applyReconnect` 移出 voteReady |
 | `src/ai-scheduler.ts` | `AIDecision` 型別、`parseDecisionFlag`、`updateDecisions`、`checkConvergence`、`enqueueNewlyDecided`、`checkAllPlayersReady`；改 `collectPreSpeeches`/`runPipeline`/`tick`/`onPhaseEntered`；刪除 `runDirect` 特例（全員草稿） |
 | `src/character-session.ts` | `buildPreSpeechPrompt` 任務指令加 flag 格式 |
@@ -92,7 +93,7 @@ server 推接管通知；前端橫幅（你掛機了，AI 暫代）＋拿回座�
 - flag 不綁定最終投票（投票階段仍重新決定）
 - CLOSING 拿掉（含 GM 喊關），混合局等真人用統一檢查取代
 - 草稿規則：除上輪發言者外全員寫草稿，中控挑一個上白板
-- ready 單向不退名單，但投票標的每輪可變（新 flag 覆蓋）；管線照跑直到統一檢查全過（純 AI 全定了即投票）
+- AI ready 單向不退名單，但投票標的每輪可變（新 flag 覆蓋）；管線照跑直到統一檢查全過（純 AI 全定了即投票）
 - ready 可收回（沿用 `HUMAN_UNREADY_VOTE`）；收回視為活動，回到未定
 - 掛機規則：10 次計數後 AI 接管（見上）；接管 UX 見上
 - `gm vote` 改灌滿 ready（幫所有人點頭→統一檢查→投票→投票事件）
