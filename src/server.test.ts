@@ -52,7 +52,6 @@ async function boot(overrides: Parameters<typeof startServer>[0] = {}): Promise<
     playerCount: 6,
     openBrowser: false,
     exitProcess: false,
-    speechesPerDay: 1000, // 測試期間不自動關閉討論
     dispatcherFactory: () => mockDispatcher(),
     ...overrides,
   });
@@ -284,7 +283,6 @@ http.createServer((req, res) => {
       playerCount: 6,
       openBrowser: false,
       exitProcess: false,
-      speechesPerDay: 1000,
       modelsDir,
       llamaServerBinPath: fakeBin,
       llamaServerPort: llamaPort,
@@ -365,7 +363,6 @@ http.createServer((req, res) => {
       playerCount: 6,
       openBrowser: false,
       exitProcess: false,
-      speechesPerDay: 1000,
       modelsDir,
       llamaServerBinPath: fakeBin,
       llamaServerPort: llamaPort,

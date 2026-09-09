@@ -4,7 +4,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { WebSocket } from 'ws';
-import { startServer, type ServerHandle, type ServerLLM } from './server.js';
+import { startServer, isTakeoverFiltered, type ServerHandle, type ServerLLM } from './server.js';
 
 const origProvider = process.env.LLM_PROVIDER;
 
@@ -51,7 +51,6 @@ async function boot(overrides: Parameters<typeof startServer>[0] = {}): Promise<
     playerCount: 6,
     openBrowser: false,
     exitProcess: false,
-    speechesPerDay: 1000,
     dispatcherFactory: () => mockDispatcher(),
     ...overrides,
   });
@@ -668,6 +667,17 @@ test('LEAVE_LOBBY：房主離開→host 轉給最長在場參戰者，開局權�
   } finally {
     await h.shutdown('test');
   }
+});
+
+test('接管過濾 isTakeoverFiltered：舊 WS 只擋遊戲操作（RECONNECT 照收）；新 WS 不擋', () => {
+  const old = { takeoverFiltered: true };
+  for (const t of ['HUMAN_SPEAK', 'HUMAN_SKIP', 'HUMAN_READY_VOTE', 'HUMAN_UNREADY_VOTE', 'HUMAN_VOTE', 'HUMAN_NIGHT_ACTION']) {
+    assert.equal(isTakeoverFiltered(old, t), true, `${t} 應被忽略`);
+  }
+  assert.equal(isTakeoverFiltered(old, 'RECONNECT'), false, 'RECONNECT 不擋（拿回座位用）');
+  assert.equal(isTakeoverFiltered(old, 'REQUEST_SNAPSHOT'), false);
+  assert.equal(isTakeoverFiltered({}, 'HUMAN_SPEAK'), false, '新 WS 不擋');
+  assert.equal(isTakeoverFiltered({ takeoverFiltered: false }, 'HUMAN_SPEAK'), false, '拿回後解除不擋');
 });
 
 test('LEAVE_LOBBY：遊戲中拒絕（座位不釋放，斷線接管語義不變）', async () => {

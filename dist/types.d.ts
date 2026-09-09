@@ -2,13 +2,13 @@
  * Werewolf Game Types — Phase 0 事件驅動狀態機型別層
  *
  * - Role / Team / SeerResult / MediumResult / NightActionType / ROLE_CONFIG 等沿用現有定義
- * - Phase 改為扁平 string union（10 值）；GameState / Player 改為事件驅動形狀
+ * - Phase 改為扁平 string union（9 值）；GameState / Player 改為事件驅動形狀
  * - GameState 另含 night.ts 相容欄位（nightActions / wolfKillTarget / guardProtectedTarget /
  *   seerCheckTarget / seerCheckResult）與 masonChatLog、expectedPlayerCount（規格缺口補位，見 game-state.ts）
  */
 import { Personality } from './personalities.js';
 export declare const SCHEMA_VERSION = 3;
-export type Phase = 'SETUP_WAITING_JOIN' | 'SETUP_READY' | 'NIGHT_COLLECTING' | 'NIGHT_RESOLVING' | 'DAY_DISCUSSION_OPEN' | 'DAY_DISCUSSION_CLOSING' | 'DAY_VOTING_COLLECTING' | 'DAY_VOTING_RESOLVING' | 'DAY_RESULT_ANNOUNCING' | 'GAME_OVER_FINAL';
+export type Phase = 'SETUP_WAITING_JOIN' | 'SETUP_READY' | 'NIGHT_COLLECTING' | 'NIGHT_RESOLVING' | 'DAY_DISCUSSION_OPEN' | 'DAY_VOTING_COLLECTING' | 'DAY_VOTING_RESOLVING' | 'DAY_RESULT_ANNOUNCING' | 'GAME_OVER_FINAL';
 export type GameEvent = {
     type: 'CLIENT_JOIN';
     name: string;
@@ -61,7 +61,8 @@ export type GameEvent = {
     type: 'DISCONNECT';
     playerId: number;
 } | {
-    type: 'CLOSE_DISCUSSION';
+    type: 'AI_READY_VOTE';
+    playerId: number;
 } | {
     type: 'RESOLVE_NIGHT';
 } | {
@@ -186,6 +187,10 @@ export interface GameState {
     daySummaries: string[];
     voteReady: number[];
     skippedHumans: number[];
+    /** 掛機計數：playerId → 該真人未定期間的 AI 發言次數；任一真人發話／跳過／收回即清空，到 10 觸發接管 */
+    idleCounts: Record<number, number>;
+    /** 掛機接管中座位（controlledBy 已翻為 ai；區分原生 AI 與掛機接管；重連拿回時移除） */
+    takenOver: number[];
     pendingGate: PendingGate | null;
     /** 大廳目標人數：CLIENT_JOIN 達標 → SETUP_READY 的依據 */
     expectedPlayerCount: number;
@@ -247,6 +252,7 @@ export interface PlayerSnapshot {
         }[];
         wolfAllyIds?: number[];
         canAct?: boolean;
+        takenOver: boolean;
         wolfMeeting?: {
             wolfId: number;
             targetId: number;
@@ -309,6 +315,8 @@ export interface GMSnapshot {
     boardVersion: number;
     pendingGate: PendingGate | null;
     voteReady: number[];
+    takenOver: number[];
+    idleCounts: Record<number, number>;
 }
 export interface TransitionResult {
     state: GameState;
@@ -330,6 +338,10 @@ export type Effect = {
 } | {
     type: 'ENQUEUE';
     event: GameEvent;
+} | {
+    type: 'IDLE_TAKEOVER';
+    playerId: number;
+    reason: string;
 };
 export interface RoleConfig {
     [playerCount: number]: {
@@ -438,6 +450,8 @@ export interface ClientRegistry {
     hasSpectators?(): boolean;
     /** Phase 2 新增（optional）：大廳廣播（SETUP 階段取代 snapshot 廣播） */
     sendLobby?(lobby: LobbySnapshot): void;
+    /** 掛機接管通知（optional）：只推被接管者本人＋標記其舊連線為接管過濾 */
+    notifyTakeover?(playerId: number, reason: string): void;
 }
 /** SpeechScheduler 建構參數 */
 export interface SchedulerContext {
@@ -487,6 +501,10 @@ export type ServerToClientMessage = {
     type: 'SHUTDOWN';
 } | {
     type: 'LEFT_LOBBY';
+} | {
+    type: 'IDLE_TAKEOVER';
+    playerId: number;
+    reason: string;
 } | {
     type: 'CHAT_MESSAGE';
     from: string;

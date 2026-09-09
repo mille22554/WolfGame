@@ -68,14 +68,15 @@ function driveDiscussion(engine, humanActions) {
         });
         engine.drain();
     }
-    // 真人準備投票 → 進投票
+    // 全員準備投票（真人 HUMAN_READY＋AI AI_READY，模擬 scheduler 收斂）→ 直進投票
     const s4 = engine.getState();
     if (s4.phase === 'DAY_DISCUSSION_OPEN') {
         for (const h of s4.players.filter((p) => p.alive && p.controlledBy === 'human')) {
-            const before = engine.getState();
-            void before;
             engine.enqueue({ type: 'HUMAN_READY_VOTE', playerId: h.id });
             humanActions.total++;
+        }
+        for (const a of s4.players.filter((p) => p.alive && p.controlledBy === 'ai')) {
+            engine.enqueue({ type: 'AI_READY_VOTE', playerId: a.id });
         }
         engine.drain();
         humanActions.accepted += humanActions.total; // 全接受才會進投票，下方斷言 phase
@@ -120,8 +121,10 @@ test('混合局：2 真人 + 7 AI 跑到 gameOver（含中途斷線接管）', (
             case 'DAY_DISCUSSION_OPEN': {
                 const aliveHumans = engine.getState().players.filter((p) => p.alive && p.controlledBy === 'human');
                 if (aliveHumans.length === 0) {
-                    // 無存活真人 → CLOSE_DISCUSSION（全 AI 自動開投票 gate）
-                    engine.enqueue({ type: 'CLOSE_DISCUSSION' });
+                    // 無存活真人 → 全員 AI 灌滿 ready（收斂直進投票）
+                    for (const a of engine.getState().players.filter((p) => p.alive)) {
+                        engine.enqueue({ type: 'AI_READY_VOTE', playerId: a.id });
+                    }
                     engine.drain();
                 }
                 else {
@@ -129,15 +132,6 @@ test('混合局：2 真人 + 7 AI 跑到 gameOver（含中途斷線接管）', (
                 }
                 break;
             }
-            case 'DAY_DISCUSSION_CLOSING':
-                for (const h of aliveIds(engine.getState())) {
-                    const me = engine.getState().players.find((p) => p.id === h);
-                    if (me.controlledBy !== 'human')
-                        continue;
-                    engine.enqueue({ type: 'HUMAN_READY_VOTE', playerId: h });
-                }
-                engine.drain();
-                break;
             case 'DAY_VOTING_COLLECTING':
                 driveVoting(engine);
                 break;

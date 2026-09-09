@@ -11,7 +11,7 @@ import type {
   GameState, GameEvent, PlayerSnapshot, PendingGate, Phase,
   LLMDispatcher, ClientRegistry, TransitionResult,
 } from './types.js';
-import { transition, buildPlayerSnapshot, buildSpectatorSnapshot, buildLobbySnapshot, saveState, createGameState } from './game-state.js';
+import { transition, buildPlayerSnapshot, buildSpectatorSnapshot, buildLobbySnapshot, saveState, createGameState, applyIdleTakeover } from './game-state.js';
 import { buildPrompt } from './character-session.js';
 
 // 正典定義已移至 types.ts；此處再匯出以保持舊引用相容
@@ -21,7 +21,6 @@ export interface EngineOptions {
   mode: 'gm' | 'web';
   nightTimeoutMs?: number;    // web: 90000, gm: Infinity
   voteTimeoutMs?: number;     // web: 60000
-  closingTimeoutMs?: number;  // web: 60000
   llm?: LLMDispatcher;
   scheduler?: AIScheduler;    // Phase 1 實作（發言選擇機制）
   registry?: ClientRegistry;  // web 模式需要
@@ -33,7 +32,7 @@ export interface AIScheduler {
   onPhaseEntered(state: GameState): void;
 }
 
-function defaultTimeout(mode: 'gm' | 'web', kind: 'night' | 'vote' | 'closing'): number {
+function defaultTimeout(mode: 'gm' | 'web', kind: 'night' | 'vote'): number {
   if (mode === 'gm') return Infinity;
   if (kind === 'night') return 90000;
   return 60000;
@@ -128,6 +127,21 @@ export class GameEngine {
         case 'ENQUEUE':
           this.queue.push(effect.event);
           break;
+        case 'IDLE_TAKEOVER': {
+          // 掛機接管鏈：切座位（沿用斷線路徑）＋通知被接管者本人；後續 BROADCAST 快照帶接管標記
+          const followups = applyIdleTakeover(this.state, effect.playerId);
+          for (const f of followups) {
+            if (f.type === 'DISPATCH_LLM') {
+              void this.dispatchLLM(f.playerId, f.kind);
+            } else if (f.type === 'ENQUEUE') {
+              this.queue.push(f.event);
+            }
+          }
+          try {
+            this.options.registry?.notifyTakeover?.(effect.playerId, effect.reason);
+          } catch { /* 通知失敗不影響接管 */ }
+          break;
+        }
       }
     }
     // Phase 2：任何 boardVersion 變更（含 HUMAN_SPEAK）即時通知 scheduler（CD 重置）

@@ -5,7 +5,7 @@
 
 ---
 
-## 1. [ ] 白板更新驅動迴圈（取代 quiet/CD 等待）
+## 1. [x] 白板更新驅動迴圈（取代 quiet/CD 等待）
 
 ### 迴圈（用戶定案）
 - 白板更新 → 開工生產（除上輪發言者外全員草稿，見第 2 項）＋CD 重啟。
@@ -14,22 +14,22 @@
 - CD 到沒貨 → 等做好馬上播。
 - 中間白板又更新 → 暫存作廢＋生產用新白板重跑＋CD 重啟（版本作廢機制沿用）。
 - 同一時間只有一條生產線＋一個暫存位，不會疊跑。
-- 生產失敗 → N 秒後重試（N 待用戶確認）；重試前不播出、不推進掛機計數。
+- 生產失敗 → 60 秒後重試（`SPEECH_RETRY_MS` env 可調，實作現況；秒數待用戶確認）；重試前不播出、不推進掛機計數。
 
 ### 參數
 - CD 60s（真人節奏，用戶確認不動）。
 - 純 AI：CD=0，做好就播（不是拿掉計時器，否則沒人開槍）。
 - quiet 整組拔除（scheduler 規則＋`QUIET_THRESHOLD_MS` env＋測試構造）。
-- 跳過按鈕（`HUMAN_SKIP`／`allAliveHumansSkipped`）連函數一起清（待用戶確認：新迴圈裡沉默即同意，按鈕無作用）。
+- 跳過按鈕（`HUMAN_SKIP`／`allAliveHumansSkipped`）保留不動（scheduler 已無依賴；刪除案待用戶確認）。
 
 ### 相關檔案
 - `src/ai-scheduler.ts`（tick、生產迴圈、暫存播出、版本作廢沿用）
-- `src/game-state.ts`（`allAliveHumansSkipped` 刪除）
+- `src/game-state.ts`（`allAliveHumansSkipped` 保留不動）
 - 測試：`ai-scheduler.test.ts`（約十處 `quietMs` 構造）、`full-game.test.ts`（L89）、`human-discussion.test.ts`（L89-106 釘住舊語義，一併改）、`mixed-game.test.ts`（L7/L67 用 `allAliveHumansSkipped`）
 
 ---
 
-## 2. [ ] 設計並實作「AI 發言帶決策 flag」機制（取代 speechesPerDay 上限）
+## 2. [x] 設計並實作「AI 發言帶決策 flag」機制（取代 speechesPerDay 上限）
 
 ### 問題
 目前純 AI 局討論靠 `speechesPerDay`（預設 6）強制結束（`server.ts:1360-1377`）。用戶認為這是錯誤設計：會在 AI 還沒收斂投票決定前就切斷討論，破壞遊戲。

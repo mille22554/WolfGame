@@ -12,7 +12,6 @@ export interface EngineOptions {
     mode: 'gm' | 'web';
     nightTimeoutMs?: number;
     voteTimeoutMs?: number;
-    closingTimeoutMs?: number;
     llm?: LLMDispatcher;
     scheduler?: AIScheduler;
     registry?: ClientRegistry;

@@ -6,7 +6,7 @@
  * - phase 變更立即 flushSave；其餘 SAVE debounce（預設 5s）
  * - gate timer 到期 → enqueue ACTION_TIMEOUT
  */
-import { transition, buildPlayerSnapshot, buildSpectatorSnapshot, buildLobbySnapshot, saveState, createGameState } from './game-state.js';
+import { transition, buildPlayerSnapshot, buildSpectatorSnapshot, buildLobbySnapshot, saveState, createGameState, applyIdleTakeover } from './game-state.js';
 import { buildPrompt } from './character-session.js';
 function defaultTimeout(mode, kind) {
     if (mode === 'gm')
@@ -98,6 +98,23 @@ export class GameEngine {
                 case 'ENQUEUE':
                     this.queue.push(effect.event);
                     break;
+                case 'IDLE_TAKEOVER': {
+                    // 掛機接管鏈：切座位（沿用斷線路徑）＋通知被接管者本人；後續 BROADCAST 快照帶接管標記
+                    const followups = applyIdleTakeover(this.state, effect.playerId);
+                    for (const f of followups) {
+                        if (f.type === 'DISPATCH_LLM') {
+                            void this.dispatchLLM(f.playerId, f.kind);
+                        }
+                        else if (f.type === 'ENQUEUE') {
+                            this.queue.push(f.event);
+                        }
+                    }
+                    try {
+                        this.options.registry?.notifyTakeover?.(effect.playerId, effect.reason);
+                    }
+                    catch { /* 通知失敗不影響接管 */ }
+                    break;
+                }
             }
         }
         // Phase 2：任何 boardVersion 變更（含 HUMAN_SPEAK）即時通知 scheduler（CD 重置）

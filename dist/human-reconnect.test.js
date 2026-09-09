@@ -35,11 +35,19 @@ function toDiscussion(s, keep = [1]) {
     transition(s, { type: 'RESOLVE_NIGHT' });
     assert.equal(s.phase, 'DAY_DISCUSSION_OPEN');
 }
+/** 討論中全員 ready 直進投票（收斂 helper） */
+function readyAllToVoting(s) {
+    for (const p of s.players.filter((x) => x.alive)) {
+        transition(s, p.controlledBy === 'human'
+            ? { type: 'HUMAN_READY_VOTE', playerId: p.id }
+            : { type: 'AI_READY_VOTE', playerId: p.id });
+    }
+    assert.equal(s.phase, 'DAY_VOTING_COLLECTING');
+}
 test('DISCONNECT → controlledBy ai + 移出 voteReady/skippedHumans', () => {
     const s = started6();
     toDiscussion(s);
     transition(s, { type: 'HUMAN_SKIP', playerId: 1 });
-    transition(s, { type: 'CLOSE_DISCUSSION' });
     transition(s, { type: 'HUMAN_READY_VOTE', playerId: 1 });
     assert.ok(s.voteReady.includes(1));
     const r = transition(s, { type: 'DISCONNECT', playerId: 1 });
@@ -76,10 +84,7 @@ test('重連後 gate 內可繼續行動（canAct 正確）', () => {
     if (!actors.includes(1)) {
         // 真人不在夜晚 gate → 測投票 gate：先到投票
         toDiscussion(s);
-        transition(s, { type: 'CLOSE_DISCUSSION' }); // 有真人 → CLOSING
-        // 全真人 ready → vote gate
-        transition(s, { type: 'HUMAN_READY_VOTE', playerId: 1 });
-        assert.equal(s.phase, 'DAY_VOTING_COLLECTING');
+        readyAllToVoting(s); // 全員 ready 直進投票
         transition(s, { type: 'DISCONNECT', playerId: 1 });
         transition(s, { type: 'RECONNECT', playerId: 1 });
         const snap = buildPlayerSnapshot(s, 1);
@@ -101,9 +106,7 @@ test('重連後 gate 內可繼續行動（canAct 正確）', () => {
 test('斷線接管後 AI 完成行動 → 重連 → 行動不可重做（canAct = false）', () => {
     const s = started6();
     toDiscussion(s);
-    transition(s, { type: 'CLOSE_DISCUSSION' });
-    transition(s, { type: 'HUMAN_READY_VOTE', playerId: 1 });
-    assert.equal(s.phase, 'DAY_VOTING_COLLECTING');
+    readyAllToVoting(s);
     transition(s, { type: 'DISCONNECT', playerId: 1 }); // AI 接管
     // AI 代投（done 含 P1）
     const target = aliveIds(s).filter((id) => id !== 1)[0];

@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { GameEngine } from './engine.js';
 import { createGameState, getNightActors } from './game-state.js';
+import { Role, Team } from './types.js';
 const SAVE_FILE = path.join(process.cwd(), 'game-state.json');
 let backup = null;
 before(() => {
@@ -121,7 +122,6 @@ test('ScriptedGM：啟發式完整局跑通（確定性策略）', () => {
                 engine.drain();
                 break;
             case 'DAY_DISCUSSION_OPEN': {
-                const bv = engine.getState().boardVersion;
                 for (const p of engine.getState().players.filter((x) => x.alive)) {
                     engine.enqueue({
                         type: 'AI_SPEECH_DONE',
@@ -129,9 +129,13 @@ test('ScriptedGM：啟發式完整局跑通（確定性策略）', () => {
                         text: `P${p.id}：聽完發言再決定。`,
                         boardVersion: engine.getState().boardVersion,
                     });
-                    void bv;
                 }
-                engine.enqueue({ type: 'CLOSE_DISCUSSION' });
+                // 收斂直進投票：全員 ready（灌滿）→ 投票 gate
+                for (const p of engine.getState().players.filter((x) => x.alive)) {
+                    engine.enqueue(p.controlledBy === 'human'
+                        ? { type: 'HUMAN_READY_VOTE', playerId: p.id }
+                        : { type: 'AI_READY_VOTE', playerId: p.id });
+                }
                 engine.drain();
                 break;
             }
@@ -184,6 +188,60 @@ test('Phase 2：boardVersion 變更 → scheduler.onBoardUpdated 被呼叫', () 
     });
     engine.drain();
     assert.equal(notified.length, n0 + 1);
+    engine.close();
+});
+test('掛機接管鏈：10 次 AI 發言 → engine 切座位＋takenOver 標記＋registry 通知；RECONNECT 拿回', () => {
+    const notified = [];
+    const registry = {
+        getConnectedPlayerIds: () => [],
+        send: () => undefined,
+        notifyTakeover: (playerId, reason) => {
+            notified.push({ playerId, reason });
+        },
+    };
+    const engine = new GameEngine({ mode: 'gm', registry }, createGameState(6));
+    engine.enqueue({ type: 'HUMAN_JOIN', playerId: 1, name: 'H' });
+    for (let id = 2; id <= 6; id++)
+        engine.enqueue({ type: 'AI_JOIN', playerId: id });
+    engine.enqueue({ type: 'START_GAME' });
+    engine.drain();
+    // 確定性守夜：保 P1 存活（狼刀 P1 以外最低非狼）
+    {
+        const s0 = engine.getState();
+        for (const pid of getNightActors(s0)) {
+            const me = s0.players.find((p) => p.id === pid);
+            const pool = s0.players
+                .filter((p) => p.alive && p.id !== pid && p.id !== 1
+                && (me.role !== Role.WEREWOLF || p.team !== Team.WEREWOLF))
+                .map((p) => p.id);
+            const target = pool[0] ?? s0.players.filter((p) => p.alive && p.id !== pid)[0].id;
+            engine.enqueue(me.controlledBy === 'human'
+                ? { type: 'HUMAN_NIGHT_ACTION', playerId: pid, targetId: target }
+                : { type: 'AI_NIGHT_DONE', playerId: pid, targetId: target });
+        }
+        engine.drain();
+    }
+    assert.equal(engine.getState().phase, 'DAY_DISCUSSION_OPEN');
+    assert.ok(engine.getState().players.find((p) => p.id === 1).alive, 'P1 應存活');
+    const speaker = engine.getState().players.find((p) => p.alive && p.controlledBy === 'ai').id;
+    for (let i = 0; i < 10; i++) {
+        engine.enqueue({
+            type: 'AI_SPEECH_DONE', playerId: speaker, text: `AI 發言${i}`,
+            boardVersion: engine.getState().boardVersion,
+        });
+        engine.drain();
+    }
+    const st = engine.getState();
+    assert.equal(st.players.find((p) => p.id === 1).controlledBy, 'ai', 'engine 應切座位');
+    assert.ok(st.takenOver.includes(1), '快照應帶接管標記');
+    assert.equal(notified.length, 1);
+    assert.equal(notified[0].playerId, 1);
+    // 拿回：回到未定＋標記移除
+    engine.enqueue({ type: 'RECONNECT', playerId: 1 });
+    engine.drain();
+    const back = engine.getState();
+    assert.equal(back.players.find((p) => p.id === 1).controlledBy, 'human');
+    assert.ok(!back.takenOver.includes(1));
     engine.close();
 });
 test('Phase 2：tryEvent 立即處理並回傳 TransitionResult', () => {

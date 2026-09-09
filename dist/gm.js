@@ -130,21 +130,24 @@ switch (command) {
         break;
     }
     case 'vote': {
-        // vote <playerId> <targetId>：先 enqueue CLOSE_DISCUSSION，
-        // 再依 controlledBy 分流 AI_VOTE_DONE / HUMAN_VOTE
-        // （真人另先 HUMAN_READY_VOTE 以通過 CLOSING；若 gate 未開，投票事件會被忽略）
+        // vote <playerId> <targetId>：幫所有存活玩家點頭（灌滿 ready）→ 統一檢查直進投票 → 投票事件
+        // （CLOSING 已移除；若統一檢查未全過仍在討論，投票事件會被忽略）
         const playerId = parseInt(args[1], 10);
         const targetId = parseInt(args[2], 10);
         if (!Number.isInteger(playerId) || !Number.isInteger(targetId)) {
             error('Usage: gm.js vote <playerId> <targetId>');
         }
         const engine = loadEngine();
-        const player = engine.getState().players.find((p) => p.id === playerId);
+        const state = engine.getState();
+        const player = state.players.find((p) => p.id === playerId);
         if (!player)
             error(`Unknown player P${playerId}`);
-        engine.enqueue({ type: 'CLOSE_DISCUSSION' });
+        for (const p of state.players.filter((x) => x.alive)) {
+            engine.enqueue(p.controlledBy === 'human'
+                ? { type: 'HUMAN_READY_VOTE', playerId: p.id }
+                : { type: 'AI_READY_VOTE', playerId: p.id });
+        }
         if (player.controlledBy === 'human') {
-            engine.enqueue({ type: 'HUMAN_READY_VOTE', playerId });
             engine.enqueue({ type: 'HUMAN_VOTE', playerId, targetId });
         }
         else {

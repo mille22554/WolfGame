@@ -43,6 +43,8 @@ export function createGameState(playerCount, humanPlayerIndices = []) {
         daySummaries: [],
         voteReady: [],
         skippedHumans: [],
+        idleCounts: {},
+        takenOver: [],
         pendingGate: null,
         expectedPlayerCount: playerCount,
         nightActions: [],
@@ -177,7 +179,7 @@ function applyDisconnect(state, playerId, effects) {
     }
     return null;
 }
-/** Phase 2：重連拿回共用（僅存活；SETUP 階段拒絕） */
+/** Phase 2：重連拿回共用（僅存活；SETUP 階段拒絕；拿回後回到未定＋接管標記移除＋計數清零） */
 function applyReconnect(state, playerId) {
     if (state.phase === 'SETUP_WAITING_JOIN' || state.phase === 'SETUP_READY') {
         return { state, effects: [], accepted: false, reason: 'not started' };
@@ -187,6 +189,9 @@ function applyReconnect(state, playerId) {
         return { state, effects: [], accepted: false, reason: 'not alive' };
     }
     player.controlledBy = 'human';
+    state.voteReady = state.voteReady.filter((id) => id !== playerId);
+    delete state.idleCounts[playerId];
+    state.takenOver = state.takenOver.filter((id) => id !== playerId);
     return null;
 }
 function makeLobbyPlayer(state, name) {
@@ -218,9 +223,35 @@ function gateComplete(state) {
         return false;
     return gate.required.every((r) => gate.done.includes(r));
 }
-function allAliveHumansReady(state) {
-    const humans = getAlivePlayers(state.players).filter((p) => p.controlledBy === 'human');
-    return humans.every((h) => state.voteReady.includes(h.id));
+/** 統一收斂檢查：所有存活玩家（真人 + AI）皆在 voteReady → 直進投票（不經 CLOSING） */
+export function allAlivePlayersReady(state) {
+    const alive = getAlivePlayers(state.players);
+    return alive.length > 0 && alive.every((p) => state.voteReady.includes(p.id));
+}
+/** 掛機接管門檻：未定真人在連續 N 次 AI 發言無活動後視為掛機（transition 計數、engine 執行接管） */
+export const IDLE_TAKEOVER_THRESHOLD = 10;
+function clearIdleCounts(state) {
+    state.idleCounts = {};
+}
+/** 掛機接管執行（engine 在 IDLE_TAKEOVER effect 到達時呼叫；沿用斷線路徑語義） */
+export function applyIdleTakeover(state, playerId) {
+    const effects = [];
+    const player = state.players.find((p) => p.id === playerId);
+    if (!player || !player.alive)
+        return effects;
+    if (player.controlledBy === 'human') {
+        player.controlledBy = 'ai';
+    }
+    state.voteReady = state.voteReady.filter((id) => id !== playerId);
+    state.skippedHumans = state.skippedHumans.filter((id) => id !== playerId);
+    delete state.idleCounts[playerId];
+    if (!state.takenOver.includes(playerId))
+        state.takenOver.push(playerId);
+    const gate = state.pendingGate;
+    if (gate && gate.required.includes(playerId) && !gate.done.includes(playerId)) {
+        effects.push({ type: 'DISPATCH_LLM', playerId, kind: gate.kind });
+    }
+    return effects;
 }
 function applyWinCheck(state, effects) {
     const winner = checkWinCondition(state);
@@ -410,6 +441,8 @@ export function transition(state, event) {
                 state.nightActions = [];
                 state.voteReady = [];
                 state.skippedHumans = [];
+                state.idleCounts = {};
+                state.takenOver = [];
                 state.phase = 'NIGHT_COLLECTING';
                 state.boardVersion++;
                 const effects = [];
@@ -517,6 +550,7 @@ export function transition(state, event) {
                 if (rejected)
                     return rejected;
                 state.skippedHumans = state.skippedHumans.filter((id) => id !== event.playerId);
+                clearIdleCounts(state); // 任一真人發話即清空掛機計數
                 const effects = [];
                 touch(effects);
                 return { state, effects, accepted: true };
@@ -530,16 +564,29 @@ export function transition(state, event) {
                     return rejected;
                 state.skippedHumans = [];
                 const effects = [];
+                // 掛機計數：AI 每次發話，未定真人各 +1；已 ready 直接排除；到閾值回傳接管 effect
+                for (const h of getAlivePlayers(state.players).filter((p) => p.controlledBy === 'human')) {
+                    if (state.voteReady.includes(h.id)) {
+                        delete state.idleCounts[h.id];
+                        continue;
+                    }
+                    state.idleCounts[h.id] = (state.idleCounts[h.id] ?? 0) + 1;
+                    if (state.idleCounts[h.id] >= IDLE_TAKEOVER_THRESHOLD) {
+                        effects.push({ type: 'IDLE_TAKEOVER', playerId: h.id, reason: 'idle' });
+                    }
+                }
                 touch(effects);
                 return { state, effects, accepted: true };
             }
             if (event.type === 'HUMAN_SKIP') {
+                // 保留（待用戶確認刪除）：跳過按鈕語義不動；僅作為真人活動清空掛機計數
                 const player = state.players.find((p) => p.id === event.playerId);
                 if (!player || !player.alive) {
                     return { state, effects: [], accepted: false, reason: `P${event.playerId} not alive` };
                 }
                 if (!state.skippedHumans.includes(event.playerId))
                     state.skippedHumans.push(event.playerId);
+                clearIdleCounts(state);
                 const effects = [];
                 touch(effects);
                 return { state, effects, accepted: true };
@@ -551,9 +598,26 @@ export function transition(state, event) {
                 }
                 if (!state.voteReady.includes(event.playerId))
                     state.voteReady.push(event.playerId);
+                delete state.idleCounts[event.playerId]; // 已 ready 直接清空並列入計數對象外
                 const effects = [];
                 touch(effects);
-                if (allAliveHumansReady(state)) {
+                if (allAlivePlayersReady(state)) {
+                    state.phase = 'DAY_VOTING_COLLECTING';
+                    openVoteGate(state, effects);
+                }
+                return { state, effects, accepted: true };
+            }
+            if (event.type === 'AI_READY_VOTE') {
+                const player = state.players.find((p) => p.id === event.playerId);
+                if (!player || !player.alive) {
+                    return { state, effects: [], accepted: false, reason: `P${event.playerId} not alive` };
+                }
+                // AI ready 單向不退（不提供 AI_UNREADY）
+                if (!state.voteReady.includes(event.playerId))
+                    state.voteReady.push(event.playerId);
+                const effects = [];
+                touch(effects);
+                if (allAlivePlayersReady(state)) {
                     state.phase = 'DAY_VOTING_COLLECTING';
                     openVoteGate(state, effects);
                 }
@@ -561,6 +625,7 @@ export function transition(state, event) {
             }
             if (event.type === 'HUMAN_UNREADY_VOTE') {
                 state.voteReady = state.voteReady.filter((id) => id !== event.playerId);
+                clearIdleCounts(state); // 收回視為活動，回到未定、從零重算
                 const effects = [];
                 touch(effects);
                 return { state, effects, accepted: true };
@@ -587,53 +652,6 @@ export function transition(state, event) {
                     return { state, effects: [], accepted: false, reason: `P${event.playerId} is not an alive mason` };
                 }
                 state.masonChatLog.push({ playerId: event.playerId, text: event.text, day: state.day });
-                const effects = [];
-                touch(effects);
-                return { state, effects, accepted: true };
-            }
-            if (event.type === 'CLOSE_DISCUSSION') {
-                state.phase = 'DAY_DISCUSSION_CLOSING';
-                const effects = [];
-                touch(effects);
-                // 缺口補位：全 AI 局無真人可 ready，直接開投票 gate（否則 CLOSING 永遠卡住）
-                if (getAlivePlayers(state.players).filter((p) => p.controlledBy === 'human').length === 0) {
-                    state.phase = 'DAY_VOTING_COLLECTING';
-                    openVoteGate(state, effects);
-                }
-                return { state, effects, accepted: true };
-            }
-            return { state, effects: [], accepted: false, reason: `ignored in ${state.phase}` };
-        }
-        case 'DAY_DISCUSSION_CLOSING': {
-            if (event.type === 'HUMAN_READY_VOTE' || event.type === 'HUMAN_SKIP') {
-                if (!state.voteReady.includes(event.playerId))
-                    state.voteReady.push(event.playerId);
-                const effects = [];
-                touch(effects);
-                if (allAliveHumansReady(state)) {
-                    state.phase = 'DAY_VOTING_COLLECTING';
-                    openVoteGate(state, effects);
-                }
-                return { state, effects, accepted: true };
-            }
-            if (event.type === 'HUMAN_UNREADY_VOTE') {
-                state.voteReady = state.voteReady.filter((id) => id !== event.playerId);
-                const effects = [];
-                touch(effects);
-                return { state, effects, accepted: true };
-            }
-            if (event.type === 'DISCONNECT') {
-                const effects = [];
-                touch(effects);
-                const r = applyDisconnect(state, event.playerId, effects);
-                if (r)
-                    return r;
-                return { state, effects, accepted: true };
-            }
-            if (event.type === 'RECONNECT') {
-                const r = applyReconnect(state, event.playerId);
-                if (r)
-                    return r;
                 const effects = [];
                 touch(effects);
                 return { state, effects, accepted: true };
@@ -763,6 +781,7 @@ export function transition(state, event) {
                 state.nightActions = [];
                 state.voteReady = [];
                 state.skippedHumans = [];
+                state.idleCounts = {};
                 delete state.wolfKillTarget;
                 delete state.guardProtectedTarget;
                 delete state.seerCheckTarget;
@@ -840,7 +859,7 @@ export function buildPlayerSnapshot(state, playerId) {
     if (!me)
         throw new Error(`unknown player P${playerId}`);
     const pub = buildPublicFields(state);
-    const you = { role: me.role, team: me.team };
+    const you = { role: me.role, team: me.team, takenOver: state.takenOver.includes(playerId) };
     if (me.role === Role.SEER) {
         you.seerChecks = state.seerChecks
             .filter((c) => c.seerId === playerId)
@@ -909,6 +928,8 @@ export function buildGMSnapshot(state) {
         boardVersion: state.boardVersion,
         pendingGate: state.pendingGate ? { ...state.pendingGate } : null,
         voteReady: [...state.voteReady],
+        takenOver: [...state.takenOver],
+        idleCounts: { ...state.idleCounts },
     };
 }
 // ============================================

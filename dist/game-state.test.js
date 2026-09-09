@@ -64,8 +64,13 @@ function nightKeeping(s, keep = []) {
 }
 function toVotingAllAI(s) {
     toDiscussion(s);
-    const r = transition(s, { type: 'CLOSE_DISCUSSION' });
-    assert.equal(r.accepted, true);
+    // 收斂直進投票：全員 ready（全 AI 局灌滿 AI_READY_VOTE）
+    for (const p of s.players.filter((x) => x.alive)) {
+        const r = transition(s, p.controlledBy === 'human'
+            ? { type: 'HUMAN_READY_VOTE', playerId: p.id }
+            : { type: 'AI_READY_VOTE', playerId: p.id });
+        assert.equal(r.accepted, true);
+    }
     assert.equal(s.phase, 'DAY_VOTING_COLLECTING');
 }
 // ---------- SETUP ----------
@@ -194,50 +199,40 @@ test('boardVersion 不觸發點：JOIN / SKIP / READY / MASON_CHAT', () => {
     const bv = s2.boardVersion;
     transition(s2, { type: 'HUMAN_SKIP', playerId: aliveIds(s2)[0] });
     assert.equal(s2.boardVersion, bv);
-    transition(s2, { type: 'CLOSE_DISCUSSION' });
-    assert.equal(s2.phase, 'DAY_DISCUSSION_CLOSING');
     transition(s2, { type: 'HUMAN_READY_VOTE', playerId: 1 });
     assert.equal(s2.boardVersion, bv);
 });
-// ---------- CLOSING ----------
-test('DAY_DISCUSSION_CLOSING：voteReady 增減；全 ready → DAY_VOTING_COLLECTING', () => {
+// ---------- 收斂直進投票（無 CLOSING） ----------
+test('DAY_DISCUSSION_OPEN：voteReady 增減；全員 ready → 直進 DAY_VOTING_COLLECTING', () => {
     const s = startedState(6, [0, 1]);
     nightKeeping(s, [1, 2]); // 保兩真人存活，確定性雙人路徑
     assert.equal(s.phase, 'DAY_DISCUSSION_OPEN');
-    transition(s, { type: 'CLOSE_DISCUSSION' });
-    assert.equal(s.phase, 'DAY_DISCUSSION_CLOSING');
     const humans = s.players.filter((p) => p.alive && p.controlledBy === 'human').map((p) => p.id);
     assert.ok(humans.length >= 1); // 狼首夜至多殺一人，至少一真人生還
-    if (humans.length >= 2) {
-        transition(s, { type: 'HUMAN_READY_VOTE', playerId: humans[0] });
-        assert.equal(s.phase, 'DAY_DISCUSSION_CLOSING');
-        transition(s, { type: 'HUMAN_UNREADY_VOTE', playerId: humans[0] });
-        assert.ok(!s.voteReady.includes(humans[0]));
-        transition(s, { type: 'HUMAN_READY_VOTE', playerId: humans[0] });
-        const r = transition(s, { type: 'HUMAN_READY_VOTE', playerId: humans[1] });
-        assert.equal(r.accepted, true);
-        assert.equal(s.phase, 'DAY_VOTING_COLLECTING');
-        assert.ok(s.pendingGate);
-        assert.equal(s.pendingGate.kind, 'vote');
-        assert.ok(r.effects.some((e) => e.type === 'ARM_GATE'));
+    transition(s, { type: 'HUMAN_READY_VOTE', playerId: humans[0] });
+    assert.equal(s.phase, 'DAY_DISCUSSION_OPEN'); // AI 未定 → 維持 OPEN
+    transition(s, { type: 'HUMAN_UNREADY_VOTE', playerId: humans[0] });
+    assert.ok(!s.voteReady.includes(humans[0]));
+    for (const h of humans)
+        transition(s, { type: 'HUMAN_READY_VOTE', playerId: h });
+    let last;
+    for (const a of s.players.filter((p) => p.alive && p.controlledBy === 'ai').map((p) => p.id)) {
+        last = transition(s, { type: 'AI_READY_VOTE', playerId: a });
     }
-    else {
-        const r = transition(s, { type: 'HUMAN_READY_VOTE', playerId: humans[0] });
-        assert.equal(r.accepted, true);
-        assert.equal(s.phase, 'DAY_VOTING_COLLECTING');
-        assert.ok(s.pendingGate);
-        assert.equal(s.pendingGate.kind, 'vote');
-    }
+    assert.equal(last.accepted, true);
+    assert.equal(s.phase, 'DAY_VOTING_COLLECTING');
+    assert.ok(s.pendingGate);
+    assert.equal(s.pendingGate.kind, 'vote');
+    assert.ok(last.effects.some((e) => e.type === 'ARM_GATE'));
 });
-test('DAY_DISCUSSION_CLOSING：HUMAN_SKIP 視同準備投票', () => {
+test('HUMAN_SKIP 不視同準備投票（OPEN 內維持討論）', () => {
     const s = startedState(6, [0]);
     nightKeeping(s, [1]); // 保唯一真人存活
     assert.equal(s.phase, 'DAY_DISCUSSION_OPEN');
-    transition(s, { type: 'CLOSE_DISCUSSION' });
     const humans = s.players.filter((p) => p.alive && p.controlledBy === 'human').map((p) => p.id);
     assert.equal(humans.length, 1);
     transition(s, { type: 'HUMAN_SKIP', playerId: humans[0] });
-    assert.equal(s.phase, 'DAY_VOTING_COLLECTING');
+    assert.equal(s.phase, 'DAY_DISCUSSION_OPEN');
 });
 // ---------- VOTING ----------
 test('DAY_VOTING_COLLECTING：gate 完成 → DAY_VOTING_RESOLVING；平票 → 無人出局', () => {
@@ -315,7 +310,7 @@ test('GAME_OVER_FINAL：全部事件被忽略', () => {
     s.phase = 'GAME_OVER_FINAL';
     s.gameOver = true;
     for (const ev of [
-        { type: 'CLOSE_DISCUSSION' },
+        { type: 'AI_READY_VOTE', playerId: 1 },
         { type: 'ADVANCE_DAY' },
         { type: 'ACTION_TIMEOUT', gateId: 'x' },
     ]) {

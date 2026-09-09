@@ -2,7 +2,7 @@
  * Werewolf Game Types — Phase 0 事件驅動狀態機型別層
  *
  * - Role / Team / SeerResult / MediumResult / NightActionType / ROLE_CONFIG 等沿用現有定義
- * - Phase 改為扁平 string union（10 值）；GameState / Player 改為事件驅動形狀
+ * - Phase 改為扁平 string union（9 值）；GameState / Player 改為事件驅動形狀
  * - GameState 另含 night.ts 相容欄位（nightActions / wolfKillTarget / guardProtectedTarget /
  *   seerCheckTarget / seerCheckResult）與 masonChatLog、expectedPlayerCount（規格缺口補位，見 game-state.ts）
  */
@@ -16,7 +16,7 @@ import { Personality } from './personalities.js';
 export const SCHEMA_VERSION = 3;
 
 // ============================================
-// Phase（扁平，10 值）
+// Phase（扁平，9 值）
 // ============================================
 
 export type Phase =
@@ -24,15 +24,14 @@ export type Phase =
   | 'SETUP_READY'             // 人數足夠，可開始
   | 'NIGHT_COLLECTING'        // 夜晚，收集行動
   | 'NIGHT_RESOLVING'         // 夜晚行動結算
-  | 'DAY_DISCUSSION_OPEN'     // 白天討論開放
-  | 'DAY_DISCUSSION_CLOSING'  // 討論收尾（準備投票）
+  | 'DAY_DISCUSSION_OPEN'     // 白天討論開放（自由發言；全員 ready 直進投票）
   | 'DAY_VOTING_COLLECTING'   // 收集投票
   | 'DAY_VOTING_RESOLVING'    // 投票結算
   | 'DAY_RESULT_ANNOUNCING'   // 公布處決結果
   | 'GAME_OVER_FINAL';        // 遊戲結束
 
 // ============================================
-// GameEvent（union，19 事件；規格 §2.3 標 18 為誤數，實際列出 19 個）
+// GameEvent（union，22 事件）
 // ============================================
 
 export type GameEvent =
@@ -51,7 +50,7 @@ export type GameEvent =
   | { type: 'MASON_CHAT'; playerId: number; text: string }
   | { type: 'ACTION_TIMEOUT'; gateId: string }   // gate 級，無 playerId
   | { type: 'DISCONNECT'; playerId: number }
-  | { type: 'CLOSE_DISCUSSION' }
+  | { type: 'AI_READY_VOTE'; playerId: number }   // AI 草稿 decided → scheduler 在發言成功後 enqueue（不帶版本；單向不退）
   | { type: 'RESOLVE_NIGHT' }    // 內部：NIGHT_RESOLVING 結算完成
   | { type: 'RESOLVE_VOTES' }    // 內部：DAY_VOTING_RESOLVING 結算完成
   | { type: 'ADVANCE_DAY' }     // 內部：進入下一天
@@ -182,8 +181,12 @@ export interface GameState {
   gameOver: boolean;
   boardVersion: number;           // 白板版本號
   daySummaries: string[];         // 每天摘要（截斷用）
-  voteReady: number[];            // 已準備投票的真人
-  skippedHumans: number[];        // Phase 2：當天已跳過發言的真人 playerId（全跳過 → AI 立即發言）
+  voteReady: number[];            // 已準備投票的玩家（真人 + AI）
+  skippedHumans: number[];        // Phase 2：當天已跳過發言的真人 playerId（保留：待用戶確認刪除）
+  /** 掛機計數：playerId → 該真人未定期間的 AI 發言次數；任一真人發話／跳過／收回即清空，到 10 觸發接管 */
+  idleCounts: Record<number, number>;
+  /** 掛機接管中座位（controlledBy 已翻為 ai；區分原生 AI 與掛機接管；重連拿回時移除） */
+  takenOver: number[];
   pendingGate: PendingGate | null;
   // --- 規格缺口補位（transition 純函式內使用，持久化） ---
   /** 大廳目標人數：CLIENT_JOIN 達標 → SETUP_READY 的依據 */
@@ -224,6 +227,7 @@ export interface PlayerSnapshot {
     masonChatLog?: { playerId: number; text: string }[];
     wolfAllyIds?: number[];
     canAct?: boolean;            // Phase 2：目前是否輪到我行動：pendingGate 存在 && required 含我 && done 不含我
+    takenOver: boolean;          // 掛機接管標記：true → 顯示「AI 接管中」panel＋拿回座位鈕（每次快照重算）
     wolfMeeting?: { wolfId: number; targetId: number }[];   // Phase 2：狼人會議目前提交（僅狼；由 nightActions 推導）
   };
 }
@@ -266,6 +270,8 @@ export interface GMSnapshot {
   boardVersion: number;
   pendingGate: PendingGate | null;
   voteReady: number[];
+  takenOver: number[];            // 掛機接管中座位（GM 視角區分原生 AI 與接管）
+  idleCounts: Record<number, number>;   // 掛機計數（GM 視角可見，驗收用）
 }
 
 // ============================================
@@ -284,7 +290,8 @@ export type Effect =
   | { type: 'SAVE' }
   | { type: 'ARM_GATE'; gate: PendingGate }
   | { type: 'DISPATCH_LLM'; playerId: number; kind: 'speech' | 'vote' | 'night' }
-  | { type: 'ENQUEUE'; event: GameEvent };
+  | { type: 'ENQUEUE'; event: GameEvent }
+  | { type: 'IDLE_TAKEOVER'; playerId: number; reason: string };   // 掛機接管：engine 切座位＋發通知，server 轉播
 
 // ============================================
 // Role Configuration (from rules)
@@ -439,6 +446,8 @@ export interface ClientRegistry {
   hasSpectators?(): boolean;
   /** Phase 2 新增（optional）：大廳廣播（SETUP 階段取代 snapshot 廣播） */
   sendLobby?(lobby: LobbySnapshot): void;
+  /** 掛機接管通知（optional）：只推被接管者本人＋標記其舊連線為接管過濾 */
+  notifyTakeover?(playerId: number, reason: string): void;
 }
 
 /** SpeechScheduler 建構參數 */
@@ -461,6 +470,7 @@ export type ServerToClientMessage =
   | { type: 'PING' }
   | { type: 'SHUTDOWN' }
   | { type: 'LEFT_LOBBY' }
+  | { type: 'IDLE_TAKEOVER'; playerId: number; reason: string }
   | { type: 'CHAT_MESSAGE'; from: string; text: string; ts: number };
 
 /** 前端 WS 協定：客戶端 → 伺服器（Phase 2 擴充；真人操作訊息不含 playerId，伺服器由連線補上） */

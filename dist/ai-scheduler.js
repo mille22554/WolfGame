@@ -1,60 +1,132 @@
 /**
- * ai-scheduler.ts — SpeechScheduler（發言選擇機制，實作 AIScheduler）
+ * ai-scheduler.ts — SpeechScheduler（白板更新驅動迴圈＋AI 決策 flag 收斂）
  *
- * 管線：IDLE → PRE_SPEECH（分批平行）→ JUDGE（全盲裁判）→ SELECT（新穎性懲罰 + top3 隨機）
- *       → EXPAND（commit 後不中斷）→ BROADCAST（保證 ≥ CD 距最後訊息）
+ * 迴圈（用戶定案）：
+ * - 白板更新 → 開工生產（除上輪發言者外全員草稿）＋ CD 重啟。
+ * - 生產完成 → 暫存，不直接播。
+ * - CD 到有貨 → 播出（播出即白板更新，迴圈回去）。
+ * - CD 到沒貨 → 等做好馬上播。
+ * - 中間白板又更新 → 暫存作廢＋生產用新白板重跑＋CD 重啟（版本作廢沿用）。
+ * - 同一時間只有一條生產線＋一個暫存位，不會疊跑。
+ * - 生產失敗 → N 秒後重試（預設 60s，env SPEECH_RETRY_MS 可調）；重試前不播出、不推進掛機計數。
+ * - 純 AI 局：CD=0，做好就播（計時器保留，只是 0ms）。
+ * - quiet 整組拔除；跳過按鈕（HUMAN_SKIP／allAliveHumansSkipped）保留但 scheduler 不再依賴。
  *
- * 版本語意：PRE_SPEECH / JUDGE 完成時版本不符 → 作廢回 IDLE；
- * SELECT 之後 commit，EXPAND 跑完後 enqueue AI_SPEECH_DONE 帶 commit 版本
- * （期間版本變更則由 engine 既有機制丟棄）。
+ * 收斂（第 2 項）：
+ * - 每輪除上輪發言者外全員寫草稿；候選為空不生產，等真人講話。
+ * - 草稿結尾 flag 兩層解析（正規＋寬鬆決策語境關鍵字，不用 LLM）；剝離統一在收草稿回傳前，
+ *   broadcast 前再洗一次 expand 輸出；flag 永不進白板。
+ * - 安全閥：單一 AI 連續 maxUncertainRounds（預設 100）次資訊不足 → 強制 decided:abstain。
+ * - AI decided 且其發言成功播出後 → enqueue AI_READY_VOTE（不帶版本；單向不退；標的可變覆蓋）；
+ *   transition 統一檢查全員 ready → 直進投票（無 CLOSING）。
  */
 import { getAlivePlayers } from './assignment.js';
-import { allAliveHumansSkipped } from './game-state.js';
-import { buildPrompt, buildPreSpeechPrompt, buildJudgePrompt, buildExpandPrompt, summarizeDay, } from './character-session.js';
+import { buildPreSpeechPrompt, buildJudgePrompt, buildExpandPrompt, summarizeDay, } from './character-session.js';
 import { noveltyPenalty } from './novelty.js';
 import { shuffleArray } from './utils.js';
+/** 安全閥：單一 AI 連續資訊不足次數上限（防卡死底線；只計真正資訊不足） */
+export const MAX_UNCERTAIN_ROUNDS = 100;
+/** 正規 flag：[決定:投P3]／[決定:棄票]／[決定:資訊不足]（方括號跳脫、全形/半形冒號、全域匹配） */
+export const DECISION_FLAG_RE = /\[決定[:：](投P\s*\d+|棄票|資訊不足)\]/g;
+const DECISION_TARGET_RE = /投P\s*(\d+)/;
+/** 寬鬆層：決策語境的投 Pn（動詞＋編號才認，避免討論提及誤判） */
+const LOOSE_VOTE_RES = [
+    /我投\s*P?\s*(\d+)/,
+    /決定投\s*P?\s*(\d+)/,
+    /要投\s*P?\s*(\d+)/,
+    /打算投\s*P?\s*(\d+)/,
+    /想要投\s*P?\s*(\d+)/,
+    /會投\s*P?\s*(\d+)/,
+    /準備投\s*P?\s*(\d+)/,
+    /投票給\s*P?\s*(\d+)/,
+];
+const LOOSE_ABSTAIN_RE = /棄票|放棄投票|不投票|投棄權/;
+const LOOSE_UNCERTAIN_RE = /資訊不足|無法決定|還不能決定|不能決定|不確定|還不確定|再觀察|多聽|還要聽|再聽聽|觀望|難以判斷|沒有想法|沒想法|還沒想法/;
+/** 剝離 flag（全域，一律在收草稿回傳前＋broadcast 前各洗一次） */
+export function stripDecisionFlags(text) {
+    return text
+        .replace(DECISION_FLAG_RE, '')
+        .split('\n')
+        .map((line) => line.trimEnd())
+        .join('\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+/** 兩層解析：先正規，失敗走寬鬆關鍵字；都抓不到 → uncertain（計入安全閥） */
+export function parseDecisionFlag(text) {
+    DECISION_FLAG_RE.lastIndex = 0;
+    let m;
+    let last = null;
+    while ((m = DECISION_FLAG_RE.exec(text)) !== null)
+        last = m;
+    if (last) {
+        const body = last[1];
+        if (body === '棄票')
+            return { status: 'decided', target: 'abstain' };
+        if (body === '資訊不足')
+            return { status: 'uncertain' };
+        const tm = DECISION_TARGET_RE.exec(body);
+        if (tm)
+            return { status: 'decided', target: parseInt(tm[1], 10) };
+        return { status: 'uncertain' };
+    }
+    for (const re of LOOSE_VOTE_RES) {
+        const lm = re.exec(text);
+        if (lm)
+            return { status: 'decided', target: parseInt(lm[1], 10) };
+    }
+    if (LOOSE_ABSTAIN_RE.test(text))
+        return { status: 'decided', target: 'abstain' };
+    if (LOOSE_UNCERTAIN_RE.test(text))
+        return { status: 'uncertain' };
+    return { status: 'uncertain' };
+}
 function envInt(name, fallback) {
     const v = Number(process.env[name]);
     return Number.isFinite(v) ? v : fallback;
 }
-function sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-}
 export class SpeechScheduler {
     ctx;
     options;
-    timer = null;
-    lastMessageTime = 0;
-    lastSeenBoardVersion = -1;
-    pipelineToken = 0;
-    pipelineActive = false;
     stopped = false;
+    lastSeenBoardVersion = -1;
+    lastDay = -1;
+    prodToken = 0;
+    producing = false;
+    stash = null;
+    cdReady = false;
+    cdTimer = null;
+    retryTimer = null;
+    uncertainCounts = new Map();
     constructor(ctx, options) {
         this.ctx = ctx;
         this.options = {
             cdMs: options?.cdMs ?? envInt('SPEECH_CD_MS', 60000),
-            quietMs: options?.quietMs ?? envInt('QUIET_THRESHOLD_MS', 20000),
-            checkIntervalMs: options?.checkIntervalMs ?? 1000,
+            retryMs: options?.retryMs ?? envInt('SPEECH_RETRY_MS', 60000),
             preSpeechBatch: options?.preSpeechBatch ?? 3,
             preSpeechTemp: options?.preSpeechTemp ?? 0.7,
             judgeTemp: options?.judgeTemp ?? 0.3,
             expandTemp: options?.expandTemp ?? 0.8,
             topK: options?.topK ?? 3,
             recentCompareCount: options?.recentCompareCount ?? 3,
+            maxUncertainRounds: options?.maxUncertainRounds ?? MAX_UNCERTAIN_ROUNDS,
         };
     }
     onPhaseEntered(state) {
         if (this.stopped)
             return;
         if (state.phase === 'DAY_DISCUSSION_OPEN') {
-            const now = Date.now();
-            this.lastMessageTime = now;
+            if (state.day !== this.lastDay) {
+                this.lastDay = state.day;
+                this.uncertainCounts.clear();
+            }
             this.lastSeenBoardVersion = state.boardVersion;
-            this.startTimer();
+            this.resetCycle();
+            this.restartCd(state);
+            this.startProduction();
         }
         else {
-            this.cancelPipeline();
-            this.clearTimer();
+            this.resetCycle();
             if (state.phase === 'GAME_OVER_FINAL')
                 this.stop();
         }
@@ -62,37 +134,64 @@ export class SpeechScheduler {
     onBoardUpdated(state) {
         if (this.stopped)
             return;
-        if (state.boardVersion !== this.lastSeenBoardVersion) {
-            this.lastSeenBoardVersion = state.boardVersion;
-            this.lastMessageTime = Date.now();
-        }
+        if (state.phase !== 'DAY_DISCUSSION_OPEN')
+            return;
+        if (state.boardVersion === this.lastSeenBoardVersion)
+            return;
+        // 中間白板又更新 → 暫存作廢＋生產用新白板重跑＋CD 重啟
+        this.lastSeenBoardVersion = state.boardVersion;
+        this.resetCycle();
+        this.restartCd(state);
+        this.startProduction();
     }
     /** 清除 timer（server 關閉時） */
     stop() {
         this.stopped = true;
-        this.cancelPipeline();
-        this.clearTimer();
+        this.resetCycle();
     }
-    startTimer() {
-        if (this.timer || this.stopped)
-            return;
-        this.timer = setInterval(() => this.tick(), this.options.checkIntervalMs);
-        const t = this.timer;
+    /** 供測試：目前暫存（有貨／無貨） */
+    stashForTest() {
+        return this.stash ? { ...this.stash } : null;
+    }
+    /** 供測試：單一 AI 連續資訊不足次數 */
+    uncertainCountForTest(playerId) {
+        return this.uncertainCounts.get(playerId) ?? 0;
+    }
+    resetCycle() {
+        this.prodToken++;
+        this.producing = false;
+        this.stash = null;
+        this.cdReady = false;
+        if (this.cdTimer) {
+            clearTimeout(this.cdTimer);
+            this.cdTimer = null;
+        }
+        if (this.retryTimer) {
+            clearTimeout(this.retryTimer);
+            this.retryTimer = null;
+        }
+    }
+    effectiveCdMs(state) {
+        const humans = getAlivePlayers(state.players).filter((p) => p.controlledBy === 'human').length;
+        return humans > 0 ? this.options.cdMs : 0;
+    }
+    restartCd(state) {
+        if (this.cdTimer) {
+            clearTimeout(this.cdTimer);
+            this.cdTimer = null;
+        }
+        this.cdReady = false;
+        const ms = this.effectiveCdMs(state);
+        this.cdTimer = setTimeout(() => {
+            this.cdTimer = null;
+            this.onCdFired();
+        }, ms);
+        const t = this.cdTimer;
         if (typeof t.unref === 'function')
             t.unref();
     }
-    clearTimer() {
-        if (this.timer) {
-            clearInterval(this.timer);
-            this.timer = null;
-        }
-    }
-    cancelPipeline() {
-        this.pipelineToken++;
-        this.pipelineActive = false;
-    }
-    tick() {
-        if (this.stopped || this.pipelineActive)
+    onCdFired() {
+        if (this.stopped)
             return;
         let state;
         try {
@@ -103,62 +202,69 @@ export class SpeechScheduler {
         }
         if (state.phase !== 'DAY_DISCUSSION_OPEN')
             return;
-        // tick 層級版本偵測（涵蓋所有 board 變更，含管線自身廣播與真人發言）
-        if (state.boardVersion !== this.lastSeenBoardVersion) {
-            this.lastSeenBoardVersion = state.boardVersion;
-            this.lastMessageTime = Date.now();
-            return;
-        }
-        // Phase 2：全真人跳過 → 立即跑管線（不等 quiet 門檻）
-        if (allAliveHumansSkipped(state)) {
-            void this.runPipeline();
-            return;
-        }
-        if (Date.now() - this.lastMessageTime >= this.options.quietMs) {
-            void this.runPipeline();
-        }
+        this.cdReady = true;
+        if (this.stash)
+            void this.broadcastStash();
+        // 無貨 → 等做好馬上播（生產完成時見 cdReady 直接播）
     }
-    aliveAIIds(state) {
-        return getAlivePlayers(state.players)
+    /** 草稿候選：存活 AI 除上輪發言者外全員；為空 → 不生產（等真人） */
+    candidateIds(state) {
+        const aliveAI = getAlivePlayers(state.players)
             .filter((p) => p.controlledBy === 'ai')
             .map((p) => p.id);
+        if (aliveAI.length === 0)
+            return [];
+        const today = state.discussionLog.filter((d) => d.day === state.day);
+        const last = today[today.length - 1];
+        if (!last)
+            return [...aliveAI];
+        const cands = aliveAI.filter((id) => id !== last.playerId);
+        return cands;
     }
-    async runPipeline() {
-        const token = ++this.pipelineToken;
-        this.pipelineActive = true;
+    startProduction() {
+        if (this.stopped || this.producing)
+            return;
+        let state;
         try {
-            const startState = this.ctx.getState();
-            if (startState.phase !== 'DAY_DISCUSSION_OPEN')
-                return;
-            const startVersion = startState.boardVersion;
-            const ids = this.aliveAIIds(startState);
-            if (ids.length === 0)
-                return;
-            if (ids.length <= 2) {
-                await this.runDirect(token, ids);
-                return;
-            }
-            // ---- PRE_SPEECH：分批平行 ----
-            const drafts = await this.collectPreSpeeches(token, startState, ids);
-            if (token !== this.pipelineToken)
+            state = this.ctx.getState();
+        }
+        catch {
+            return;
+        }
+        if (state.phase !== 'DAY_DISCUSSION_OPEN')
+            return;
+        const ids = this.candidateIds(state);
+        if (ids.length === 0)
+            return; // 候選為空不生產，等真人講話（掛機計數自然凍結）
+        const token = ++this.prodToken;
+        this.producing = true;
+        void this.runProduction(token, state.boardVersion, ids);
+    }
+    async runProduction(token, startVersion, ids) {
+        try {
+            // ---- PRE_SPEECH：全員草稿（分批平行；剝離＋決策更新在 collect 內） ----
+            const drafts = await this.collectPreSpeeches(token, ids);
+            if (token !== this.prodToken)
                 return;
             const cur1 = this.ctx.getState();
             if (cur1.phase !== 'DAY_DISCUSSION_OPEN')
                 return;
             if (cur1.boardVersion !== startVersion)
-                return; // 作廢
-            if (drafts.length === 0)
-                return; // 全部失敗
+                return; // 作廢（新一輪已接手）
+            if (drafts.length === 0) {
+                this.scheduleRetry();
+                return;
+            }
             // ---- JUDGE：全盲裁判 ----
             const scores = await this.judge(token, cur1, drafts);
-            if (token !== this.pipelineToken)
+            if (token !== this.prodToken)
                 return;
             const cur2 = this.ctx.getState();
             if (cur2.phase !== 'DAY_DISCUSSION_OPEN')
                 return;
             if (cur2.boardVersion !== startVersion)
                 return; // 作廢
-            // ---- SELECT：新穎性懲罰 + top3 隨機 → commit ----
+            // ---- SELECT：新穎性懲罰 + top3 隨機 ----
             const recent = cur2.discussionLog
                 .filter((d) => d.day === cur2.day)
                 .slice(-this.options.recentCompareCount)
@@ -170,85 +276,78 @@ export class SpeechScheduler {
             const top = ranked.slice(0, Math.max(1, Math.min(this.options.topK, ranked.length)));
             const winner = top[Math.floor(Math.random() * top.length)];
             const commitVersion = this.ctx.getState().boardVersion;
-            // ---- EXPAND：commit 後不中斷 ----
+            // ---- EXPAND：產出後清洗 flag（廉價保險），再暫存 ----
             const expandPrompt = buildExpandPrompt(cur2, winner.playerId, winner.text);
             let full;
             try {
-                full = (await this.ctx.llm.generate(expandPrompt, {
+                full = stripDecisionFlags((await this.ctx.llm.generate(expandPrompt, {
                     temperature: this.options.expandTemp,
-                })).trim();
+                })).trim());
             }
             catch {
+                this.scheduleRetry();
                 return;
             }
-            if (token !== this.pipelineToken)
+            if (token !== this.prodToken)
                 return;
             if (this.ctx.getState().phase !== 'DAY_DISCUSSION_OPEN')
                 return;
-            if (!full)
+            if (!full) {
+                this.scheduleRetry();
                 return;
-            await this.broadcastAfterCd(token, winner.playerId, full, commitVersion);
+            }
+            this.stash = {
+                playerId: winner.playerId, text: full, boardVersion: commitVersion, decision: winner.decision,
+            };
+            if (this.cdReady)
+                void this.broadcastStash();
+        }
+        catch {
+            if (token !== this.prodToken)
+                return;
+            this.scheduleRetry();
         }
         finally {
-            if (token === this.pipelineToken)
-                this.pipelineActive = false;
+            if (token === this.prodToken)
+                this.producing = false;
         }
     }
-    /** 存活 AI ≤ 2：跳過管線，直接隨機選一展開 */
-    async runDirect(token, ids) {
-        const picked = ids[Math.floor(Math.random() * ids.length)];
-        const state = this.ctx.getState();
-        let draft = '';
-        try {
-            draft = (await this.ctx.llm.generate(buildPreSpeechPrompt(state, picked), {
-                temperature: this.options.preSpeechTemp,
-                maxTokens: 100,
-            })).trim();
-        }
-        catch {
-            draft = '';
-        }
-        if (token !== this.pipelineToken)
+    /** 生產失敗 → N 秒後重試；重試前不播出（無暫存）、不推進掛機計數（transition 只在發言成功時計數） */
+    scheduleRetry() {
+        if (this.stopped)
             return;
-        if (this.ctx.getState().phase !== 'DAY_DISCUSSION_OPEN')
+        if (this.retryTimer)
             return;
-        const prompt = draft
-            ? buildExpandPrompt(state, picked, draft)
-            : buildExpandPromptFallback(state, picked);
-        let full;
-        try {
-            full = (await this.ctx.llm.generate(prompt, {
-                temperature: this.options.expandTemp,
-            })).trim();
-        }
-        catch {
-            return;
-        }
-        if (token !== this.pipelineToken)
-            return;
-        if (this.ctx.getState().phase !== 'DAY_DISCUSSION_OPEN')
-            return;
-        if (!full)
-            return;
-        await this.broadcastAfterCd(token, picked, full, state.boardVersion);
+        this.retryTimer = setTimeout(() => {
+            this.retryTimer = null;
+            this.startProduction();
+        }, this.options.retryMs);
+        const t = this.retryTimer;
+        if (typeof t.unref === 'function')
+            t.unref();
     }
-    async collectPreSpeeches(token, state, ids) {
+    async collectPreSpeeches(token, ids) {
         const results = [];
         const batch = Math.max(1, this.options.preSpeechBatch);
         for (let i = 0; i < ids.length; i += batch) {
-            if (token !== this.pipelineToken)
+            if (token !== this.prodToken)
                 return [];
             const chunk = ids.slice(i, i + batch);
             const settled = await Promise.all(chunk.map(async (pid) => {
                 const prompt = buildPreSpeechPrompt(this.ctx.getState(), pid);
                 for (let attempt = 0; attempt < 2; attempt++) {
                     try {
-                        const text = (await this.ctx.llm.generate(prompt, {
+                        const raw = (await this.ctx.llm.generate(prompt, {
                             temperature: this.options.preSpeechTemp,
                             maxTokens: 100,
                         })).trim();
-                        if (text)
-                            return { playerId: pid, text };
+                        if (!raw)
+                            continue;
+                        const decision = this.updateDecision(pid, parseDecisionFlag(raw));
+                        const text = stripDecisionFlags(raw);
+                        if (!text)
+                            continue; // 僅剩 flag 無內容 → 不列入候選
+                        return { playerId: pid, text, decision };
                     }
                     catch { /* 重試 1 次 */ }
                 }
@@ -256,14 +355,28 @@ export class SpeechScheduler {
             }));
             for (const r of settled) {
                 if (r)
-                    results.push({ slot: 0, playerId: r.playerId, text: r.text });
+                    results.push({ slot: 0, ...r });
             }
         }
         // slot 編號依完成順序指派（與裁判看到的順序一致；映射前先打亂）
         const shuffled = shuffleArray(results);
         shuffled.forEach((r, idx) => { r.slot = idx + 1; });
-        void state;
         return shuffled;
+    }
+    /** 決策更新：decided 覆蓋標的＋清空計數；資訊不足累計，達安全閥強制 decided:abstain */
+    updateDecision(playerId, d) {
+        if (d.status === 'decided') {
+            this.uncertainCounts.delete(playerId);
+            return d;
+        }
+        const n = (this.uncertainCounts.get(playerId) ?? 0) + 1;
+        if (n >= this.options.maxUncertainRounds) {
+            this.uncertainCounts.delete(playerId);
+            const forced = { status: 'decided', target: 'abstain' };
+            return forced;
+        }
+        this.uncertainCounts.set(playerId, n);
+        return d;
     }
     async judge(token, state, drafts) {
         const summary = summarizeDay(state, state.day);
@@ -278,7 +391,7 @@ export class SpeechScheduler {
         catch {
             return new Map(drafts.map((d) => [d.slot, 5]));
         }
-        if (token !== this.pipelineToken)
+        if (token !== this.prodToken)
             return new Map();
         const scores = new Map();
         const re = /^(\d+)\s*[:：]\s*(\d+)$/gm;
@@ -297,26 +410,49 @@ export class SpeechScheduler {
         }
         return scores;
     }
-    /** 廣播保證 ≥ CD 距最後訊息；commit 語意：等待後照常 enqueue（帶 commit 版本） */
-    async broadcastAfterCd(token, playerId, text, commitVersion) {
-        // Phase 2：全真人跳過 → CD 解除（跳過 sleep；AI_SPEECH_DONE 被接受時清空 skippedHumans，防循環）
-        const state = this.ctx.getState();
-        const skipCd = allAliveHumansSkipped(state);
-        const remaining = skipCd ? 0 : this.options.cdMs - (Date.now() - this.lastMessageTime);
-        if (remaining > 0)
-            await sleep(remaining);
-        if (token !== this.pipelineToken)
+    /** CD 到有貨 → 播出；播出成功且 decided → enqueue AI_READY_VOTE（統一檢查由 transition 執行） */
+    async broadcastStash() {
+        const s = this.stash;
+        if (!s)
             return;
-        if (this.ctx.getState().phase !== 'DAY_DISCUSSION_OPEN')
+        this.stash = null; // 消費暫存
+        let state;
+        try {
+            state = this.ctx.getState();
+        }
+        catch {
             return;
-        this.ctx.enqueue({ type: 'AI_SPEECH_DONE', playerId, text, boardVersion: commitVersion });
-        this.lastMessageTime = Date.now();
-        this.lastSeenBoardVersion = this.ctx.getState().boardVersion;
+        }
+        if (state.phase !== 'DAY_DISCUSSION_OPEN')
+            return;
+        if (state.boardVersion !== s.boardVersion)
+            return; // 版本已動：作廢（新一輪接手）
+        this.ctx.enqueue({ type: 'AI_SPEECH_DONE', playerId: s.playerId, text: s.text, boardVersion: s.boardVersion });
+        // 發言成功確認：log 落子即成功（engine 同步處理；含版本檢查）
+        let cur;
+        try {
+            cur = this.ctx.getState();
+        }
+        catch {
+            return;
+        }
+        const today = cur.discussionLog.filter((d) => d.day === cur.day);
+        const lastEntry = today[today.length - 1];
+        const ok = !!lastEntry && lastEntry.playerId === s.playerId && lastEntry.text === s.text;
+        if (!ok) {
+            // 被拒（版本競態）→ 視為白板活動：重啟 CD＋重跑
+            if (cur.phase !== 'DAY_DISCUSSION_OPEN')
+                return;
+            this.lastSeenBoardVersion = cur.boardVersion;
+            this.restartCd(cur);
+            this.startProduction();
+            return;
+        }
+        // 發言成功後 enqueue 新 decided（不帶版本；已在 voteReady 則免）
+        if (s.decision.status === 'decided' && !cur.voteReady.includes(s.playerId)) {
+            this.ctx.enqueue({ type: 'AI_READY_VOTE', playerId: s.playerId });
+        }
+        // 收斂直進投票由 transition 統一檢查完成；播出本身即白板更新，迴圈經 onBoardUpdated 回去。
     }
-}
-/** direct 路徑草稿失敗時的後備：標準 speech prompt + 空草稿附加 */
-function buildExpandPromptFallback(state, playerId) {
-    const base = buildPrompt(state, playerId, 'speech');
-    return `${base}\n\n【你的預發言草稿】（無草稿，請直接發言 30-60 字）。`;
 }
 //# sourceMappingURL=ai-scheduler.js.map

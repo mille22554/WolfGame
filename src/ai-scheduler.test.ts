@@ -1,9 +1,12 @@
 /**
  * ai-scheduler.test.ts — SpeechScheduler 管線測試（fake timers + mock LLM）
+ * 白板更新驅動迴圈＋決策 flag 收斂（第 1、2 項新語義）
  */
 import { test, mock, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { SpeechScheduler } from './ai-scheduler.js';
+import {
+  SpeechScheduler, parseDecisionFlag, stripDecisionFlags, MAX_UNCERTAIN_ROUNDS,
+} from './ai-scheduler.js';
 import { createGameState, transition, getNightActors } from './game-state.js';
 import { noveltyPenalty, bigramJaccard, pNumberOverlap } from './novelty.js';
 import type { GameState, GameEvent, LLMDispatcher, SchedulerContext } from './types.js';
@@ -83,10 +86,18 @@ function makeCtx(state: GameState, llm: LLMDispatcher): { ctx: SchedulerContext;
   return {
     events,
     ctx: {
-      // 模擬 engine 行為：發言被接受 → boardVersion++（否則 scheduler 會合法地開始第二輪）
+      // 模擬 engine 行為：發言被接受 → log 落子＋boardVersion++；ready → voteReady
+      // （engine 另會呼叫 onBoardUpdated，測試內手動呼叫以保確定性）
       enqueue: (e: GameEvent) => {
         events.push(e);
-        if (e.type === 'AI_SPEECH_DONE' || e.type === 'HUMAN_SPEAK') state.boardVersion++;
+        if (e.type === 'AI_SPEECH_DONE') {
+          state.discussionLog.push({ playerId: e.playerId, text: e.text, day: state.day });
+          state.boardVersion++;
+        }
+        if (e.type === 'AI_READY_VOTE' && !state.voteReady.includes(e.playerId)) {
+          state.voteReady.push(e.playerId);
+        }
+        if (e.type === 'HUMAN_SPEAK') state.boardVersion++;
       },
       getState: () => state,
       llm,
@@ -98,6 +109,10 @@ function flush(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+async function flushN(n: number): Promise<void> {
+  for (let i = 0; i < n; i++) await flush();
+}
+
 beforeEach(() => {
   mock.timers.enable({ apis: ['setInterval', 'setTimeout', 'Date'] });
 });
@@ -106,138 +121,249 @@ afterEach(() => {
   mock.timers.reset();
 });
 
-// 預設確定性 mock：預發言帶 P 編號、裁判按 slot 降序給分、展開固定文本
+// 預設確定性 mock：預發言帶正規 decided flag、裁判按 slot 降序給分、展開固定文本
+function judgeBySlotDesc(prompt: string): string {
+  const slots: number[] = [];
+  for (const m of prompt.matchAll(/^(\d+)\.\s/gm)) slots.push(parseInt(m[1], 10));
+  return slots.map((s, i) => `${s}: ${9 - i}`).join('\n');
+}
+
 function defaultMock(): MockLLM {
   return new MockLLM((prompt) => {
-    if (prompt.includes('【裁判任務】')) {
-      const slots: number[] = [];
-      for (const m of prompt.matchAll(/^(\d+)\.\s/gm)) slots.push(parseInt(m[1], 10));
-      return slots.map((s, i) => `${s}: ${9 - i}`).join('\n');
-    }
+    if (prompt.includes('【裁判任務】')) return judgeBySlotDesc(prompt);
     if (prompt.includes('【你的預發言草稿】')) return 'P0：「沿用草稿，展開成完整發言。」';
     const m = prompt.match(/你是 P(\d+)/);
     const id = m ? m[1] : '1';
-    return `P${id}：「我比較在意 P${id} 以外的發言。」`;
+    return `P${id}：「我比較在意 P${id} 以外的發言。」\n[決定:棄票]`;
   });
 }
 
-test('觸發：quiet 通過 → 管線啟動；CD 內不廣播，CD 後廣播', async () => {
+// 不確定 mock：預發言無 flag（僅不確定語氣）→ 走安全閥路徑
+function uncertainMock(): MockLLM {
+  return new MockLLM((prompt) => {
+    if (prompt.includes('【裁判任務】')) return judgeBySlotDesc(prompt);
+    if (prompt.includes('【你的預發言草稿】')) return 'P0：「還在觀察，展開成完整發言。」';
+    const m = prompt.match(/你是 P(\d+)/);
+    const id = m ? m[1] : '1';
+    return `P${id}：「資訊還不足，我無法決定，想再聽聽大家的說法。」`;
+  });
+}
+
+// ---------- flag 兩層解析 ----------
+
+test('flag 正規解析：投Pn／棄票／資訊不足（全形冒號亦收）', () => {
+  assert.deepEqual(parseDecisionFlag('草稿內容\n[決定:投P3]'), { status: 'decided', target: 3 });
+  assert.deepEqual(parseDecisionFlag('草稿內容\n[決定：投P12]'), { status: 'decided', target: 12 });
+  assert.deepEqual(parseDecisionFlag('草稿\n[決定:棄票]'), { status: 'decided', target: 'abstain' });
+  assert.deepEqual(parseDecisionFlag('草稿\n[決定:資訊不足]'), { status: 'uncertain' });
+});
+
+test('flag 寬鬆解析：決策語境關鍵字認 decided；不確定類詞認 uncertain；都不中才 uncertain', () => {
+  assert.deepEqual(parseDecisionFlag('我想了很久，我投P2'), { status: 'decided', target: 2 });
+  assert.deepEqual(parseDecisionFlag('我決定投 P5 吧'), { status: 'decided', target: 5 });
+  assert.deepEqual(parseDecisionFlag('這一票要投P7'), { status: 'decided', target: 7 });
+  assert.deepEqual(parseDecisionFlag('我決定棄票好了'), { status: 'decided', target: 'abstain' });
+  assert.deepEqual(parseDecisionFlag('資訊不足，還想再觀察'), { status: 'uncertain' });
+  assert.deepEqual(parseDecisionFlag('今天天氣真好'), { status: 'uncertain' });
+  // 討論提及（無決策動詞）不誤判為 decided
+  assert.deepEqual(parseDecisionFlag('P3 很可疑，大家怎麼看'), { status: 'uncertain' });
+});
+
+test('flag 剝離：全域匹配（中置殘留亦清）；解析取最後一個', () => {
+  assert.equal(stripDecisionFlags('A[決定:投P3]B\n[決定:棄票]C'), 'AB\nC');
+  assert.deepEqual(parseDecisionFlag('前言[決定:投P3]結論[決定:棄票]'), { status: 'decided', target: 'abstain' });
+  assert.ok(!stripDecisionFlags('發言\n[決定:投P3]').includes('[決定'));
+});
+
+test('安全閥常數：MAX_UNCERTAIN_ROUNDS = 100', () => {
+  assert.equal(MAX_UNCERTAIN_ROUNDS, 100);
+});
+
+// ---------- 白板更新驅動迴圈 ----------
+
+test('迴圈：進場即開工；生產完成暫存（CD 內不播）；CD 到有貨播出＋decided 發言成功後 enqueue ready', async () => {
   const s = discussionState(9);
   const llm = defaultMock();
   const { ctx, events } = makeCtx(s, llm);
-  const sch = new SpeechScheduler(ctx, { quietMs: 20000, cdMs: 60000, checkIntervalMs: 1000 });
+  const sch = new SpeechScheduler(ctx, { cdMs: 60000 });
   try {
     sch.onPhaseEntered(s);
-    mock.timers.tick(19000);
-    await flush();
-    assert.ok(!llm.calls.some((c) => c.kind === 'pre_speech'), 'quiet 未過不應啟動');
-    mock.timers.tick(2000); // t=21s > quiet
-    await flush();
-    assert.ok(llm.calls.some((c) => c.kind === 'pre_speech'), 'quiet 通過應啟動預發言');
-    await flush();
+    await flushN(3);
+    assert.ok(llm.calls.some((c) => c.kind === 'pre_speech'), '進場即開工生產');
     assert.ok(llm.calls.some((c) => c.kind === 'judge'), '應進入裁判');
     assert.ok(llm.calls.some((c) => c.kind === 'expand'), '應進入展開');
+    assert.ok(sch.stashForTest(), '生產完成應暫存');
     assert.equal(events.length, 0, 'CD 內不廣播');
     const bvBefore = s.boardVersion;
     mock.timers.tick(60000);
     await flush();
-    assert.equal(events.length, 1);
+    assert.equal(events.length, 2);
     assert.equal(events[0].type, 'AI_SPEECH_DONE');
+    assert.equal(events[1].type, 'AI_READY_VOTE');
     if (events[0].type === 'AI_SPEECH_DONE') {
       assert.equal(events[0].boardVersion, bvBefore);
       assert.ok(events[0].text.length > 0);
+      assert.ok(!events[0].text.includes('[決定'), 'flag 永不進白板');
+    }
+    if (events[1].type === 'AI_READY_VOTE') {
+      assert.ok(!('boardVersion' in events[1]), 'AI_READY_VOTE 不帶版本');
     }
   } finally {
     sch.stop();
   }
 });
 
-test('版本作廢：PRE_SPEECH 完成前 boardVersion 變更 → 作廢回 IDLE', async () => {
+test('純 AI 局 CD=0：做好就播（計時器保留）', async () => {
+  const s = discussionState(9);   // CLIENT_JOIN 全員 AI
+  assert.ok(!s.players.some((p) => p.controlledBy === 'human'));
+  const llm = defaultMock();
+  const { ctx, events } = makeCtx(s, llm);
+  const sch = new SpeechScheduler(ctx, { cdMs: 60000 });
+  try {
+    sch.onPhaseEntered(s);
+    await flushN(3);
+    assert.ok(sch.stashForTest(), '生產完成暫存');
+    assert.equal(events.length, 0);
+    mock.timers.tick(1);   // CD=0，滴答即到
+    await flush();
+    assert.equal(events[0].type, 'AI_SPEECH_DONE');
+  } finally {
+    sch.stop();
+  }
+});
+
+test('中間更新→暫存作廢＋重跑＋CD 重啟：PRE_SPEECH 完成前版本變更 → 舊生產作廢，新生產用新白板跑完播出', async () => {
   const s = discussionState(9);
   let releasePre!: (v: string) => void;
   const gate = new Promise<string>((resolve) => { releasePre = resolve; });
   let preCount = 0;
   const llm = new MockLLM((prompt) => {
-    if (prompt.includes('【裁判任務】')) return '1: 5';
-    if (prompt.includes('【你的預發言草稿】')) return '展開';
+    if (prompt.includes('【裁判任務】')) return judgeBySlotDesc(prompt);
+    if (prompt.includes('【你的預發言草稿】')) return '展開文本';
     preCount++;
     if (preCount === 1) return gate;
-    return 'P9：「草稿。」';
+    const m = prompt.match(/你是 P(\d+)/);
+    return `P${m ? m[1] : '9'}：「草稿。」\n[決定:棄票]`;
   });
   const { ctx, events } = makeCtx(s, llm);
-  const sch = new SpeechScheduler(ctx, { quietMs: 1000, cdMs: 1000, checkIntervalMs: 500, preSpeechBatch: 9 });
+  const sch = new SpeechScheduler(ctx, { cdMs: 60000, preSpeechBatch: 9 });
   try {
     sch.onPhaseEntered(s);
-    mock.timers.tick(1500);
     await flush();
     assert.ok(preCount >= 1, '管線應已啟動');
-    // 外部發言導致版本變更
+    // 中間白板更新（模擬 engine：log 落子＋版本++，再通知 scheduler）
+    s.discussionLog.push({ playerId: 1, text: '真人發言', day: s.day });
     s.boardVersion++;
-    releasePre('P1：「第一則草稿。」');
+    const newVersion = s.boardVersion;
+    sch.onBoardUpdated(s);
     await flush();
+    assert.ok(preCount > 1, '應以新白板重跑生產');
+    releasePre('P1：「第一則草稿。」\n[決定:棄票]');
+    await flushN(3);
+    // 舊生產作廢：暫存應為新一輪產物；CD 已重啟 → tick 滿才播
+    assert.ok(sch.stashForTest(), '新一輪應完成暫存');
+    assert.equal(events.length, 0, 'CD 重啟後未滿不播');
+    mock.timers.tick(60000);
     await flush();
-    assert.ok(!llm.kinds().includes('judge'), '版本變更應作廢，不進入裁判');
-    assert.equal(events.length, 0);
+    assert.ok(events.some((e) => e.type === 'AI_SPEECH_DONE'), 'CD 到有貨播出');
+    const speech = events.find((e) => e.type === 'AI_SPEECH_DONE')!;
+    if (speech.type === 'AI_SPEECH_DONE') {
+      assert.equal(speech.boardVersion, newVersion, '新一輪帶新版本');
+    }
   } finally {
     sch.stop();
   }
 });
 
-test('版本作廢：JUDGE 完成前 boardVersion 變更 → 作廢', async () => {
+test('版本作廢：JUDGE 完成前 boardVersion 變更 → 舊生產作廢，新生產用新白板跑完播出', async () => {
   const s = discussionState(9);
   let releaseJudge!: (v: string) => void;
   const gate = new Promise<string>((resolve) => { releaseJudge = resolve; });
+  let judgeCalls = 0;
   const llm = new MockLLM((prompt) => {
-    if (prompt.includes('【裁判任務】')) return gate;
-    if (prompt.includes('【你的預發言草稿】')) return '展開';
-    return 'P1：「草稿。」';
+    if (prompt.includes('【裁判任務】')) {
+      judgeCalls++;
+      return judgeCalls === 1 ? gate : judgeBySlotDesc(prompt);
+    }
+    if (prompt.includes('【你的預發言草稿】')) return '展開文本';
+    const m = prompt.match(/你是 P(\d+)/);
+    return `P${m ? m[1] : '1'}：「草稿。」\n[決定:棄票]`;
   });
   const { ctx, events } = makeCtx(s, llm);
-  const sch = new SpeechScheduler(ctx, { quietMs: 1000, cdMs: 1000, checkIntervalMs: 500 });
+  const sch = new SpeechScheduler(ctx, { cdMs: 1000 });
   try {
     sch.onPhaseEntered(s);
-    mock.timers.tick(1500);
-    await flush();
-    await flush();
+    await flushN(2);
     assert.ok(llm.kinds().includes('judge'), '應已進入裁判');
     s.boardVersion++;
+    const newVersion = s.boardVersion;
+    sch.onBoardUpdated(s);
     releaseJudge('1: 9');
-    await flush();
-    await flush();
-    assert.ok(!llm.kinds().includes('expand'), '版本變更應作廢，不進入展開');
+    await flushN(4);
+    // 舊生產作廢；新生產跑完 → 暫存帶新版本；CD 未滿不播
+    const stash = sch.stashForTest();
+    assert.ok(stash, '新一輪應完成暫存');
+    assert.equal(stash!.boardVersion, newVersion);
     assert.equal(events.length, 0);
+    mock.timers.tick(1000);
+    await flush();
+    const speech = events.find((e) => e.type === 'AI_SPEECH_DONE')!;
+    assert.equal(speech.type, 'AI_SPEECH_DONE');
+    if (speech.type === 'AI_SPEECH_DONE') {
+      assert.equal(speech.boardVersion, newVersion, '播出帶新版本');
+    }
   } finally {
     sch.stop();
   }
 });
 
-test('commit 後不中斷：EXPAND 期間版本變更 → 照常 enqueue（帶 commit 版本）', async () => {
+test('版本作廢：EXPAND 期間版本變更 → 作廢不播出（中間更新即重跑，無 commit 後不中斷）', async () => {
   const s = discussionState(9);
   let releaseExpand!: (v: string) => void;
   const gate = new Promise<string>((resolve) => { releaseExpand = resolve; });
   const llm = new MockLLM((prompt) => {
-    if (prompt.includes('【裁判任務】')) return '1: 9\n2: 5\n3: 5\n4: 5\n5: 5\n6: 5\n7: 5\n8: 5\n9: 5';
+    if (prompt.includes('【裁判任務】')) return judgeBySlotDesc(prompt);
     if (prompt.includes('【你的預發言草稿】')) return gate;
-    return 'P1：「草稿。」';
+    return 'P1：「草稿。」\n[決定:棄票]';
   });
   const { ctx, events } = makeCtx(s, llm);
-  const sch = new SpeechScheduler(ctx, { quietMs: 1000, cdMs: 1000, checkIntervalMs: 500 });
+  const sch = new SpeechScheduler(ctx, { cdMs: 1000 });
   try {
     sch.onPhaseEntered(s);
-    mock.timers.tick(1500);
-    await flush();
-    await flush();
+    await flushN(3);
     assert.ok(llm.kinds().includes('expand'), '應已進入展開');
-    const commitVersion = s.boardVersion;
-    s.boardVersion++; // EXPAND 期間他人發言
+    s.boardVersion++;
+    sch.onBoardUpdated(s);
     releaseExpand('P1：「最終發言。」');
+    await flushN(3);
+    assert.ok(!events.some((e) => e.type === 'AI_SPEECH_DONE'), '舊展開作廢不播出');
+  } finally {
+    sch.stop();
+  }
+});
+
+test('CD 到沒貨 → 等做好馬上播（無需再等一個 CD）', async () => {
+  const s = discussionState(9);
+  let releaseExpand!: (v: string) => void;
+  const gate = new Promise<string>((resolve) => { releaseExpand = resolve; });
+  const llm = new MockLLM((prompt) => {
+    if (prompt.includes('【裁判任務】')) return judgeBySlotDesc(prompt);
+    if (prompt.includes('【你的預發言草稿】')) return gate;
+    const m = prompt.match(/你是 P(\d+)/);
+    return `P${m ? m[1] : '1'}：「草稿。」\n[決定:棄票]`;
+  });
+  const { ctx, events } = makeCtx(s, llm);
+  const sch = new SpeechScheduler(ctx, { cdMs: 1000 });
+  try {
+    sch.onPhaseEntered(s);
+    await flushN(3);
+    assert.ok(llm.kinds().includes('expand'), '生產卡在展開');
+    mock.timers.tick(1500);   // CD 到但沒貨
     await flush();
-    // CD（1000）早已過（t=1500 起跑）→ 廣播立即發生，無需再 tick
-    assert.equal(events.length, 1);
-    assert.equal(events[0].type, 'AI_SPEECH_DONE');
-    if (events[0].type === 'AI_SPEECH_DONE') {
-      assert.equal(events[0].boardVersion, commitVersion, '帶 commit 時版本');
-    }
+    assert.equal(events.length, 0, '沒貨不播');
+    releaseExpand('P1：「最終發言。」');
+    await flushN(2);
+    assert.ok(events.some((e) => e.type === 'AI_SPEECH_DONE'), '做好馬上播');
   } finally {
     sch.stop();
   }
@@ -269,13 +395,12 @@ test('top3：選取落在裁判 top3（新穎性無干擾時）', async () => {
     return `P0：「${drafts[di++ % drafts.length]}」`;
   });
   const { ctx, events } = makeCtx(s, llm);
-  const sch = new SpeechScheduler(ctx, { quietMs: 1000, cdMs: 1000, checkIntervalMs: 500 });
+  const sch = new SpeechScheduler(ctx, { cdMs: 1000 });
   try {
     sch.onPhaseEntered(s);
-    mock.timers.tick(1500);
+    await flushN(3);
+    mock.timers.tick(1000);   // CD 到有貨播出
     await flush();
-    await flush();
-    // CD（1000）早已過 → 廣播立即發生
     assert.equal(events.length, 1);
     assert.equal(events[0].type, 'AI_SPEECH_DONE');
   } finally {
@@ -302,16 +427,15 @@ test('新穎性懲罰：重複內容被降分（4 人局，墊底者不在 top3�
     return 'P9：「中立觀察中」';
   });
   const { ctx, events } = makeCtx(s, llm);
-  const sch = new SpeechScheduler(ctx, { quietMs: 1000, cdMs: 1000, checkIntervalMs: 500 });
+  const sch = new SpeechScheduler(ctx, { cdMs: 1000 });
   try {
     sch.onPhaseEntered(s);
-    mock.timers.tick(1500);
+    await flushN(3);
+    mock.timers.tick(1000);
     await flush();
-    await flush();
-    // 6 存活 AI（或更少）→ top3；重複者被懲罰墊底 → 不應被選中
-    // （若存活 AI 恰 ≤2 會走 direct 路徑；6 人局首日通常 ≥4 存活）
+    // 6 存活 AI → top3；重複者被懲罰墊底 → 不應被選中（人數無關，一律完整管線）
     const aliveAI = s.players.filter((p) => p.alive && p.controlledBy === 'ai').length;
-    assert.ok(aliveAI > 2, '本案例需走完整管線');
+    assert.ok(aliveAI > 2, '本案例需多候選人管線');
     assert.equal(events.length, 1);
     assert.equal(events[0].type, 'AI_SPEECH_DONE');
     if (events[0].type === 'AI_SPEECH_DONE') {
@@ -322,7 +446,7 @@ test('新穎性懲罰：重複內容被降分（4 人局，墊底者不在 top3�
   }
 });
 
-test('存活 AI ≤ 2 → 跳過管線直接展開（無裁判呼叫）', async () => {
+test('少候選人照跑完整管線（含裁判；runDirect 特例已刪除）', async () => {
   const s = discussionState(6);
   // 只留 2 個存活 AI
   let kept = 0;
@@ -336,16 +460,15 @@ test('存活 AI ≤ 2 → 跳過管線直接展開（無裁判呼叫）', async 
   assert.equal(s.players.filter((p) => p.alive && p.controlledBy === 'ai').length, 2);
   const llm = defaultMock();
   const { ctx, events } = makeCtx(s, llm);
-  const sch = new SpeechScheduler(ctx, { quietMs: 1000, cdMs: 1000, checkIntervalMs: 500 });
+  const sch = new SpeechScheduler(ctx, { cdMs: 1000 });
   try {
     sch.onPhaseEntered(s);
-    mock.timers.tick(1500);
+    await flushN(3);
+    mock.timers.tick(1000);
     await flush();
-    await flush();
-    // CD（1000）早已過 → 廣播立即發生
-    assert.ok(!llm.kinds().includes('judge'), '不應呼叫裁判');
-    assert.equal(events.length, 1);
+    assert.ok(llm.kinds().includes('judge'), '少候選人仍應呼叫裁判');
     assert.equal(events[0].type, 'AI_SPEECH_DONE');
+    assert.equal(events[1].type, 'AI_READY_VOTE');
   } finally {
     sch.stop();
   }
@@ -355,14 +478,12 @@ test('完整管線：mock 全確定性 → 最終 enqueue 正確 AI_SPEECH_DONE'
   const s = discussionState(9);
   const llm = defaultMock();
   const { ctx, events } = makeCtx(s, llm);
-  const sch = new SpeechScheduler(ctx, { quietMs: 1000, cdMs: 1000, checkIntervalMs: 500, preSpeechBatch: 3 });
+  const sch = new SpeechScheduler(ctx, { cdMs: 1000, preSpeechBatch: 3 });
   try {
     sch.onPhaseEntered(s);
-    mock.timers.tick(1500);
+    await flushN(3);
+    mock.timers.tick(1000);
     await flush();
-    await flush();
-    // CD（1000）早已過 → 廣播立即發生
-    assert.equal(events.length, 1);
     const ev = events[0];
     assert.equal(ev.type, 'AI_SPEECH_DONE');
     if (ev.type === 'AI_SPEECH_DONE') {
@@ -371,7 +492,7 @@ test('完整管線：mock 全確定性 → 最終 enqueue 正確 AI_SPEECH_DONE'
       assert.ok(ev.text.trim().length > 0);
       assert.equal(typeof ev.boardVersion, 'number');
     }
-    // 發言皆經管線：預發言數 == 存活 AI 數
+    // 發言皆經管線：預發言數 == 存活 AI 數（首輪無上輪發言者，全員草稿）
     const aliveAI = s.players.filter((p) => p.alive && p.controlledBy === 'ai').length;
     assert.equal(llm.kinds().filter((k) => k === 'pre_speech').length, aliveAI);
   } finally {
@@ -379,22 +500,215 @@ test('完整管線：mock 全確定性 → 最終 enqueue 正確 AI_SPEECH_DONE'
   }
 });
 
-test('onPhaseEntered 非討論 phase → 取消管線回 IDLE', async () => {
+test('onPhaseEntered 非討論 phase → 取消管線（不播出、不暫存）', async () => {
   const s = discussionState(9);
   const llm = defaultMock();
   const { ctx, events } = makeCtx(s, llm);
-  const sch = new SpeechScheduler(ctx, { quietMs: 1000, cdMs: 60000, checkIntervalMs: 500 });
+  const sch = new SpeechScheduler(ctx, { cdMs: 60000 });
   try {
     sch.onPhaseEntered(s);
-    mock.timers.tick(1500);
     await flush();
     assert.ok(llm.calls.length > 0, '管線應已啟動');
     s.phase = 'DAY_VOTING_COLLECTING';
     sch.onPhaseEntered(s);
     mock.timers.tick(120000);
-    await flush();
-    await flush();
+    await flushN(2);
     assert.equal(events.length, 0, '離開討論後不應廣播');
+    assert.equal(sch.stashForTest(), null);
+  } finally {
+    sch.stop();
+  }
+});
+
+test('除上輪發言者外全員草稿：上輪發言者不列入候選；真人不寫草稿', async () => {
+  const s = mixedDiscussionState();
+  const aliveAI = s.players.filter((p) => p.alive && p.controlledBy === 'ai').map((p) => p.id);
+  // 上輪發言者為某 AI
+  const lastAI = aliveAI[0];
+  s.discussionLog.push({ playerId: lastAI, text: '上一輪發言', day: s.day });
+  const llm = defaultMock();
+  const { ctx } = makeCtx(s, llm);
+  const sch = new SpeechScheduler(ctx, { cdMs: 60000 });
+  try {
+    sch.onPhaseEntered(s);
+    await flushN(3);
+    const pres = llm.calls.filter((c) => c.kind === 'pre_speech').map((c) => {
+      const m = c.prompt.match(/你是 P(\d+)/);
+      return m ? parseInt(m[1], 10) : -1;
+    });
+    assert.ok(!pres.includes(lastAI), '上輪發言者不應寫草稿');
+    for (const id of aliveAI) {
+      if (id === lastAI) continue;
+      assert.ok(pres.includes(id), `存活 AI P${id} 應寫草稿`);
+    }
+    // 真人座位絕不出現於草稿 prompt
+    for (const h of s.players.filter((p) => p.alive && p.controlledBy === 'human').map((p) => p.id)) {
+      assert.ok(!pres.includes(h), `真人 P${h} 不寫草稿`);
+    }
+  } finally {
+    sch.stop();
+  }
+});
+
+test('候選為空不生產：僅上輪發言者一人存活 → 等真人，不連發', async () => {
+  const s = discussionState(6);
+  const lone = s.players.filter((p) => p.alive && p.controlledBy === 'ai')[0].id;
+  for (const p of s.players) {
+    if (p.id !== lone) p.alive = false;
+  }
+  s.discussionLog.push({ playerId: lone, text: '只剩我一人', day: s.day });
+  const llm = defaultMock();
+  const { ctx, events } = makeCtx(s, llm);
+  const sch = new SpeechScheduler(ctx, { cdMs: 1000 });
+  try {
+    sch.onPhaseEntered(s);
+    await flushN(2);
+    mock.timers.tick(5000);
+    await flush();
+    assert.ok(!llm.calls.some((c) => c.kind === 'pre_speech'), '候選為空不應生產');
+    assert.equal(events.length, 0);
+  } finally {
+    sch.stop();
+  }
+});
+
+test('跳過按鈕保留但不驅動迴圈：HUMAN_SKIP 不重啟 CD、不另開生產', async () => {
+  const s = mixedDiscussionState();
+  const humans = s.players.filter((p) => p.alive && p.controlledBy === 'human').map((p) => p.id);
+  assert.ok(humans.length >= 1);
+  const llm = defaultMock();
+  const { ctx, events } = makeCtx(s, llm);
+  const sch = new SpeechScheduler(ctx, { cdMs: 60000 });
+  try {
+    sch.onPhaseEntered(s);
+    await flushN(3);
+    const preBefore = llm.kinds().filter((k) => k === 'pre_speech').length;
+    assert.ok(preBefore > 0, '首輪生產應已啟動');
+    // 真人跳過（transition 不 bump 版本；scheduler 未被通知 → 不重跑）
+    for (const h of humans) transition(s, { type: 'HUMAN_SKIP', playerId: h });
+    await flush();
+    const preAfter = llm.kinds().filter((k) => k === 'pre_speech').length;
+    assert.equal(preAfter, preBefore, '跳過不應另開生產');
+    assert.ok(sch.stashForTest(), '原暫存保留');
+    mock.timers.tick(60000);
+    await flush();
+    const speeches = events.filter((e) => e.type === 'AI_SPEECH_DONE');
+    assert.equal(speeches.length, 1, '原 CD 到點播出一次');
+  } finally {
+    sch.stop();
+  }
+});
+
+test('expand 輸出清洗：模型自帶 flag 亦剝離才播出', async () => {
+  const s = discussionState(9);
+  const llm = new MockLLM((prompt) => {
+    if (prompt.includes('【裁判任務】')) return judgeBySlotDesc(prompt);
+    if (prompt.includes('【你的預發言草稿】')) return 'P0：「展開文本」\n[決定:投P3]';
+    const m = prompt.match(/你是 P(\d+)/);
+    return `P${m ? m[1] : '1'}：「草稿。」\n[決定:棄票]`;
+  });
+  const { ctx, events } = makeCtx(s, llm);
+  const sch = new SpeechScheduler(ctx, { cdMs: 1000 });
+  try {
+    sch.onPhaseEntered(s);
+    await flushN(3);
+    mock.timers.tick(1000);
+    await flush();
+    const speech = events.find((e) => e.type === 'AI_SPEECH_DONE')!;
+    assert.equal(speech.type, 'AI_SPEECH_DONE');
+    if (speech.type === 'AI_SPEECH_DONE') {
+      assert.ok(!speech.text.includes('[決定'), 'broadcast 前應清洗 expand 輸出');
+    }
+  } finally {
+    sch.stop();
+  }
+});
+
+test('生產失敗 → 預設 60 秒後重試（重試前不播出）', async () => {
+  const s = discussionState(9);
+  let calls = 0;
+  const llm = new MockLLM(() => {
+    calls++;
+    throw new Error('llm down');
+  });
+  const { ctx, events } = makeCtx(s, llm);
+  const sch = new SpeechScheduler(ctx, { cdMs: 1000 });
+  try {
+    sch.onPhaseEntered(s);
+    await flushN(2);
+    const c1 = calls;
+    assert.ok(c1 > 0, '首輪生產應已嘗試');
+    assert.equal(events.length, 0);
+    mock.timers.tick(59999);
+    await flush();
+    assert.equal(calls, c1, '60 秒未滿不重試');
+    mock.timers.tick(1);
+    await flushN(2);
+    assert.ok(calls > c1, '60 秒到重試生產');
+    assert.equal(events.length, 0, '重試前不播出');
+  } finally {
+    sch.stop();
+  }
+});
+
+test('重試間隔 env 可調（SPEECH_RETRY_MS）', async () => {
+  const prev = process.env.SPEECH_RETRY_MS;
+  process.env.SPEECH_RETRY_MS = '5000';
+  try {
+    const s = discussionState(9);
+    let calls = 0;
+    const llm = new MockLLM(() => {
+      calls++;
+      throw new Error('llm down');
+    });
+    const { ctx } = makeCtx(s, llm);
+    const sch = new SpeechScheduler(ctx, { cdMs: 1000 });
+    try {
+      sch.onPhaseEntered(s);
+      await flushN(2);
+      const c1 = calls;
+      mock.timers.tick(4999);
+      await flush();
+      assert.equal(calls, c1, '5 秒未滿不重試');
+      mock.timers.tick(1);
+      await flushN(2);
+      assert.ok(calls > c1, 'env 指定 5 秒到重試');
+    } finally {
+      sch.stop();
+    }
+  } finally {
+    if (prev === undefined) delete process.env.SPEECH_RETRY_MS;
+    else process.env.SPEECH_RETRY_MS = prev;
+  }
+});
+
+test('安全閥：連續資訊不足達上限 → 強制 decided，發言成功後 enqueue ready；decided 重置計數', async () => {
+  const s = discussionState(6);
+  const llm = uncertainMock();
+  const { ctx, events } = makeCtx(s, llm);
+  const sch = new SpeechScheduler(ctx, { cdMs: 100, maxUncertainRounds: 3 });
+  try {
+    // 第 1 輪（首輪無上輪發言者，全員草稿）：計數皆 1，無 ready
+    sch.onPhaseEntered(s);
+    await flushN(3);
+    mock.timers.tick(100);
+    await flush();
+    const round1AI = s.players.filter((p) => p.alive && p.controlledBy === 'ai').map((p) => p.id);
+    for (const id of round1AI) assert.equal(sch.uncertainCountForTest(id), 1);
+    assert.ok(!events.some((e) => e.type === 'AI_READY_VOTE'), '未達安全閥不 enqueue ready');
+    // 後續輪（每輪播出即版本推進）：草稿達 3 次上限 → 強制 decided → 播出後 enqueue ready
+    // （winner 為 top3 隨機，計數落後的 AI 可能連莊，輪數有隨機性；收斂本身有界）
+    let readyPid = -1;
+    for (let r = 0; r < 12 && readyPid < 0; r++) {
+      sch.onBoardUpdated(s);
+      await flushN(3);
+      mock.timers.tick(100);
+      await flush();
+      const ready = events.find((e) => e.type === 'AI_READY_VOTE');
+      if (ready && ready.type === 'AI_READY_VOTE') readyPid = ready.playerId;
+    }
+    assert.ok(readyPid >= 0, '安全閥強制 decided 後應 enqueue ready');
+    assert.equal(sch.uncertainCountForTest(readyPid), 0, 'decided 後計數重置');
   } finally {
     sch.stop();
   }
@@ -428,25 +742,18 @@ function mixedDiscussionState(): GameState {
   return s;
 }
 
-test('Phase 2：全真人跳過 → 立即管線（不等 quiet）；未全跳過 → 等 quiet', async () => {
+test('混合局：進場即全員草稿開工（不等任何門檻；quiet 已拔除）', async () => {
   const s = mixedDiscussionState();
   const humans = s.players.filter((p) => p.alive && p.controlledBy === 'human').map((p) => p.id);
   assert.ok(humans.length >= 1);
   const llm = defaultMock();
   const { ctx, events } = makeCtx(s, llm);
-  // CD 設大，聚焦「啟動時機」而非廣播
-  const sch = new SpeechScheduler(ctx, { quietMs: 20000, cdMs: 600000, checkIntervalMs: 1000 });
+  const sch = new SpeechScheduler(ctx, { cdMs: 600000 });
   try {
     sch.onPhaseEntered(s);
-    // 未跳過：tick 1s < quiet → 不啟動
-    mock.timers.tick(1000);
-    await flush();
-    assert.ok(!llm.calls.some((c) => c.kind === 'pre_speech'), '未全跳過且 quiet 未過不應啟動');
-    // 全真人跳過 → 下一個 tick 立即啟動（不等 quiet）
-    for (const h of humans) transition(s, { type: 'HUMAN_SKIP', playerId: h });
-    mock.timers.tick(1000);
-    await flush();
-    assert.ok(llm.calls.some((c) => c.kind === 'pre_speech'), '全真人跳過應立即啟動管線');
+    await flushN(3);
+    assert.ok(llm.calls.some((c) => c.kind === 'pre_speech'), '進場即開工，不等 quiet／跳過');
+    assert.ok(sch.stashForTest(), '生產完成暫存');
     void events;
   } finally {
     sch.stop();

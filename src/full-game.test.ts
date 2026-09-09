@@ -43,7 +43,8 @@ class ScriptedDispatcher implements LLMDispatcher {
     const id = m ? parseInt(m[1], 10) : 1;
     const s = this.getState();
     const target = lowestAliveExcept(s, id);
-    return `P${id}：「我比較在意 P${target} 的發言，想多聽聽他的說法。」`;
+    // 草稿帶正規 decided flag → 收斂直進投票（flag 由 scheduler 剝離，不進白板）
+    return `P${id}：「我比較在意 P${target} 的發言，想多聽聽他的說法。」\n[決定:投P${target}]`;
   }
   async requestSpeech(playerId: number): Promise<{ text: string }> {
     return { text: `P${playerId}：「補充發言。」` };
@@ -82,11 +83,15 @@ test('完整局：web engine + scheduler + 啟發式 dispatcher 跑到 gameOver'
   };
   const scheduler = new SpeechScheduler(
     {
-      enqueue: (e) => engine.enqueue(e),
+      // 與 server.ts 同步：AI 事件需立即處理，否則發言成功確認永遠失敗、收斂無法推進
+      enqueue: (e) => {
+        engine.enqueue(e);
+        engine.drain();
+      },
       getState: () => engine.getState(),
       llm: dispatcher,
     },
-    { quietMs: 15, cdMs: 30, checkIntervalMs: 5, preSpeechBatch: 5 },
+    { cdMs: 30, preSpeechBatch: 5 },
   );
   engine = new GameEngine({ mode: 'web', llm: dispatcher, scheduler, registry }, createGameState(9));
 
@@ -96,25 +101,17 @@ test('完整局：web engine + scheduler + 啟發式 dispatcher 跑到 gameOver'
     engine.drain();
 
     let steps = 0;
-    while (!engine.getState().gameOver && steps < 500) {
+    while (!engine.getState().gameOver && steps < 800) {
       steps++;
       await sleep(10); // 放行 scheduler timer 與 async dispatch
       engine.drain();
-      const s = engine.getState();
-      // 全 AI 局：每日發言達 2 則 → 關閉討論（server 端自動推進的測試版）
-      if (s.phase === 'DAY_DISCUSSION_OPEN') {
-        const count = s.discussionLog.filter((d) => d.day === s.day).length;
-        if (count >= 2) {
-          engine.enqueue({ type: 'CLOSE_DISCUSSION' });
-          engine.drain();
-        }
-      }
+      // 收斂直進投票：不手動關閉討論，由 AI_READY_VOTE 統一檢查推進
     }
 
     const final = engine.getState();
     assert.ok(final.gameOver, `應分出勝負（steps=${steps}, phase=${final.phase}）`);
     assert.ok(final.winner === Team.VILLAGE || final.winner === Team.WEREWOLF);
-    assert.ok(steps < 500);
+    assert.ok(steps < 800);
     // scheduler 全程參與：預發言/裁判/展開皆被呼叫，且討論確實有發言
     assert.ok(dispatcher.prespeechCalls > 0, '預發言應被呼叫');
     assert.ok(dispatcher.judgeCalls > 0, '裁判應被呼叫');
@@ -122,6 +119,8 @@ test('完整局：web engine + scheduler + 啟發式 dispatcher 跑到 gameOver'
     assert.ok(final.daySummaries.length >= 0);
     const totalSpeeches = final.discussionLog.length;
     assert.ok(totalSpeeches > 0, '應有 AI 發言');
+    // flag 永不洩漏進白板
+    assert.ok(final.discussionLog.every((d) => !d.text.includes('[決定')), 'flag 不得進白板');
     // 觀戰 snapshot 可建且無洩漏
     const spec = buildSpectatorSnapshot(final);
     assert.ok(!('you' in spec));

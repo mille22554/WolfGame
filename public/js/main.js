@@ -8,7 +8,6 @@
     NIGHT_COLLECTING: '夜晚（行動中）',
     NIGHT_RESOLVING: '夜晚結算',
     DAY_DISCUSSION_OPEN: '白天討論',
-    DAY_DISCUSSION_CLOSING: '討論收尾',
     DAY_VOTING_COLLECTING: '投票中',
     DAY_VOTING_RESOLVING: '投票結算',
     DAY_RESULT_ANNOUNCING: '公布結果',
@@ -230,6 +229,9 @@
       } else if (msg.type === 'LEFT_LOBBY') {
         // 大廳乾淨離開確認：座位已釋放＋廣播已送出，可以回主選單
         if (lobbyExitNav) lobbyExitNav();
+      } else if (msg.type === 'IDLE_TAKEOVER') {
+        // 掛機接管通知（只推被接管者本人）：拉一次快照，panel 以快照標記渲染
+        send({ type: 'REQUEST_SNAPSHOT' });
       } else if (msg.type === 'ACTION_REJECTED') {
         showLobbyError(friendlyReason(msg.reason));
         showError(friendlyReason(msg.reason));
@@ -1060,6 +1062,19 @@
       return;
     }
 
+    // 掛機接管 panel：以快照標記為準，每次快照重算（多頁籤一致；重整頁面靠快照回來）
+    if (you.takenOver) {
+      controlsBody.innerHTML = '<div class="msg">你的座位已被 AI 接管（掛機）。拿回後回到未定，需重新決定。</div>'
+        + '<div><button id="takeback-btn" type="button">拿回座位</button></div>';
+      var takebackBtn = document.getElementById('takeback-btn');
+      if (takebackBtn) {
+        takebackBtn.addEventListener('click', function () {
+          send({ type: 'RECONNECT', token: state.token });
+        });
+      }
+      return;
+    }
+
     if (snapshot.phase === 'NIGHT_COLLECTING') {
       if (!you.canAct) {
         html = '<div class="msg">等待其他玩家行動…</div>';
@@ -1092,11 +1107,7 @@
         + '<button id="speak-btn" type="button">發言</button></div>';
       html += '<div><button id="skip-btn" type="button">跳過發言</button></div>';
       html += state.readySent
-        ? '<div><button id="unready-btn" type="button">取消準備</button></div>'
-        : '<div><button id="ready-btn" type="button">準備投票</button></div>';
-    } else if (snapshot.phase === 'DAY_DISCUSSION_CLOSING') {
-      html = state.readySent
-        ? '<div><button id="unready-btn" type="button">取消準備</button></div>'
+        ? '<div><button id="unready-btn" type="button">收回準備</button></div>'
         : '<div><button id="ready-btn" type="button">準備投票</button></div>';
     } else if (snapshot.phase === 'DAY_VOTING_COLLECTING') {
       if (!you.canAct) {

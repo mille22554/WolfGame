@@ -3,8 +3,18 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createGameState, transition, getNightActors, allAliveHumansSkipped, } from './game-state.js';
+import { createGameState, transition, getNightActors, allAliveHumansSkipped, allAlivePlayersReady, IDLE_TAKEOVER_THRESHOLD, } from './game-state.js';
 import { Role, Team } from './types.js';
+function aliveAI(s) {
+    return s.players.filter((p) => p.alive && p.controlledBy === 'ai').map((p) => p.id);
+}
+/** 灌滿 ready：全存活真人 HUMAN_READY＋全存活 AI AI_READY → 應直進投票 */
+function readyAll(s) {
+    for (const h of aliveHumans(s))
+        transition(s, { type: 'HUMAN_READY_VOTE', playerId: h });
+    for (const a of aliveAI(s))
+        transition(s, { type: 'AI_READY_VOTE', playerId: a });
+}
 function aliveIds(s) {
     return s.players.filter((p) => p.alive).map((p) => p.id);
 }
@@ -107,21 +117,38 @@ test('AI_SPEECH_DONE 被接受 → skippedHumans 清空', () => {
     assert.equal(r.accepted, true);
     assert.deepEqual(s.skippedHumans, []);
 });
-test('HUMAN_READY_VOTE（OPEN）→ 全 ready → DAY_VOTING_COLLECTING + vote gate 開啟', () => {
+test('統一檢查：全員（真人＋AI）ready → 直進投票（無 CLOSING）；部分 ready 維持 OPEN', () => {
     const s = mixedDiscussionState();
     const humans = aliveHumans(s);
     assert.ok(humans.length >= 1);
-    for (let i = 0; i < humans.length - 1; i++) {
-        const r = transition(s, { type: 'HUMAN_READY_VOTE', playerId: humans[i] });
+    for (const h of humans) {
+        const r = transition(s, { type: 'HUMAN_READY_VOTE', playerId: h });
         assert.equal(r.accepted, true);
-        assert.equal(s.phase, 'DAY_DISCUSSION_OPEN'); // 部分 ready → 維持 OPEN
     }
-    const last = transition(s, { type: 'HUMAN_READY_VOTE', playerId: humans[humans.length - 1] });
-    assert.equal(last.accepted, true);
+    assert.equal(s.phase, 'DAY_DISCUSSION_OPEN'); // AI 未定 → 維持 OPEN
+    assert.equal(allAlivePlayersReady(s), false);
+    let last;
+    for (const a of aliveAI(s)) {
+        last = transition(s, { type: 'AI_READY_VOTE', playerId: a });
+        assert.equal(last.accepted, true);
+    }
+    assert.equal(allAlivePlayersReady(s), true);
     assert.equal(s.phase, 'DAY_VOTING_COLLECTING');
     assert.ok(s.pendingGate);
     assert.equal(s.pendingGate.kind, 'vote');
     assert.ok(last.effects.some((e) => e.type === 'ARM_GATE'));
+});
+test('AI_READY_VOTE：死亡玩家拒絕；單向不退（無 AI_UNREADY）', () => {
+    const s = mixedDiscussionState();
+    const ai = aliveAI(s)[0];
+    assert.equal(transition(s, { type: 'AI_READY_VOTE', playerId: ai }).accepted, true);
+    assert.ok(s.voteReady.includes(ai));
+    // 重複 ready 冪等
+    assert.equal(transition(s, { type: 'AI_READY_VOTE', playerId: ai }).accepted, true);
+    const dead = s.players.find((p) => !p.alive);
+    if (dead) {
+        assert.equal(transition(s, { type: 'AI_READY_VOTE', playerId: dead.id }).accepted, false);
+    }
 });
 test('HUMAN_UNREADY_VOTE（OPEN）→ 移出 voteReady', () => {
     const s = mixedDiscussionState();
@@ -139,23 +166,75 @@ test('HUMAN_UNREADY_VOTE（OPEN）→ 移出 voteReady', () => {
         assert.equal(transition(s, { type: 'HUMAN_READY_VOTE', playerId: dead.id }).accepted, false);
     }
 });
-test('HUMAN_READY_VOTE（CLOSING）沿用；HUMAN_SKIP（CLOSING）視同 ready', () => {
+test('HUMAN_SKIP（OPEN）保留：只記 skippedHumans，不視同 ready、不推進投票', () => {
     const s = mixedDiscussionState();
-    transition(s, { type: 'CLOSE_DISCUSSION' });
-    assert.equal(s.phase, 'DAY_DISCUSSION_CLOSING');
     const humans = aliveHumans(s);
     assert.ok(humans.length >= 1);
-    // SKIP 視同 ready：唯一真人 skip → 直接開投票
-    if (humans.length === 1) {
-        const r = transition(s, { type: 'HUMAN_SKIP', playerId: humans[0] });
+    for (const h of humans)
+        transition(s, { type: 'HUMAN_SKIP', playerId: h });
+    assert.equal(s.phase, 'DAY_DISCUSSION_OPEN');
+    assert.ok(!s.voteReady.includes(humans[0]), 'skip 不視同 ready');
+});
+test('掛機計數：AI 發言未定真人 +1；已 ready 排除；任一真人發話／跳過／收回即清空', () => {
+    const s = mixedDiscussionState();
+    const humans = aliveHumans(s);
+    assert.ok(humans.length >= 1);
+    const speaker = aliveAI(s)[0] ?? aliveIds(s)[0];
+    const speak = () => {
+        const r = transition(s, { type: 'AI_SPEECH_DONE', playerId: speaker, text: `發言${s.boardVersion}`, boardVersion: s.boardVersion });
         assert.equal(r.accepted, true);
-        assert.equal(s.phase, 'DAY_VOTING_COLLECTING');
-    }
-    else {
-        transition(s, { type: 'HUMAN_SKIP', playerId: humans[0] });
-        assert.equal(s.phase, 'DAY_DISCUSSION_CLOSING');
-        const r = transition(s, { type: 'HUMAN_READY_VOTE', playerId: humans[1] });
+    };
+    speak();
+    speak();
+    assert.equal(s.idleCounts[humans[0]], 2);
+    // 已 ready 者排除並清空
+    transition(s, { type: 'HUMAN_READY_VOTE', playerId: humans[0] });
+    assert.ok(!(humans[0] in s.idleCounts));
+    speak();
+    assert.ok(!(humans[0] in s.idleCounts), '已 ready 不計數');
+    // 收回 → 從零重算（回到未定）
+    transition(s, { type: 'HUMAN_UNREADY_VOTE', playerId: humans[0] });
+    speak();
+    assert.equal(s.idleCounts[humans[0]], 1);
+    // 任一真人發話即清空全部
+    transition(s, { type: 'HUMAN_SPEAK', playerId: humans[0], text: '我回來了' });
+    assert.deepEqual(s.idleCounts, {});
+    // 跳過亦清空
+    speak();
+    assert.equal(s.idleCounts[humans[0]], 1);
+    transition(s, { type: 'HUMAN_SKIP', playerId: humans[0] });
+    assert.deepEqual(s.idleCounts, {});
+});
+test('掛機接管鏈：計數到 10 → IDLE_TAKEOVER effect（transition 只回傳，不切座位）', () => {
+    assert.equal(IDLE_TAKEOVER_THRESHOLD, 10);
+    const s = mixedDiscussionState();
+    const humans = aliveHumans(s);
+    assert.ok(humans.length >= 1);
+    const target = humans[0];
+    const speaker = aliveAI(s)[0] ?? aliveIds(s)[0];
+    let takeover;
+    for (let i = 0; i < IDLE_TAKEOVER_THRESHOLD; i++) {
+        const r = transition(s, { type: 'AI_SPEECH_DONE', playerId: speaker, text: `發言${i}`, boardVersion: s.boardVersion });
         assert.equal(r.accepted, true);
+        if (i === IDLE_TAKEOVER_THRESHOLD - 1) {
+            takeover = r.effects.find((e) => e.type === 'IDLE_TAKEOVER');
+        }
     }
+    assert.ok(takeover, '第 10 次應回傳 IDLE_TAKEOVER');
+    assert.equal(takeover.playerId, target);
+    // transition 不切座位（engine 執行）
+    assert.equal(s.players.find((p) => p.id === target).controlledBy, 'human');
+});
+test('接管拿回：RECONNECT → 回到未定＋接管標記移除＋計數清零', () => {
+    const s = mixedDiscussionState();
+    const target = aliveHumans(s)[0];
+    transition(s, { type: 'HUMAN_READY_VOTE', playerId: target });
+    s.takenOver.push(target);
+    s.idleCounts[target] = 5;
+    const r = transition(s, { type: 'RECONNECT', playerId: target });
+    assert.equal(r.accepted, true);
+    assert.ok(!s.voteReady.includes(target), '拿回後回到未定');
+    assert.ok(!s.takenOver.includes(target));
+    assert.ok(!(target in s.idleCounts));
 });
 //# sourceMappingURL=human-discussion.test.js.map

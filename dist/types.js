@@ -2,7 +2,7 @@
  * Werewolf Game Types — Phase 0 事件驅動狀態機型別層
  *
  * - Role / Team / SeerResult / MediumResult / NightActionType / ROLE_CONFIG 等沿用現有定義
- * - Phase 改為扁平 string union（10 值）；GameState / Player 改為事件驅動形狀
+ * - Phase 改為扁平 string union（9 值）；GameState / Player 改為事件驅動形狀
  * - GameState 另含 night.ts 相容欄位（nightActions / wolfKillTarget / guardProtectedTarget /
  *   seerCheckTarget / seerCheckResult）與 masonChatLog、expectedPlayerCount（規格缺口補位，見 game-state.ts）
  */

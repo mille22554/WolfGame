@@ -74,7 +74,9 @@ test('guard 看得到自己的 guardProtects', () => {
   const guard = s.players.find((p) => p.role === Role.GUARD)!;
   // 保守衛首夜存活，推進到 day2（guard day1 不可行動）
   toDiscussion(s, [guard.id]);
-  transition(s, { type: 'CLOSE_DISCUSSION' }); // 全 AI → 直接 VOTING
+  for (const p of s.players.filter((x) => x.alive)) {
+    transition(s, { type: 'AI_READY_VOTE', playerId: p.id });
+  } // 全 AI 收斂 → 直接 VOTING
   const voters = [...s.pendingGate!.required];
   const voteTarget = voters.find((id) => id !== guard.id)!;
   for (const voter of voters) {
@@ -106,7 +108,9 @@ test('medium 的 mediumResults 由 deathHistory 推導', () => {
   transition(s, { type: 'START_GAME' });
   const mediumEarly = s.players.find((p) => p.role === Role.MEDIUM)!;
   toDiscussion(s, [mediumEarly.id]); // 保靈能者首夜存活
-  transition(s, { type: 'CLOSE_DISCUSSION' });
+  for (const p of s.players.filter((x) => x.alive)) {
+    transition(s, { type: 'AI_READY_VOTE', playerId: p.id });
+  }
   const voters = [...s.pendingGate!.required];
   // 目標避開靈能者（否則被票死，本案例無法觀察；voters[0] 恰為靈能者約 1/8 機率）
   const target = voters.find((v) => v !== mediumEarly.id) ?? voters[0];
@@ -171,6 +175,19 @@ test('GM snapshot 完整（含 role/team/controlledBy）', () => {
   assert.equal(typeof gm.boardVersion, 'number');
   assert.ok('pendingGate' in gm);
   assert.ok('voteReady' in gm);
+  assert.deepEqual(gm.takenOver, []);
+  assert.deepEqual(gm.idleCounts, {});
+});
+
+test('接管標記進快照：you.takenOver＋GM takenOver', () => {
+  const s = createGameState(6);
+  joinAll(s, 6);
+  transition(s, { type: 'START_GAME' });
+  toDiscussion(s);
+  s.takenOver.push(1);
+  assert.equal(buildPlayerSnapshot(s, 1).you.takenOver, true);
+  assert.equal(buildPlayerSnapshot(s, 2).you.takenOver, false);
+  assert.deepEqual(buildGMSnapshot(s).takenOver, [1]);
 });
 
 test('nightResult 由最後一筆 wolf_kill 推導', () => {

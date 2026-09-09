@@ -230,6 +230,7 @@ export function buildPreSpeechPrompt(state: GameState, playerId: number): string
     `【當天摘要】\n${lastSummary}`,
     `【最近討論】\n${recent.length > 0 ? recent.join('\n') : '（尚無發言）'}`,
     `【任務】你是 P${playerId}，請寫一句 20-40 字的預發言草稿（不超過 40 字）。\n這是候選草稿，稍後可能被選中展開。圍繞當前局勢，提出一個值得討論的點。\n格式：P${playerId}：「你的草稿」`,
+    `【決策旗標】草稿結尾另起一行附加你的投票準備狀態（中控內部判讀用，不會公開）：已決定投某人→[決定:投P編號]；已決定棄票→[決定:棄票]；資訊不足無法決定→[決定:資訊不足]。只可附加其一。`,
   ];
 
   let prompt = parts.join('\n\n');

@@ -24,7 +24,6 @@ export interface ServerOptions {
     zeroClientShutdownMs?: number;
     pingIntervalMs?: number;
     pingTimeoutMs?: number;
-    speechesPerDay?: number;
     exitProcess?: boolean;
     onShutdown?: (reason: string) => void;
     llamaServerPort?: number;
@@ -132,6 +131,13 @@ export interface WebSocketRegistryOptions {
     onLobbySignal?: (clientId: string) => void;
     onClientLeave?: (clientId: string, playerId?: number) => void;
 }
+/**
+ * 接管過濾判定（純函式，單向：只擋真人→server 的遊戲操作；server→真人推送不受影響）。
+ * 只套用接管時已連線的舊 WS（takeoverFiltered）；重整後新 WS 走正常流程。
+ */
+export declare function isTakeoverFiltered(client: {
+    takeoverFiltered?: boolean;
+}, msgType: string): boolean;
 export declare class WebSocketRegistry implements ClientRegistry {
     private readonly opts;
     private readonly clients;
@@ -146,6 +152,11 @@ export declare class WebSocketRegistry implements ClientRegistry {
     hasSpectators(): boolean;
     /** 測試用：目前連線數 */
     clientCount(): number;
+    /**
+     * 掛機接管通知：只推被接管者本人；同時標記其當下已連線的舊 WS 為接管過濾
+     *（拿回成功後過濾解除；重整後新 WS 不受影響）。
+     */
+    notifyTakeover(playerId: number, reason: string): void;
     stop(): void;
     /** 關閉所有連線（shutdown 時） */
     closeAll(): void;

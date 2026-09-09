@@ -189,6 +189,17 @@ export function openBrowser(url) {
             console.log(`請手動開啟瀏覽器：${url}`);
     });
 }
+/**
+ * 接管過濾判定（純函式，單向：只擋真人→server 的遊戲操作；server→真人推送不受影響）。
+ * 只套用接管時已連線的舊 WS（takeoverFiltered）；重整後新 WS 走正常流程。
+ */
+export function isTakeoverFiltered(client, msgType) {
+    if (!client.takeoverFiltered)
+        return false;
+    return msgType === 'HUMAN_SPEAK' || msgType === 'HUMAN_SKIP'
+        || msgType === 'HUMAN_READY_VOTE' || msgType === 'HUMAN_UNREADY_VOTE'
+        || msgType === 'HUMAN_VOTE' || msgType === 'HUMAN_NIGHT_ACTION';
+}
 export class WebSocketRegistry {
     opts;
     clients = new Set();
@@ -261,6 +272,22 @@ export class WebSocketRegistry {
     /** 測試用：目前連線數 */
     clientCount() {
         return this.clients.size;
+    }
+    /**
+     * 掛機接管通知：只推被接管者本人；同時標記其當下已連線的舊 WS 為接管過濾
+     *（拿回成功後過濾解除；重整後新 WS 不受影響）。
+     */
+    notifyTakeover(playerId, reason) {
+        const msg = { type: 'IDLE_TAKEOVER', playerId, reason };
+        for (const c of this.clients) {
+            if (c.playerId !== playerId)
+                continue;
+            c.takeoverFiltered = true;
+            try {
+                c.ws.send(JSON.stringify(msg));
+            }
+            catch { /* 單一客戶端失敗不影響其他人 */ }
+        }
     }
     stop() {
         if (this.pingTimer)
@@ -432,6 +459,7 @@ export class WebSocketRegistry {
                 }
                 client.playerId = msg.playerId;
                 client.token = r.token;
+                client.takeoverFiltered = false; // 新座位不繼承舊過濾
                 send({ type: 'JOINED', playerId: msg.playerId, token: r.token, clientId: client.clientId });
                 break;
             }
@@ -451,6 +479,7 @@ export class WebSocketRegistry {
                 if (r.playerId !== undefined && r.token !== undefined) {
                     client.playerId = r.playerId;
                     client.token = r.token;
+                    client.takeoverFiltered = false; // 拿回成功後過濾解除（含死亡轉觀戰）
                     send({ type: 'JOINED', playerId: r.playerId, token: r.token, clientId: client.clientId });
                     break;
                 }
@@ -565,6 +594,9 @@ export class WebSocketRegistry {
             case 'HUMAN_UNREADY_VOTE':
             case 'HUMAN_VOTE':
             case 'HUMAN_NIGHT_ACTION': {
+                // 掛機接管中：舊 WS 的遊戲操作一律忽略（只收 RECONNECT；推送不受影響）
+                if (isTakeoverFiltered(client, msg.type))
+                    return;
                 const actions = this.opts.actions;
                 if (!actions || client.playerId === undefined)
                     return;
@@ -690,7 +722,6 @@ export async function startServer(options = {}) {
     const modelUri = options.modelUri ?? process.env.LLM_MODEL_URI ?? DEFAULT_LLAMACPP_MODEL_URI;
     const shouldOpenBrowser = options.openBrowser ?? envBool('OPEN_BROWSER', true);
     const exitProcess = options.exitProcess ?? true;
-    const speechesPerDay = options.speechesPerDay ?? 6;
     const mode = resolveProviderMode();
     const isMock = mode === 'mock';
     const llamaServerHost = options.llamaServerHost ?? process.env.LLAMA_SERVER_HOST ?? DEFAULT_LLAMA_SERVER_HOST;
@@ -918,15 +949,12 @@ export async function startServer(options = {}) {
     let scheduler = null;
     let dispatcher = null;
     let llamaServer = null; // doShutdown 用
-    let autoCloseTimer = null;
     let shut = false;
     async function doShutdown(reason) {
         if (shut)
             return;
         shut = true;
         console.log(`[server] 關閉（${reason}）`);
-        if (autoCloseTimer)
-            clearInterval(autoCloseTimer);
         try {
             engine?.save();
         }
@@ -1320,28 +1348,8 @@ export async function startServer(options = {}) {
             getState: () => engine.getState(),
             llm: dispatcher,
         });
-        // ---- 全 AI 自動推進：每日發言達標 → CLOSE_DISCUSSION（缺口補位） ----
-        if (!autoCloseTimer) {
-            autoCloseTimer = setInterval(() => {
-                try {
-                    const s = engine.getState();
-                    if (s.phase !== 'DAY_DISCUSSION_OPEN')
-                        return;
-                    const aliveHumans = s.players.filter((p) => p.alive && p.controlledBy === 'human').length;
-                    if (aliveHumans > 0)
-                        return; // 真人主導討論，不自動關閉
-                    const count = s.discussionLog.filter((d) => d.day === s.day).length;
-                    if (count >= speechesPerDay) {
-                        engine.enqueue({ type: 'CLOSE_DISCUSSION' });
-                        engine.drain();
-                    }
-                }
-                catch { /* ignore */ }
-            }, 1000);
-            const act = autoCloseTimer;
-            if (typeof act.unref === 'function')
-                act.unref();
-        }
+        // 收斂直進投票（第 2 項）：討論結束不再靠發言數強制關閉，
+        // 改由 AI_READY_VOTE／HUMAN_READY_VOTE 的統一檢查推進；此處無需 timer。
         // heavy 就緒後重推一次大廳（含最新 engineStatus），各 client 無需重連
         try {
             registry.sendLobby(lobby.snapshot());
