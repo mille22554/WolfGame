@@ -17,7 +17,7 @@
 
 quiet 當初設計是怕 AI 打斷正在打字的真人，但混合局裡真人靠按鈕發言/跳過，管線本來就在等真人動作，搶話場景不存在。沒人要、沒場景的參數，條件跳過不如整組刪除。
 
-CD 的 bug 是真的：跳過條件 `allAliveHumansSkipped`（`game-state.ts:161-164`）要求「有真人且全部跳過」，**純 AI 局（無真人）時回傳 false**，導致每則發言白等 60s，每天 6 則 = **6 分鐘純白等**。
+CD 的 bug 是真的：跳過條件 `allAliveHumansSkipped`（`game-state.ts:161-164`）要求「有真人且全部跳過」，**純 AI 局（無真人）時回傳 false**，導致每則發言白等 60s（有幾則浪費幾分鐘；日發言數由收斂機制決定，無硬上限，見第 2 項）。
 
 ### 修正方向
 - **拔除 quiet**：刪 `quietMs`（scheduler 選項＋`QUIET_THRESHOLD_MS` env＋`tick` 內等待邏輯）、測試裡約十處構造一併簡化。
