@@ -161,8 +161,17 @@ try {
 
   // 觀察發現
   push(`## 觀察發現`);
+  const perPlayer = new Map();
+  for (const c of calls) {
+    if (c.kind === 'pre_speech' || c.kind === 'expand') perPlayer.set(c.playerId, c);
+  }
+  const decidedCalls = [...perPlayer.values()].filter((c) => c.decision.status === 'decided' && c.decision.target !== 'abstain');
   if (final.phase === 'NIGHT_DISCUSSION_OPEN') {
-    push(`- ⚠ 未收斂：${MAX_ROUNDS} 回合內三狼皆未決定目標（全回「資訊不足」），會議無法自動結束。`);
+    if (decidedCalls.length === 0) {
+      push(`- ⚠ 未收斂：${MAX_ROUNDS} 回合內三狼皆未決定目標（全回「資訊不足」），會議無法自動結束。`);
+    } else {
+      push(`- 部分收斂：${decidedCalls.length} 匹狼已指名目標（${decidedCalls.map((c) => `P${c.playerId}→殺P${c.decision.target}`).join('、')}），但未全員一致，會議尚未結束。`);
+    }
   }
   const leaked = calls.filter((c) => c.kind === 'expand' && c.prompt.includes('決定:資訊不足') && !c.prompt.includes('[決定:資訊不足]'));
   if (leaked.length > 0) {
@@ -172,7 +181,15 @@ try {
   if (doublePrefix > 0) {
     push(`- 顯示冗餘：AI 回覆已含「Px：「...」」前綴，prompt 組裝又加「Px：」，白板出現「P6：P6：「...」」（${doublePrefix} 筆）。`);
   }
-  push(`- 內容重複：4B 模型每回合草稿幾乎相同（「確認守衛保護的人」），新穎性懲罰無法區分相似草稿。`);
+  const allyKills = decidedCalls.filter((c) => wolves.some((w) => w.id === c.decision.target));
+  if (allyKills.length > 0) {
+    push(`- ⚠ 狼提議殺同盟：${allyKills.map((c) => `P${c.playerId}→殺P${c.decision.target}`).join('、')}（目標是狼同盟，scheduler 視為棄票、夜晚結算亦會過濾）。`);
+  }
+  const drafts = calls.filter((c) => c.kind === 'pre_speech').map((c) => c.raw.trim());
+  const unique = new Set(drafts).size;
+  if (drafts.length > 1 && unique === 1) {
+    push(`- 內容重複：所有草稿完全相同（${drafts.length} 筆），新穎性懲罰無法區分相似草稿。`);
+  }
 
   const report = L.join('\n');
   writeFileSync(REPORT, report, 'utf8');

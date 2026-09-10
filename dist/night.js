@@ -78,18 +78,25 @@ export function resolveNightActions(gameState) {
         const wolfActions = gameState.nightActions.filter(a => a.type === NightActionType.WOLF_KILL);
         if (wolfActions.length > 0) {
             // Phase 2 狼人會議多數決：同目標票數最高者勝；平手 → 先提交者勝（nightActions 依提交順序）
-            const tally = new Map();
-            for (const a of wolfActions)
-                tally.set(a.targetId, (tally.get(a.targetId) ?? 0) + 1);
-            const maxCount = Math.max(...tally.values());
-            const topTargets = Array.from(tally.entries())
-                .filter(([, c]) => c === maxCount)
-                .map(([t]) => t);
-            const first = wolfActions.find((a) => topTargets.includes(a.targetId));
-            wolfKillTargetId = first?.targetId;
+            // 鐵則：目標必須是非人狼且存活的玩家（禁止殺同盟/自己）；同盟目標一律視為無效
+            const validActions = wolfActions.filter((a) => {
+                const t = findPlayerById(alivePlayers, a.targetId);
+                return t !== undefined && t.alive && t.team !== Team.WEREWOLF;
+            });
+            if (validActions.length > 0) {
+                const tally = new Map();
+                for (const a of validActions)
+                    tally.set(a.targetId, (tally.get(a.targetId) ?? 0) + 1);
+                const maxCount = Math.max(...tally.values());
+                const topTargets = Array.from(tally.entries())
+                    .filter(([, c]) => c === maxCount)
+                    .map(([t]) => t);
+                const first = validActions.find((a) => topTargets.includes(a.targetId));
+                wolfKillTargetId = first?.targetId;
+            }
         }
-        else {
-            // Wolves must kill - pick random non-wolf
+        if (!wolfKillTargetId) {
+            // Wolves must kill - pick random non-wolf（含全部目標皆為同盟/無效時的回退）
             const candidates = alivePlayers.filter(p => p.team !== Team.WEREWOLF);
             if (candidates.length > 0) {
                 wolfKillTargetId = pickRandomExcluding(candidates, []).id;

@@ -21,7 +21,7 @@
  *   transition 統一檢查全員 ready → 直進投票（無 CLOSING）。
  */
 import { Role } from './types.js';
-import { getAlivePlayers } from './assignment.js';
+import { getAlivePlayers, getAliveWerewolves } from './assignment.js';
 import { stripSpeechPrefix } from './game-state.js';
 import { buildPreSpeechPrompt, buildJudgePrompt, buildExpandPrompt, summarizeDay, buildWolfPreSpeechPrompt, buildWolfExpandPrompt, summarizeWolfDiscussion, } from './character-session.js';
 import { noveltyPenalty } from './novelty.js';
@@ -364,7 +364,8 @@ export class SpeechScheduler {
                         })).trim();
                         if (!raw)
                             continue;
-                        const decision = this.updateDecision(pid, parseDecisionFlag(raw));
+                        const parsed = parseDecisionFlag(raw);
+                        const decision = this.updateDecision(pid, isWolf ? this.validateWolfTarget(st, pid, parsed) : parsed);
                         const text = stripDecisionFlags(raw);
                         if (!text)
                             continue; // 僅剩 flag 無內容 → 不列入候選
@@ -383,6 +384,17 @@ export class SpeechScheduler {
         const shuffled = shuffleArray(results);
         shuffled.forEach((r, idx) => { r.slot = idx + 1; });
         return shuffled;
+    }
+    /** 驗證狼襲擊目標合法性：存活、非自己、非狼同盟；不合法 → 視為棄票（狼放棄這票，不擋會議；夜晚結算另有過濾） */
+    validateWolfTarget(state, playerId, d) {
+        if (d.status === 'decided' && d.target !== 'abstain') {
+            const target = state.players.find((p) => p.id === d.target);
+            const allies = getAliveWerewolves(state.players).map((w) => w.id);
+            if (!target || !target.alive || target.id === playerId || allies.includes(target.id)) {
+                return { status: 'decided', target: 'abstain' };
+            }
+        }
+        return d;
     }
     /** 決策更新：decided 覆蓋標的＋清空計數；資訊不足累計，達安全閥強制 decided:abstain */
     updateDecision(playerId, d) {

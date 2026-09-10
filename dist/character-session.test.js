@@ -159,6 +159,8 @@ test('狼 prompt：要求指名具體目標、禁止討論無法得知的資訊'
     for (const prompt of [pre, expand]) {
         assert.ok(!prompt.includes('守衛可能保誰'), '不應引導討論無法得知的守衛動向');
         assert.ok(prompt.includes('指名'), '應要求指名具體目標');
+        assert.ok(prompt.includes('同盟以外'), '應禁止殺同盟');
+        assert.ok(prompt.includes('繁體中文'), '應要求繁體中文');
     }
 });
 test('summarizeWolfDiscussion：讀 wolfDiscussionLog 並統計襲擊目標提及', () => {

@@ -179,6 +179,29 @@ test('NIGHT_RESOLVING：RESOLVE_NIGHT → 死亡套用 + DAY_DISCUSSION_OPEN + b
     assert.equal(victim.alive, false);
     assert.ok(s.deathHistory.some((d) => d.playerId === victimId && d.cause === 'wolf_kill'));
 });
+test('NIGHT_RESOLVING：狼襲擊目標是同盟 → 過濾並回退隨機非狼（禁止狼殺狼）', () => {
+    const s = startedState(9); // 已含 convergeWolfDiscussion → NIGHT_COLLECTING
+    const wolves = s.players.filter((p) => p.role === Role.WEREWOLF && p.alive);
+    // 每匹狼指定殺另一匹狼（同盟），且不指定自己
+    for (const w of wolves) {
+        const allyTarget = wolves.find((x) => x.id !== w.id).id;
+        const r = transition(s, { type: 'AI_NIGHT_DONE', playerId: w.id, targetId: allyTarget });
+        assert.equal(r.accepted, true);
+    }
+    // 其餘角色照常行動
+    for (const pid of getNightActors(s)) {
+        if (wolves.some((w) => w.id === pid))
+            continue;
+        const target = aliveIds(s).find((id) => id !== pid);
+        const r = transition(s, { type: 'AI_NIGHT_DONE', playerId: pid, targetId: target });
+        assert.equal(r.accepted, true);
+    }
+    const r = transition(s, { type: 'RESOLVE_NIGHT' });
+    assert.equal(r.accepted, true);
+    const victim = s.players.find((p) => !p.alive);
+    assert.ok(victim, '應有死者');
+    assert.notEqual(victim.team, Team.WEREWOLF, '死者不應是狼');
+});
 // ---------- DISCUSSION ----------
 test('DAY_DISCUSSION_OPEN：HUMAN_SPEAK 進 log + boardVersion++', () => {
     const s = startedState(6, [0]);

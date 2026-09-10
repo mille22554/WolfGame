@@ -954,5 +954,34 @@ test('狼模式候選：僅存活 AI 狼（不含 seer/guard/真人）', async (
         sch.stop();
     }
 });
+test('狼模式：決策目標是同盟/自己 → 視為棄票（不計 decided、不擋會議）', async () => {
+    const s = createGameState(9);
+    for (let i = 0; i < 9; i++)
+        transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+    transition(s, { type: 'START_GAME' });
+    assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
+    const wolves = s.players.filter((p) => p.alive && p.role === Role.WEREWOLF);
+    const allyId = wolves[0].id;
+    const llm = new MockLLM((prompt) => {
+        if (prompt.includes('【裁判任務】'))
+            return judgeBySlotDesc(prompt);
+        if (prompt.includes('【你的預發言草稿】'))
+            return 'P0：「展開。」';
+        const m = prompt.match(/你是 P(\d+)/);
+        const id = m ? m[1] : '1';
+        return `P${id}：「建議襲擊P${allyId}。」\n[決定:殺P${allyId}]`;
+    });
+    const { ctx } = makeCtx(s, llm);
+    const sch = new SpeechScheduler(ctx, { cdMs: 60000 });
+    try {
+        sch.onPhaseEntered(s);
+        await flushN(3);
+        assert.equal(sch.flagStats().decided, 0, '同盟目標不應計為 decided');
+        assert.equal(sch.flagStats().abstain, wolves.length, '同盟目標應視為棄票');
+    }
+    finally {
+        sch.stop();
+    }
+});
 void Role;
 //# sourceMappingURL=ai-scheduler.test.js.map
