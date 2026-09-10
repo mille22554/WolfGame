@@ -344,12 +344,17 @@ function recordVote(state: GameState, voterId: number, targetId: number): Transi
   return null;
 }
 
+/** 剝離發言文字自帶的「Px：」前綴（prompt 要求 AI 輸出此格式，但 UI/白板組裝會再加一次，避免雙前綴） */
+export function stripSpeechPrefix(text: string): string {
+  return text.replace(/^P\d+\s*[:：]\s*/, '').trim();
+}
+
 function recordSpeech(state: GameState, playerId: number, text: string): TransitionResult | null {
   const player = state.players.find((p) => p.id === playerId);
   if (!player || !player.alive) {
     return { state, effects: [], accepted: false, reason: `speaker P${playerId} not alive` };
   }
-  state.discussionLog.push({ playerId, text, day: state.day });
+  state.discussionLog.push({ playerId, text: stripSpeechPrefix(text), day: state.day });
   state.boardVersion++;
   return null;
 }
@@ -363,7 +368,7 @@ function recordWolfSpeech(state: GameState, playerId: number, text: string): Tra
   if (player.role !== Role.WEREWOLF) {
     return { state, effects: [], accepted: false, reason: `P${playerId} is not a wolf` };
   }
-  state.wolfDiscussionLog.push({ playerId, text, day: state.day });
+  state.wolfDiscussionLog.push({ playerId, text: stripSpeechPrefix(text), day: state.day });
   state.boardVersion++;
   return null;
 }

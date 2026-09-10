@@ -21,6 +21,8 @@ export declare function allAliveWolvesReady(state: GameState): boolean;
 export declare const IDLE_TAKEOVER_THRESHOLD = 10;
 /** 掛機接管執行（engine 在 IDLE_TAKEOVER effect 到達時呼叫；沿用斷線路徑語義） */
 export declare function applyIdleTakeover(state: GameState, playerId: number): Effect[];
+/** 剝離發言文字自帶的「Px：」前綴（prompt 要求 AI 輸出此格式，但 UI/白板組裝會再加一次，避免雙前綴） */
+export declare function stripSpeechPrefix(text: string): string;
 export declare function transition(state: GameState, event: GameEvent): TransitionResult;
 export declare function getNightActors(state: GameState): number[];
 export declare function getMediumResults(state: GameState): {

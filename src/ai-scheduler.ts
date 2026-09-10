@@ -25,6 +25,7 @@ import type { AIScheduler } from './engine.js';
 import type { FlagStats, GameState, SchedulerContext } from './types.js';
 import { Role } from './types.js';
 import { getAlivePlayers } from './assignment.js';
+import { stripSpeechPrefix } from './game-state.js';
 import {
   buildPreSpeechPrompt, buildJudgePrompt, buildExpandPrompt, summarizeDay,
   buildWolfPreSpeechPrompt, buildWolfExpandPrompt, summarizeWolfDiscussion,
@@ -332,10 +333,10 @@ export class SpeechScheduler implements AIScheduler {
         : buildExpandPrompt(cur2, winner.playerId, winner.text);
       let full: string;
       try {
-        full = stripDecisionFlags((await this.ctx.llm.generate(expandPrompt, {
+        full = stripSpeechPrefix(stripDecisionFlags((await this.ctx.llm.generate(expandPrompt, {
           temperature: this.options.expandTemp,
           maxTokens: 100,
-        })).trim());
+        })).trim()));
       } catch {
         this.scheduleRetry();
         return;

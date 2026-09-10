@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { createGameState, transition, getNightActors, saveState, loadState, } from './game-state.js';
+import { createGameState, transition, getNightActors, saveState, loadState, stripSpeechPrefix, } from './game-state.js';
 import { Role, Team, SCHEMA_VERSION } from './types.js';
 // ---------- helpers ----------
 function joinAll(state, count) {
@@ -205,6 +205,23 @@ test('DAY_DISCUSSION_OPEN：AI_SPEECH_DONE 版本相符接受、版本不符丟�
     assert.equal(stale.reason, 'stale boardVersion');
     assert.equal(s.discussionLog.length, 1);
 });
+test('stripSpeechPrefix：剝離 AI 自帶 Px：前綴（全形/半形冒號、空白）', () => {
+    assert.equal(stripSpeechPrefix('P5：「發言」'), '「發言」');
+    assert.equal(stripSpeechPrefix('P5:「發言」'), '「發言」');
+    assert.equal(stripSpeechPrefix('P5： 「發言」'), '「發言」');
+    assert.equal(stripSpeechPrefix('「發言」'), '「發言」'); // 無前綴不動
+    assert.equal(stripSpeechPrefix('P5：P5：「發言」'), 'P5：「發言」'); // 只剝一層
+    assert.equal(stripSpeechPrefix(''), '');
+});
+test('DAY_DISCUSSION_OPEN：AI_SPEECH_DONE 自帶 Px：前綴 → 剝離才入 log', () => {
+    const s = startedState(6);
+    toDiscussion(s);
+    const speaker = aliveIds(s)[0];
+    const bv = s.boardVersion;
+    const ok = transition(s, { type: 'AI_SPEECH_DONE', playerId: speaker, text: `P${speaker}：「發言」`, boardVersion: bv });
+    assert.equal(ok.accepted, true);
+    assert.equal(s.discussionLog[0].text, '「發言」');
+});
 test('boardVersion 不觸發點：JOIN / SKIP / READY / MASON_CHAT', () => {
     const s = createGameState(6);
     transition(s, { type: 'CLIENT_JOIN', name: 'P1' });
@@ -353,6 +370,14 @@ test('AI_WOLF_SPEECH_DONE 版本不符 → 拒絕', () => {
     const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive);
     const r = transition(s, { type: 'AI_WOLF_SPEECH_DONE', playerId: wolf.id, text: '過期', boardVersion: s.boardVersion - 1 });
     assert.equal(r.accepted, false);
+});
+test('AI_WOLF_SPEECH_DONE 自帶 Px：前綴 → 剝離才入 wolfDiscussionLog', () => {
+    const s = joinedState(9);
+    transition(s, { type: 'START_GAME' });
+    const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive);
+    const r = transition(s, { type: 'AI_WOLF_SPEECH_DONE', playerId: wolf.id, text: `P${wolf.id}：「狼發言」`, boardVersion: s.boardVersion });
+    assert.equal(r.accepted, true);
+    assert.equal(s.wolfDiscussionLog[0].text, '「狼發言」');
 });
 test('全存活狼 ready → NIGHT_COLLECTING + 開夜晚 gate；部分 ready 維持 OPEN', () => {
     const s = joinedState(9);

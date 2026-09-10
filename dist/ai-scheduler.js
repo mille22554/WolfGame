@@ -22,6 +22,7 @@
  */
 import { Role } from './types.js';
 import { getAlivePlayers } from './assignment.js';
+import { stripSpeechPrefix } from './game-state.js';
 import { buildPreSpeechPrompt, buildJudgePrompt, buildExpandPrompt, summarizeDay, buildWolfPreSpeechPrompt, buildWolfExpandPrompt, summarizeWolfDiscussion, } from './character-session.js';
 import { noveltyPenalty } from './novelty.js';
 import { shuffleArray } from './utils.js';
@@ -295,10 +296,10 @@ export class SpeechScheduler {
                 : buildExpandPrompt(cur2, winner.playerId, winner.text);
             let full;
             try {
-                full = stripDecisionFlags((await this.ctx.llm.generate(expandPrompt, {
+                full = stripSpeechPrefix(stripDecisionFlags((await this.ctx.llm.generate(expandPrompt, {
                     temperature: this.options.expandTemp,
                     maxTokens: 100,
-                })).trim());
+                })).trim()));
             }
             catch {
                 this.scheduleRetry();

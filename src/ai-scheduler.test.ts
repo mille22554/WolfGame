@@ -685,6 +685,7 @@ test('expand 輸出清洗：模型自帶 flag 亦剝離才播出', async () => {
     assert.equal(speech.type, 'AI_SPEECH_DONE');
     if (speech.type === 'AI_SPEECH_DONE') {
       assert.ok(!speech.text.includes('[決定'), 'broadcast 前應清洗 expand 輸出');
+      assert.equal(speech.text, '「展開文本」', 'broadcast 前應剝離 Px：前綴');
     }
   } finally {
     sch.stop();
