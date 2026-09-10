@@ -98,7 +98,8 @@ try {
 
   // 有界執行：跑 MAX_ROUNDS 回合（每回合播出一次 = boardVersion +1）或收斂或逾時
   const start = Date.now();
-  let lastBv = st.boardVersion;   // START_GAME 後 = 1
+  const startBv = st.boardVersion;   // 數字快照（st 是活體引用，st.boardVersion 會跟著長大，不能直接當基準）
+  let lastBv = startBv;
   while (Date.now() - start < TIMEOUT_MS) {
     await sleep(100);
     engine.drain();
@@ -106,7 +107,7 @@ try {
     if (cur.phase !== 'NIGHT_DISCUSSION_OPEN') break;   // 收斂或離開
     if (cur.boardVersion > lastBv) {
       lastBv = cur.boardVersion;
-      if (lastBv - st.boardVersion >= MAX_ROUNDS) break;   // 已播出 MAX_ROUNDS 回合
+      if (lastBv - startBv >= MAX_ROUNDS) break;   // 已播出 MAX_ROUNDS 回合
     }
   }
   final = engine.getState();
