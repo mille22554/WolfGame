@@ -122,7 +122,10 @@ try {
   push(`- 局：${PLAYER_COUNT} 人全 AI`);
   push(`- 角色分配：${JSON.stringify(getRoleCounts(final.players))}`);
   push(`- 狼人：${wolves.map((w) => `P${w.id}`).join(', ')}`);
-  push(`- 執行：${MAX_ROUNDS} 回合後停止（未等收斂）`);
+  const stopReason = final.phase !== 'NIGHT_DISCUSSION_OPEN'
+    ? `收斂（${final.phase}）`
+    : (Date.now() - start >= TIMEOUT_MS ? '逾時' : `${MAX_ROUNDS} 回合上限`);
+  push(`- 執行：${stopReason}`);
   push(`- 最終 phase：${final.phase}；wolfReady：${JSON.stringify(final.wolfReady)}`);
   push();
 
