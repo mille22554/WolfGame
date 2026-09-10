@@ -4,6 +4,10 @@
  * 組裝順序：角色卡（persona/agents.md + memory.md）→ 遊戲規則 →
  * 公開知識（buildPublicKnowledge）→ 私有知識（依角色）→ 當天討論 →
  * 歷史摘要（daySummaries）→ 任務指令（依 kind）
+ *
+ * 人格分層：agents.md 僅正式發言（speech/expand）帶入；
+ * night/vote 行動決策與預發言草稿保持中性（不帶人格），
+ * 入選草稿由 expand 階段以性格潤飾（語氣收斂、不浮誇）。
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -24,11 +28,11 @@ function readTextIfExists(filePath) {
 function taskInstruction(kind, playerId) {
     switch (kind) {
         case 'speech':
-            return `【任務】你是 P${playerId}，請進行白天發言（一句話，30-60字）。圍繞「誰的反應讓你在意」「想聽聽誰的說法」聊，用「我比較在意…」語氣，避免直接定罪。格式：P${playerId}：「你的發言」`;
+            return `【任務】你是 P${playerId}，請進行白天發言（一句話，30-60字）。圍繞「誰的反應讓你在意」「想聽聽誰的說法」聊，用「我比較在意…」語氣，避免直接定罪。以你的性格自然表達，但語氣不要過於強烈或浮誇。格式：P${playerId}：「你的發言」`;
         case 'vote':
-            return `【任務】你是 P${playerId}，請投票。回顧今天的發言與你的私有情報，選出最值得懷疑的一人。回覆格式：我投 P{編號}。`;
+            return `【任務】你是 P${playerId}，請投票。回顧今天的發言與你的私有情報，選出最值得懷疑的一人。只回覆一句話，不要角色扮演。回覆格式：我投 P{編號}。`;
         case 'night':
-            return `【任務】你是 P${playerId}，請選擇今晚行動的目標（必須是存活且非自己的玩家）。回覆：我選擇 P{編號}。`;
+            return `【任務】你是 P${playerId}，請選擇今晚行動的目標（必須是存活且非自己的玩家）。只回覆一句話，不要角色扮演。回覆：我選擇 P{編號}。`;
     }
 }
 function privateKnowledgeLines(state, playerId) {
@@ -81,16 +85,20 @@ export function buildPrompt(state, playerId, kind, budget = 4000) {
     const maxChars = budget ?? 4000;
     const maxCurrentDayEntries = 60;
     // --- 固定部分 ---
+    // 人格分層：night/vote 是中性行動決策，不帶人格；speech（正式發言）才帶人格
     const personaId = player.personality || `p${playerId}`;
-    const personaPrompt = readTextIfExists(path.join(getResourceRoot(), 'character', personaId, 'agents.md'));
+    const includePersona = kind === 'speech';
+    const personaPrompt = includePersona
+        ? readTextIfExists(path.join(getResourceRoot(), 'character', personaId, 'agents.md'))
+        : '';
     const privateMemory = readTextIfExists(path.join(getResourceRoot(), 'character', personaId, 'memory.md'));
-    const rules = readTextIfExists(path.join(getResourceRoot(), 'character', 'day-meeting.md'));
+    const rules = readTextIfExists(path.join(getResourceRoot(), 'character', 'game-rules.md'));
     const pub = buildPublicKnowledge(state);
     const aliveNames = pub.alivePlayers.map((p) => `P${p.id}`).join('、') || '無';
     const deadNames = pub.deadPlayers.map((p) => `P${p.id}`).join('、') || '無';
     const fixedParts = [
         '你是人狼遊戲中的角色。',
-        personaPrompt ? `【人格設定】\n${personaPrompt}` : '【人格設定】（無）',
+        includePersona ? (personaPrompt ? `【人格設定】\n${personaPrompt}` : '【人格設定】（無）') : '',
         privateMemory ? `【你的私有記憶】\n${privateMemory}` : '',
         `【你的角色資訊】\n${privateKnowledgeLines(state, playerId).join('\n')}`,
         rules ? `【遊戲規則】\n${rules}` : '',
@@ -178,7 +186,6 @@ export function summarizeDay(state, day) {
 // ============================================
 export const PRE_SPEECH_BUDGET = 2000; // 字元預算
 export const PRE_SPEECH_RECENT = 5; // 最近幾則
-export const PRE_SPEECH_PERSONA_MAX = 500; // 人格精簡上限
 /**
  * buildPreSpeechPrompt（輕量，2-3K tokens）：
  * 人格（前 500 字）→ 私有知識 → 當天摘要（最後一則）→ 最近 5 則討論 → 任務指令
@@ -187,9 +194,7 @@ export function buildPreSpeechPrompt(state, playerId) {
     const player = state.players.find((p) => p.id === playerId);
     if (!player)
         throw new Error(`找不到玩家 P${playerId}`);
-    const personaId = player.personality || `p${playerId}`;
-    const personaFull = readTextIfExists(path.join(getResourceRoot(), 'character', personaId, 'agents.md'));
-    const persona = personaFull.slice(0, PRE_SPEECH_PERSONA_MAX);
+    // 草稿中性：不讀 agents.md（入選後由 expand 階段以性格潤飾）
     const privateLines = privateKnowledgeLines(state, playerId);
     const lastSummary = state.daySummaries.length > 0
         ? state.daySummaries[state.daySummaries.length - 1]
@@ -199,11 +204,10 @@ export function buildPreSpeechPrompt(state, playerId) {
         .slice(-PRE_SPEECH_RECENT)
         .map((d) => `P${d.playerId}：${d.text}`);
     const parts = [
-        persona ? `【人格設定】\n${persona}` : '【人格設定】（無）',
         `【你的角色資訊】\n${privateLines.join('\n')}`,
         `【當天摘要】\n${lastSummary}`,
         `【最近討論】\n${recent.length > 0 ? recent.join('\n') : '（尚無發言）'}`,
-        `【任務】你是 P${playerId}，請寫一句 20-40 字的預發言草稿（不超過 40 字）。\n這是候選草稿，稍後可能被選中展開。圍繞當前局勢，提出一個值得討論的點。\n格式：P${playerId}：「你的草稿」`,
+        `【任務】你是 P${playerId}，請寫一句 20-40 字的預發言草稿（不超過 40 字）。\n這是候選草稿，稍後可能被選中展開；內容保持中性，不需個人風格。圍繞當前局勢，提出一個值得討論的點。\n格式：P${playerId}：「你的草稿」`,
         `【決策旗標】草稿結尾另起一行附加你的投票準備狀態（中控內部判讀用，不會公開）：已決定投某人→[決定:投P編號]；已決定棄票→[決定:棄票]；資訊不足無法決定→[決定:資訊不足]。只可附加其一。`,
     ];
     let prompt = parts.join('\n\n');
@@ -234,6 +238,6 @@ export function buildJudgePrompt(daySummary, preSpeeches) {
  */
 export function buildExpandPrompt(state, playerId, preSpeech) {
     const base = buildPrompt(state, playerId, 'speech');
-    return `${base}\n\n【你的預發言草稿】${preSpeech}\n你可以沿用或修改這則草稿，展開成完整發言（30-60 字）。`;
+    return `${base}\n\n【你的預發言草稿】${preSpeech}\n你可以沿用或修改這則草稿，以你的性格自然潤飾，展開成完整發言（30-60 字）；語氣符合人格但不要過於強烈或浮誇。`;
 }
 //# sourceMappingURL=character-session.js.map

@@ -4,6 +4,10 @@
  * 組裝順序：角色卡（persona/agents.md + memory.md）→ 遊戲規則 →
  * 公開知識（buildPublicKnowledge）→ 私有知識（依角色）→ 當天討論 →
  * 歷史摘要（daySummaries）→ 任務指令（依 kind）
+ *
+ * 人格分層：agents.md 僅正式發言（speech/expand）帶入；
+ * night/vote 行動決策與預發言草稿保持中性（不帶人格），
+ * 入選草稿由 expand 階段以性格潤飾（語氣收斂、不浮誇）。
  */
 import type { GameState } from './types.js';
 export type PromptKind = 'speech' | 'vote' | 'night';
@@ -14,7 +18,6 @@ export declare function buildPrompt(state: GameState, playerId: number, kind: Pr
 export declare function summarizeDay(state: GameState, day: number): string;
 export declare const PRE_SPEECH_BUDGET = 2000;
 export declare const PRE_SPEECH_RECENT = 5;
-export declare const PRE_SPEECH_PERSONA_MAX = 500;
 /**
  * buildPreSpeechPrompt（輕量，2-3K tokens）：
  * 人格（前 500 字）→ 私有知識 → 當天摘要（最後一則）→ 最近 5 則討論 → 任務指令
