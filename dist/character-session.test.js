@@ -149,18 +149,24 @@ test('buildWolfPreSpeechPrompt：含襲擊/今晚語境 + 殺P 決策旗標指�
     assert.ok(prompt.includes('殺P'));
     assert.ok(prompt.includes('資訊不足'));
 });
-test('狼 prompt：要求指名具體目標、禁止討論無法得知的資訊', () => {
+test('狼 prompt：要求指名具體目標、禁止討論無法得知的資訊、列舉合法目標（不含同盟）', () => {
     const s = createGameState(9);
     joinAll(s, 9);
     transition(s, { type: 'START_GAME' });
     const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive);
+    const allies = s.players.filter((p) => p.role === Role.WEREWOLF && p.alive && p.id !== wolf.id);
     const pre = buildWolfPreSpeechPrompt(s, wolf.id);
     const expand = buildWolfExpandPrompt(s, wolf.id, 'P1：「今晚先襲擊P3。」');
     for (const prompt of [pre, expand]) {
         assert.ok(!prompt.includes('守衛可能保誰'), '不應引導討論無法得知的守衛動向');
         assert.ok(prompt.includes('指名'), '應要求指名具體目標');
-        assert.ok(prompt.includes('同盟以外'), '應禁止殺同盟');
+        assert.ok(prompt.includes('襲擊同盟是規則上不可能的行為'), '應禁止殺同盟');
         assert.ok(prompt.includes('繁體中文'), '應要求繁體中文');
+        assert.ok(prompt.includes('今晚可襲擊的存活玩家'), '應列舉合法目標');
+        const seg = prompt.split('今晚可襲擊的存活玩家')[1]?.split('（')[0] ?? '';
+        for (const a of allies) {
+            assert.ok(!seg.includes(`P${a.id}`), `合法目標清單不應含同盟 P${a.id}`);
+        }
     }
 });
 test('summarizeWolfDiscussion：讀 wolfDiscussionLog 並統計襲擊目標提及', () => {
