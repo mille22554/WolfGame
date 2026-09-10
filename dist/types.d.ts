@@ -7,8 +7,8 @@
  *   seerCheckTarget / seerCheckResult）與 masonChatLog、expectedPlayerCount（規格缺口補位，見 game-state.ts）
  */
 import { Personality } from './personalities.js';
-export declare const SCHEMA_VERSION = 3;
-export type Phase = 'SETUP_WAITING_JOIN' | 'SETUP_READY' | 'NIGHT_COLLECTING' | 'NIGHT_RESOLVING' | 'DAY_DISCUSSION_OPEN' | 'DAY_VOTING_COLLECTING' | 'DAY_VOTING_RESOLVING' | 'DAY_RESULT_ANNOUNCING' | 'GAME_OVER_FINAL';
+export declare const SCHEMA_VERSION = 4;
+export type Phase = 'SETUP_WAITING_JOIN' | 'SETUP_READY' | 'NIGHT_DISCUSSION_OPEN' | 'NIGHT_COLLECTING' | 'NIGHT_RESOLVING' | 'DAY_DISCUSSION_OPEN' | 'DAY_VOTING_COLLECTING' | 'DAY_VOTING_RESOLVING' | 'DAY_RESULT_ANNOUNCING' | 'GAME_OVER_FINAL';
 export type GameEvent = {
     type: 'CLIENT_JOIN';
     name: string;
@@ -42,6 +42,24 @@ export type GameEvent = {
     playerId: number;
     text: string;
     boardVersion: number;
+} | {
+    type: 'AI_WOLF_SPEECH_DONE';
+    playerId: number;
+    text: string;
+    boardVersion: number;
+} | {
+    type: 'HUMAN_WOLF_SPEAK';
+    playerId: number;
+    text: string;
+} | {
+    type: 'AI_WOLF_READY';
+    playerId: number;
+} | {
+    type: 'HUMAN_WOLF_READY';
+    playerId: number;
+} | {
+    type: 'HUMAN_WOLF_UNREADY';
+    playerId: number;
 } | {
     type: 'AI_VOTE_DONE';
     playerId: number;
@@ -168,6 +186,7 @@ export interface GameState {
     players: Player[];
     humanPlayerIndices: number[];
     discussionLog: DiscussionEntry[];
+    wolfDiscussionLog: DiscussionEntry[];
     votes: Vote[];
     deathHistory: DeathRecord[];
     seerChecks: {
@@ -186,6 +205,7 @@ export interface GameState {
     boardVersion: number;
     daySummaries: string[];
     voteReady: number[];
+    wolfReady: number[];
     skippedHumans: number[];
     /** 掛機計數：playerId → 該真人未定期間的 AI 發言次數；任一真人發話／跳過／收回即清空，到 10 觸發接管 */
     idleCounts: Record<number, number>;
@@ -250,6 +270,12 @@ export interface PlayerSnapshot {
             playerId: number;
             text: string;
         }[];
+        wolfDiscussionLog?: {
+            playerId: number;
+            text: string;
+        }[];
+        wolfReady?: boolean;
+        wolfReadyIds?: number[];
         wolfAllyIds?: number[];
         canAct?: boolean;
         takenOver: boolean;
@@ -581,11 +607,18 @@ export type ClientToServerMessage = {
     type: 'HUMAN_SPEAK';
     text: string;
 } | {
+    type: 'HUMAN_WOLF_SPEAK';
+    text: string;
+} | {
     type: 'HUMAN_SKIP';
 } | {
     type: 'HUMAN_READY_VOTE';
 } | {
     type: 'HUMAN_UNREADY_VOTE';
+} | {
+    type: 'HUMAN_WOLF_READY';
+} | {
+    type: 'HUMAN_WOLF_UNREADY';
 } | {
     type: 'HUMAN_VOTE';
     targetId: number;

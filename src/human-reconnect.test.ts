@@ -13,17 +13,32 @@ function aliveIds(s: GameState): number[] {
   return s.players.filter((p) => p.alive).map((p) => p.id);
 }
 
+/** 狼密談收斂：全存活狼 ready → NIGHT_COLLECTING（新流程：START_GAME/ADVANCE_DAY 先進 NIGHT_DISCUSSION_OPEN） */
+function convergeWolfDiscussion(s: GameState): void {
+  for (const p of s.players) {
+    if (p.alive && p.role === Role.WEREWOLF) {
+      const r = transition(s, p.controlledBy === 'human'
+        ? { type: 'HUMAN_WOLF_READY', playerId: p.id }
+        : { type: 'AI_WOLF_READY', playerId: p.id });
+      assert.equal(r.accepted, true);
+    }
+  }
+  assert.equal(s.phase, 'NIGHT_COLLECTING');
+}
+
 /** 6 人局真人座位 1，開局到 NIGHT_COLLECTING */
 function started6(): GameState {
   const s = createGameState(6);
   transition(s, { type: 'HUMAN_JOIN', playerId: 1, name: 'H' });
   for (let id = 2; id <= 6; id++) transition(s, { type: 'AI_JOIN', playerId: id });
   transition(s, { type: 'START_GAME' });
+  convergeWolfDiscussion(s);
   assert.equal(s.phase, 'NIGHT_COLLECTING');
   return s;
 }
 
 function toDiscussion(s: GameState, keep: number[] = [1]): void {
+  if (s.phase === 'NIGHT_DISCUSSION_OPEN') convergeWolfDiscussion(s);
   for (const pid of getNightActors(s)) {
     const me = s.players.find((p) => p.id === pid)!;
     let pool = aliveIds(s).filter((id) => id !== pid && !keep.includes(id));

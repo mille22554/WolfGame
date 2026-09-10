@@ -30,7 +30,7 @@ export type AIDecision = {
 };
 /** 安全閥：單一 AI 連續資訊不足次數上限（防卡死底線；只計真正資訊不足） */
 export declare const MAX_UNCERTAIN_ROUNDS = 100;
-/** 正規 flag：[決定:投P3]／[決定:棄票]／[決定:資訊不足]（方括號跳脫、全形/半形冒號、全域匹配） */
+/** 正規 flag：[決定:投P3]／[決定:殺P3]／[決定:棄票]／[決定:資訊不足]（方括號跳脫、全形/半形冒號、全域匹配） */
 export declare const DECISION_FLAG_RE: RegExp;
 /** 剝離 flag（全域，一律在收草稿回傳前＋broadcast 前各洗一次） */
 export declare function stripDecisionFlags(text: string): string;
@@ -80,7 +80,7 @@ export declare class SpeechScheduler implements AIScheduler {
     private effectiveCdMs;
     private restartCd;
     private onCdFired;
-    /** 草稿候選：存活 AI 除上輪發言者外全員；為空 → 不生產（等真人） */
+    /** 草稿候選：存活 AI 除上輪發言者外全員（狼模式僅存活狼 AI）；為空 → 不生產（等真人） */
     private candidateIds;
     private startProduction;
     private runProduction;

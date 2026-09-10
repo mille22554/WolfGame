@@ -3,7 +3,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPrompt, summarizeDay, buildPreSpeechPrompt, buildJudgePrompt, buildExpandPrompt, PRE_SPEECH_BUDGET } from './character-session.js';
+import { buildPrompt, summarizeDay, buildPreSpeechPrompt, buildJudgePrompt, buildExpandPrompt, PRE_SPEECH_BUDGET, buildWolfPreSpeechPrompt, buildWolfExpandPrompt, summarizeWolfDiscussion } from './character-session.js';
 import { createGameState, transition, getNightActors } from './game-state.js';
 import type { GameState } from './types.js';
 import { Role } from './types.js';
@@ -12,10 +12,24 @@ function joinAll(state: GameState, count: number): void {
   for (let i = 0; i < count; i++) transition(state, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
 }
 
+/** 狼密談收斂：全存活狼 ready → NIGHT_COLLECTING（新流程：START_GAME/ADVANCE_DAY 先進 NIGHT_DISCUSSION_OPEN） */
+function convergeWolfDiscussion(s: GameState): void {
+  for (const p of s.players) {
+    if (p.alive && p.role === Role.WEREWOLF) {
+      const r = transition(s, p.controlledBy === 'human'
+        ? { type: 'HUMAN_WOLF_READY', playerId: p.id }
+        : { type: 'AI_WOLF_READY', playerId: p.id });
+      assert.equal(r.accepted, true);
+    }
+  }
+  assert.equal(s.phase, 'NIGHT_COLLECTING');
+}
+
 function discussionState(count = 9): GameState {
   const s = createGameState(count);
   joinAll(s, count);
   transition(s, { type: 'START_GAME' });
+  convergeWolfDiscussion(s);
   transition(s, { type: 'ACTION_TIMEOUT', gateId: 'night-1' });
   transition(s, { type: 'RESOLVE_NIGHT' });
   assert.equal(s.phase, 'DAY_DISCUSSION_OPEN');
@@ -45,6 +59,7 @@ test('buildPrompt 私有知識依角色：seer 有查驗紀錄', () => {
   const s = createGameState(9);
   joinAll(s, 9);
   transition(s, { type: 'START_GAME' });
+  convergeWolfDiscussion(s);
   const seer = s.players.find((p) => p.role === Role.SEER)!;
   for (const pid of getNightActors(s)) {
     transition(s, { type: 'AI_NIGHT_DONE', playerId: pid, targetId: aliveIds(s).filter((id) => id !== pid)[0] });
@@ -135,4 +150,42 @@ test('buildExpandPrompt：標準 speech prompt + 草稿附加', () => {
   assert.ok(prompt.includes('任務'), '應含標準 speech 任務指令');
   assert.ok(prompt.includes('你的預發言草稿'));
   assert.ok(prompt.includes(draft));
+});
+
+test('buildWolfPreSpeechPrompt：含襲擊/今晚語境 + 殺P 決策旗標指示', () => {
+  const s = createGameState(9);
+  joinAll(s, 9);
+  transition(s, { type: 'START_GAME' });
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
+  const prompt = buildWolfPreSpeechPrompt(s, wolf.id);
+  assert.ok(prompt.includes('今晚') || prompt.includes('襲擊'));
+  assert.ok(prompt.includes('殺P'));
+  assert.ok(prompt.includes('資訊不足'));
+});
+
+test('summarizeWolfDiscussion：讀 wolfDiscussionLog 並統計襲擊目標提及', () => {
+  const s = createGameState(9);
+  joinAll(s, 9);
+  transition(s, { type: 'START_GAME' });
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
+  s.wolfDiscussionLog.push({ playerId: wolf.id, text: '我懷疑P3，今晚襲擊P3', day: s.day });
+  s.wolfDiscussionLog.push({ playerId: wolf.id, text: 'P3威脅最大，投P3出去', day: s.day });
+  const summary = summarizeWolfDiscussion(s, s.day);
+  assert.ok(summary.includes('P3'));
+  const empty = createGameState(9);
+  joinAll(empty, 9);
+  transition(empty, { type: 'START_GAME' });
+  assert.ok(summarizeWolfDiscussion(empty, empty.day).includes('尚無明確目標'));
+});
+
+test('buildWolfExpandPrompt：狼 speech prompt + 草稿附加', () => {
+  const s = createGameState(9);
+  joinAll(s, 9);
+  transition(s, { type: 'START_GAME' });
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
+  const draft = 'P1：「今晚先襲擊P3。」';
+  const prompt = buildWolfExpandPrompt(s, wolf.id, draft);
+  assert.ok(prompt.includes('你的預發言草稿'));
+  assert.ok(prompt.includes(draft));
+  assert.ok(prompt.includes('襲擊') || prompt.includes('今晚'));
 });

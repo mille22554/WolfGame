@@ -541,7 +541,12 @@ test('遊戲結束 → 延遲後自動回大廳（座位保留、可再開一局
       // 駕駛真人座位：夜間/投票行動、討論發言＋準備（防掛機接管、避免 gate 卡 timeout）
       const snap = msg.type === 'SNAPSHOT' ? msg.snapshot : undefined;
       if (!snap?.you || !snap.alivePlayers?.some((p) => p.id === 1)) return;
-      if (snap.phase === 'DAY_DISCUSSION_OPEN') {
+      if (snap.phase === 'NIGHT_DISCUSSION_OPEN') {
+        if ((snap.you as { wolfReady?: boolean }).wolfReady !== undefined) {
+          ws.send(JSON.stringify({ type: 'HUMAN_WOLF_SPEAK', text: 'P1：今晚襲擊目標我建議最低存活者。' }));
+          ws.send(JSON.stringify({ type: 'HUMAN_WOLF_READY' }));
+        }
+      } else if (snap.phase === 'DAY_DISCUSSION_OPEN') {
         if (snap.day !== undefined && snap.day !== speakDay) {
           speakDay = snap.day;
           ws.send(JSON.stringify({ type: 'HUMAN_SPEAK', text: `P1：第${snap.day}天多聽發言。` }));
@@ -581,7 +586,7 @@ test('遊戲結束 → 延遲後自動回大廳（座位保留、可再開一局
     const mark = seen.length;
     ws.send(JSON.stringify({ type: 'START_GAME' }));
     await waitForCond(
-      () => seen.some((m, i) => i >= mark && m.type === 'SNAPSHOT' && m.snapshot?.phase === 'NIGHT_COLLECTING'),
+      () => seen.some((m, i) => i >= mark && m.type === 'SNAPSHOT' && m.snapshot?.phase === 'NIGHT_DISCUSSION_OPEN'),
       15000, '等再開局逾時',
     );
     ws.close();

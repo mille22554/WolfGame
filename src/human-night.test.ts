@@ -4,10 +4,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createGameState, transition, getNightActors, buildPlayerSnapshot, buildSpectatorSnapshot,
+  createGameState, transition, getNightActors, buildPlayerSnapshot, buildSpectatorSnapshot, buildGMSnapshot,
 } from './game-state.js';
 import type { GameState } from './types.js';
 import { Role, Team } from './types.js';
+
+/** 狼密談收斂：全存活狼 ready → NIGHT_COLLECTING（新流程：START_GAME/ADVANCE_DAY 先進 NIGHT_DISCUSSION_OPEN） */
+function convergeWolfDiscussion(s: GameState): void {
+  for (const p of s.players) {
+    if (p.alive && p.role === Role.WEREWOLF) {
+      const r = transition(s, p.controlledBy === 'human'
+        ? { type: 'HUMAN_WOLF_READY', playerId: p.id }
+        : { type: 'AI_WOLF_READY', playerId: p.id });
+      assert.equal(r.accepted, true);
+    }
+  }
+  assert.equal(s.phase, 'NIGHT_COLLECTING');
+}
 
 function aliveIds(s: GameState): number[] {
   return s.players.filter((p) => p.alive).map((p) => p.id);
@@ -22,6 +35,8 @@ function mixedNightState(): GameState {
     if (!s.players.some((p) => p.id === id)) transition(s, { type: 'AI_JOIN', playerId: id });
   }
   transition(s, { type: 'START_GAME' });
+  assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
+  convergeWolfDiscussion(s);
   assert.equal(s.phase, 'NIGHT_COLLECTING');
   return s;
 }
@@ -123,6 +138,7 @@ test('真人 seer 夜間行動 → gate 完成 → RESOLVE_NIGHT 結算正確', 
   transition(s, { type: 'HUMAN_JOIN', playerId: 1, name: 'H' });
   for (let id = 2; id <= 6; id++) transition(s, { type: 'AI_JOIN', playerId: id });
   transition(s, { type: 'START_GAME' });
+  convergeWolfDiscussion(s);
   // 找到真人座位的角色；若非 seer/guard/狼則測投票路徑以外的通用接受
   const me = s.players.find((p) => p.id === 1)!;
   const actors = getNightActors(s);
@@ -183,4 +199,61 @@ test('狼人會議 snapshot：you.wolfMeeting 只出現在狼的 snapshot', () =
   const dumped = JSON.stringify(buildSpectatorSnapshot(s));
   assert.ok(!dumped.includes('wolfMeeting'));
   assert.ok(!dumped.includes('controlledBy'));
+});
+
+test('狼密談 HUMAN_WOLF_SPEAK（真人狼）→ wolfDiscussionLog 記錄', () => {
+  const s = createGameState(9);
+  transition(s, { type: 'HUMAN_JOIN', playerId: 3, name: 'H1' });
+  transition(s, { type: 'HUMAN_JOIN', playerId: 7, name: 'H2' });
+  for (let id = 1; id <= 9; id++) {
+    if (!s.players.some((p) => p.id === id)) transition(s, { type: 'AI_JOIN', playerId: id });
+  }
+  transition(s, { type: 'START_GAME' });
+  assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
+  const bv = s.boardVersion;
+  const r = transition(s, { type: 'HUMAN_WOLF_SPEAK', playerId: wolf.id, text: '今晚襲擊最低存活者' });
+  assert.equal(r.accepted, true);
+  assert.equal(s.wolfDiscussionLog.length, 1);
+  assert.equal(s.boardVersion, bv + 1);
+});
+
+test('真人狼 ready + AI 狼 ready → NIGHT_COLLECTING', () => {
+  const s = createGameState(9);
+  transition(s, { type: 'HUMAN_JOIN', playerId: 3, name: 'H1' });
+  transition(s, { type: 'HUMAN_JOIN', playerId: 7, name: 'H2' });
+  for (let id = 1; id <= 9; id++) {
+    if (!s.players.some((p) => p.id === id)) transition(s, { type: 'AI_JOIN', playerId: id });
+  }
+  transition(s, { type: 'START_GAME' });
+  assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
+  const ws = s.players.filter((p) => p.alive && p.role === Role.WEREWOLF);
+  assert.ok(ws.length >= 1);
+  for (const w of ws) {
+    const r = transition(s, w.controlledBy === 'human'
+      ? { type: 'HUMAN_WOLF_READY', playerId: w.id }
+      : { type: 'AI_WOLF_READY', playerId: w.id });
+    assert.equal(r.accepted, true);
+  }
+  assert.equal(s.phase, 'NIGHT_COLLECTING');
+});
+
+test('快照隱私：狼含 you.wolfDiscussionLog；村民無；GM 含 wolfDiscussionLog', () => {
+  const s = createGameState(9);
+  transition(s, { type: 'HUMAN_JOIN', playerId: 3, name: 'H1' });
+  transition(s, { type: 'HUMAN_JOIN', playerId: 7, name: 'H2' });
+  for (let id = 1; id <= 9; id++) {
+    if (!s.players.some((p) => p.id === id)) transition(s, { type: 'AI_JOIN', playerId: id });
+  }
+  transition(s, { type: 'START_GAME' });
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
+  transition(s, { type: 'HUMAN_WOLF_SPEAK', playerId: wolf.id, text: '今晚襲擊目標討論' });
+  const wolfSnap = buildPlayerSnapshot(s, wolf.id);
+  assert.ok(wolfSnap.you.wolfDiscussionLog);
+  assert.equal(wolfSnap.you.wolfDiscussionLog!.length, 1);
+  const villager = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF)!;
+  assert.equal(buildPlayerSnapshot(s, villager.id).you.wolfDiscussionLog, undefined);
+  const gm = buildGMSnapshot(s) as unknown as { wolfDiscussionLog: unknown[] };
+  assert.ok(Array.isArray(gm.wolfDiscussionLog));
+  assert.equal(gm.wolfDiscussionLog.length, 1);
 });

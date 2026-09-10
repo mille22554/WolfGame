@@ -22,3 +22,5 @@ dist-pkg/
 # OS
 .DS_Store
 Thumbs.db
+# deepwork state
+.slim/deepwork/

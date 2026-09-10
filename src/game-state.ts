@@ -41,6 +41,7 @@ export function createGameState(playerCount: number, humanPlayerIndices: number[
     players: [],
     humanPlayerIndices: [...humanPlayerIndices],
     discussionLog: [],
+    wolfDiscussionLog: [],
     votes: [],
     deathHistory: [],
     seerChecks: [],
@@ -50,6 +51,7 @@ export function createGameState(playerCount: number, humanPlayerIndices: number[
     boardVersion: 0,
     daySummaries: [],
     voteReady: [],
+    wolfReady: [],
     skippedHumans: [],
     idleCounts: {},
     takenOver: [],
@@ -190,6 +192,7 @@ function applyDisconnect(state: GameState, playerId: number, effects: Effect[]):
   }
   player.controlledBy = 'ai';
   state.voteReady = state.voteReady.filter((id) => id !== playerId);
+  state.wolfReady = state.wolfReady.filter((id) => id !== playerId);
   state.skippedHumans = state.skippedHumans.filter((id) => id !== playerId);
   const gate = state.pendingGate;
   if (gate && gate.required.includes(playerId) && !gate.done.includes(playerId)) {
@@ -209,6 +212,7 @@ function applyReconnect(state: GameState, playerId: number): TransitionResult | 
   }
   player.controlledBy = 'human';
   state.voteReady = state.voteReady.filter((id) => id !== playerId);
+  state.wolfReady = state.wolfReady.filter((id) => id !== playerId);
   delete state.idleCounts[playerId];
   state.takenOver = state.takenOver.filter((id) => id !== playerId);
   return null;
@@ -249,6 +253,12 @@ export function allAlivePlayersReady(state: GameState): boolean {
   return alive.length > 0 && alive.every((p) => state.voteReady.includes(p.id));
 }
 
+/** 狼人會議收斂檢查：所有存活狼皆在 wolfReady → 開夜晚 gate */
+export function allAliveWolvesReady(state: GameState): boolean {
+  const wolves = getAliveWerewolves(state.players);
+  return wolves.length > 0 && wolves.every((w) => state.wolfReady.includes(w.id));
+}
+
 /** 掛機接管門檻：未定真人在連續 N 次 AI 發言無活動後視為掛機（transition 計數、engine 執行接管） */
 export const IDLE_TAKEOVER_THRESHOLD = 10;
 
@@ -265,6 +275,7 @@ export function applyIdleTakeover(state: GameState, playerId: number): Effect[] 
     player.controlledBy = 'ai';
   }
   state.voteReady = state.voteReady.filter((id) => id !== playerId);
+  state.wolfReady = state.wolfReady.filter((id) => id !== playerId);
   state.skippedHumans = state.skippedHumans.filter((id) => id !== playerId);
   delete state.idleCounts[playerId];
   if (!state.takenOver.includes(playerId)) state.takenOver.push(playerId);
@@ -339,6 +350,20 @@ function recordSpeech(state: GameState, playerId: number, text: string): Transit
     return { state, effects: [], accepted: false, reason: `speaker P${playerId} not alive` };
   }
   state.discussionLog.push({ playerId, text, day: state.day });
+  state.boardVersion++;
+  return null;
+}
+
+/** 狼密談發言記錄（僅存活狼可寫入 wolfDiscussionLog；其餘拒絕） */
+function recordWolfSpeech(state: GameState, playerId: number, text: string): TransitionResult | null {
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player || !player.alive) {
+    return { state, effects: [], accepted: false, reason: `speaker P${playerId} not alive` };
+  }
+  if (player.role !== Role.WEREWOLF) {
+    return { state, effects: [], accepted: false, reason: `P${playerId} is not a wolf` };
+  }
+  state.wolfDiscussionLog.push({ playerId, text, day: state.day });
   state.boardVersion++;
   return null;
 }
@@ -466,14 +491,85 @@ export function transition(state: GameState, event: GameEvent): TransitionResult
         state.day = 1;
         state.nightActions = [];
         state.voteReady = [];
+        state.wolfReady = [];
+        state.wolfDiscussionLog = [];
         state.skippedHumans = [];
         state.idleCounts = {};
         state.takenOver = [];
-        state.phase = 'NIGHT_COLLECTING';
+        state.phase = 'NIGHT_DISCUSSION_OPEN';
         state.boardVersion++;
         const effects: Effect[] = [];
         touch(effects);
-        openNightGate(state, effects);
+        return { state, effects, accepted: true };
+      }
+      return { state, effects: [], accepted: false, reason: `ignored in ${state.phase}` };
+    }
+
+    case 'NIGHT_DISCUSSION_OPEN': {
+      if (event.type === 'HUMAN_WOLF_SPEAK') {
+        const rejected = recordWolfSpeech(state, event.playerId, event.text);
+        if (rejected) return rejected;
+        const effects: Effect[] = [];
+        touch(effects);
+        return { state, effects, accepted: true };
+      }
+      if (event.type === 'AI_WOLF_SPEECH_DONE') {
+        if (event.boardVersion !== state.boardVersion) {
+          return { state, effects: [], accepted: false, reason: 'stale boardVersion' };
+        }
+        const rejected = recordWolfSpeech(state, event.playerId, event.text);
+        if (rejected) return rejected;
+        const effects: Effect[] = [];
+        // 掛機計數：AI 狼每次發話，未就緒真人狼各 +1；已 ready 直接排除；到閾值回傳接管 effect
+        for (const h of getAlivePlayers(state.players).filter((p) => p.controlledBy === 'human' && p.role === Role.WEREWOLF)) {
+          if (state.wolfReady.includes(h.id)) {
+            delete state.idleCounts[h.id];
+            continue;
+          }
+          state.idleCounts[h.id] = (state.idleCounts[h.id] ?? 0) + 1;
+          if (state.idleCounts[h.id] >= IDLE_TAKEOVER_THRESHOLD) {
+            effects.push({ type: 'IDLE_TAKEOVER', playerId: h.id, reason: 'idle' });
+          }
+        }
+        touch(effects);
+        return { state, effects, accepted: true };
+      }
+      if (event.type === 'HUMAN_WOLF_READY' || event.type === 'AI_WOLF_READY') {
+        const player = state.players.find((p) => p.id === event.playerId);
+        if (!player || !player.alive) {
+          return { state, effects: [], accepted: false, reason: `P${event.playerId} not alive` };
+        }
+        if (player.role === Role.WEREWOLF && !state.wolfReady.includes(event.playerId)) {
+          state.wolfReady.push(event.playerId);
+        }
+        delete state.idleCounts[event.playerId];   // 已 ready 直接清空並列入計數對象外
+        const effects: Effect[] = [];
+        touch(effects);
+        if (allAliveWolvesReady(state)) {
+          state.phase = 'NIGHT_COLLECTING';
+          openNightGate(state, effects);
+        }
+        return { state, effects, accepted: true };
+      }
+      if (event.type === 'HUMAN_WOLF_UNREADY') {
+        state.wolfReady = state.wolfReady.filter((id) => id !== event.playerId);
+        clearIdleCounts(state);   // 收回視為活動，回到未定、從零重算
+        const effects: Effect[] = [];
+        touch(effects);
+        return { state, effects, accepted: true };
+      }
+      if (event.type === 'DISCONNECT') {
+        const effects: Effect[] = [];
+        touch(effects);
+        const r = applyDisconnect(state, event.playerId, effects);
+        if (r) return r;
+        return { state, effects, accepted: true };
+      }
+      if (event.type === 'RECONNECT') {
+        const r = applyReconnect(state, event.playerId);
+        if (r) return r;
+        const effects: Effect[] = [];
+        touch(effects);
         return { state, effects, accepted: true };
       }
       return { state, effects: [], accepted: false, reason: `ignored in ${state.phase}` };
@@ -786,9 +882,11 @@ export function transition(state: GameState, event: GameEvent): TransitionResult
       if (event.type === 'ADVANCE_DAY') {
         state.daySummaries.push(summarizeDay(state, state.day));
         state.day++;
-        state.phase = 'NIGHT_COLLECTING';
+        state.phase = 'NIGHT_DISCUSSION_OPEN';
         state.nightActions = [];
         state.voteReady = [];
+        state.wolfReady = [];
+        state.wolfDiscussionLog = [];
         state.skippedHumans = [];
         state.idleCounts = {};
         delete state.wolfKillTarget;
@@ -798,7 +896,6 @@ export function transition(state: GameState, event: GameEvent): TransitionResult
         state.boardVersion++;
         const effects: Effect[] = [];
         touch(effects);
-        openNightGate(state, effects);
         return { state, effects, accepted: true };
       }
       return { state, effects: [], accepted: false, reason: `ignored in ${state.phase}` };
@@ -916,6 +1013,14 @@ export function buildPlayerSnapshot(state: GameState, playerId: number): PlayerS
     you.wolfMeeting = state.nightActions
       .filter((a) => a.type === NightActionType.WOLF_KILL)
       .map((a) => ({ wolfId: a.actorId, targetId: a.targetId }));
+    // 狼密談：當天記錄＋就緒狀態（僅狼可見）
+    you.wolfDiscussionLog = state.wolfDiscussionLog
+      .filter((d) => d.day === state.day)
+      .map((d) => ({ playerId: d.playerId, text: d.text }));
+    you.wolfReady = state.wolfReady.includes(playerId);
+    you.wolfReadyIds = getAliveWerewolves(state.players)
+      .filter((w) => state.wolfReady.includes(w.id))
+      .map((w) => w.id);
   }
 
   // Phase 2：gate 公開資訊（無身分洩漏）
@@ -966,7 +1071,7 @@ export function buildGMSnapshot(state: GameState, flagStats?: FlagStats): GMSnap
   if (lastKill && lastKill.day === state.day) {
     nightResult = `昨晚 P${lastKill.playerId} 遇襲身亡`;
   }
-  return {
+  const snap: GMSnapshot = {
     phase: state.phase,
     day: state.day,
     players: state.players.map((p) => ({ ...p })),
@@ -989,6 +1094,10 @@ export function buildGMSnapshot(state: GameState, flagStats?: FlagStats): GMSnap
     personalityNames: Object.fromEntries(personalities.map((p) => [p.id, p.name])),
     flagStats,
   };
+  // 狼密談全量（GM 可見；types 未宣告故經區域擴充型別掛載）
+  (snap as GMSnapshot & { wolfDiscussionLog: { playerId: number; text: string; day: number }[] }).wolfDiscussionLog =
+    state.wolfDiscussionLog.map((d) => ({ playerId: d.playerId, text: d.text, day: d.day }));
+  return snap;
 }
 
 // ============================================

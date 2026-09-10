@@ -21,7 +21,7 @@ function wolfTarget(s, exclude) {
 /** 身分扁平化：AI prompt 與觀戰 snapshot 永不含 controlledBy */
 function assertFlat(s) {
     for (const p of s.players.filter((x) => x.alive)) {
-        for (const kind of ['speech', 'vote', 'night']) {
+        for (const kind of ['speech', 'vote', 'night', 'wolf_speech']) {
             const prompt = buildPrompt(s, p.id, kind);
             assert.ok(!prompt.includes('controlledBy'), `P${p.id} ${kind} prompt 洩漏 controlledBy`);
         }
@@ -106,7 +106,7 @@ test('混合局：2 真人 + 7 AI 跑到 gameOver（含中途斷線接管）', (
     }
     engine.enqueue({ type: 'START_GAME' });
     engine.drain();
-    assert.equal(engine.getState().phase, 'NIGHT_COLLECTING');
+    assert.equal(engine.getState().phase, 'NIGHT_DISCUSSION_OPEN');
     const humanActions = { accepted: 0, total: 0 };
     let disconnected = false;
     let steps = 0;
@@ -115,6 +115,15 @@ test('混合局：2 真人 + 7 AI 跑到 gameOver（含中途斷線接管）', (
         const s = engine.getState();
         assertFlat(s);
         switch (s.phase) {
+            case 'NIGHT_DISCUSSION_OPEN': {
+                for (const p of engine.getState().players.filter((x) => x.alive && x.role === Role.WEREWOLF)) {
+                    engine.enqueue(p.controlledBy === 'human'
+                        ? { type: 'HUMAN_WOLF_READY', playerId: p.id }
+                        : { type: 'AI_WOLF_READY', playerId: p.id });
+                }
+                engine.drain();
+                break;
+            }
             case 'NIGHT_COLLECTING':
                 driveNight(engine);
                 break;

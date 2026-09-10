@@ -16,7 +16,21 @@ function aliveIds(s: GameState): number[] {
   return s.players.filter((p) => p.alive).map((p) => p.id);
 }
 
+/** 狼密談收斂：全存活狼 ready → NIGHT_COLLECTING（新流程：START_GAME/ADVANCE_DAY 先進 NIGHT_DISCUSSION_OPEN） */
+function convergeWolfDiscussion(s: GameState): void {
+  for (const p of s.players) {
+    if (p.alive && p.role === Role.WEREWOLF) {
+      const r = transition(s, p.controlledBy === 'human'
+        ? { type: 'HUMAN_WOLF_READY', playerId: p.id }
+        : { type: 'AI_WOLF_READY', playerId: p.id });
+      assert.equal(r.accepted, true);
+    }
+  }
+  assert.equal(s.phase, 'NIGHT_COLLECTING');
+}
+
 function toDiscussion(s: GameState, keep: number[] = []): void {
+  if (s.phase === 'NIGHT_DISCUSSION_OPEN') convergeWolfDiscussion(s);
   for (const pid of getNightActors(s)) {
     const me = s.players.find((p) => p.id === pid)!;
     let pool = aliveIds(s).filter((id) => id !== pid && !keep.includes(id));
@@ -51,6 +65,7 @@ test('seer 看得到自己的 seerChecks', () => {
   const s = createGameState(9);
   joinAll(s, 9);
   transition(s, { type: 'START_GAME' });
+  convergeWolfDiscussion(s);
   const seer = s.players.find((p) => p.role === Role.SEER)!;
   const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
   for (const pid of getNightActors(s)) {
@@ -87,6 +102,7 @@ test('guard 看得到自己的 guardProtects', () => {
   transition(s, { type: 'ADVANCE_DAY' });
   assert.equal(s.day, 2);
   assert.ok(guard.alive);
+  convergeWolfDiscussion(s);
   const actors = getNightActors(s);
   assert.ok(actors.includes(guard.id));
   for (const pid of actors) {
@@ -166,6 +182,7 @@ test('GM snapshot 完整（含 role/team/controlledBy）', () => {
   const s = createGameState(6);
   joinAll(s, 6);
   transition(s, { type: 'START_GAME' });
+  convergeWolfDiscussion(s);
   // 構造夜間行動＋夜聊＋死亡，驗證新欄位
   const seer = s.players.find((p) => p.role === Role.SEER)!;
   const guard = s.players.find((p) => p.role === Role.GUARD)!;
@@ -240,6 +257,7 @@ test('nightResult 由最後一筆 wolf_kill 推導', () => {
   const s = createGameState(9);
   joinAll(s, 9);
   transition(s, { type: 'START_GAME' });
+  convergeWolfDiscussion(s);
   const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
   const victim = aliveIds(s).find((id) => s.players.find((p) => p.id === id)!.team !== Team.WEREWOLF)!;
   for (const pid of getNightActors(s)) {
@@ -276,4 +294,23 @@ test('觀戰者 snapshot：公開欄位與玩家一致、無 you、無角色洩�
   assert.equal(spec.nightResult, player.nightResult);
   assert.deepEqual(spec.discussionLog, player.discussionLog);
   assert.deepEqual(spec.votes, player.votes);
+});
+
+test('狼密談快照：狼含 day-filtered you.wolfDiscussionLog；村民無；觀戰者無；GM 含全量', () => {
+  const s = createGameState(9);
+  joinAll(s, 9);
+  transition(s, { type: 'START_GAME' });
+  assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
+  transition(s, { type: 'HUMAN_WOLF_SPEAK', playerId: wolf.id, text: '今晚殺P3' });
+  const wolfSnap = buildPlayerSnapshot(s, wolf.id);
+  assert.ok(wolfSnap.you.wolfDiscussionLog);
+  assert.equal(wolfSnap.you.wolfDiscussionLog!.length, 1);
+  const villager = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF)!;
+  assert.equal(buildPlayerSnapshot(s, villager.id).you.wolfDiscussionLog, undefined);
+  const specDumped = JSON.stringify(buildSpectatorSnapshot(s));
+  assert.ok(!specDumped.includes('wolfDiscussionLog'));
+  const gm = buildGMSnapshot(s) as unknown as { wolfDiscussionLog: { playerId: number; text: string; day: number }[] };
+  assert.ok(Array.isArray(gm.wolfDiscussionLog));
+  assert.equal(gm.wolfDiscussionLog.length, 1);
 });

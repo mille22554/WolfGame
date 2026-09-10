@@ -100,7 +100,7 @@ test('START_GAME 後角色分配包含真人座位', () => {
   assert.equal(s.phase, 'SETUP_READY');
   const r = transition(s, { type: 'START_GAME' });
   assert.equal(r.accepted, true);
-  assert.equal(s.phase, 'NIGHT_COLLECTING');
+  assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
   const humans = s.players.filter((p) => p.controlledBy === 'human');
   assert.equal(humans.length, 2);
   // 真人座位也有分配到正式角色（不再全是佔位 VILLAGER 唯—情況除外，至少 team 正確）

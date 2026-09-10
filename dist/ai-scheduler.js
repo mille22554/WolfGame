@@ -20,15 +20,16 @@
  * - AI decided 且其發言成功播出後 → enqueue AI_READY_VOTE（不帶版本；單向不退；標的可變覆蓋）；
  *   transition 統一檢查全員 ready → 直進投票（無 CLOSING）。
  */
+import { Role } from './types.js';
 import { getAlivePlayers } from './assignment.js';
-import { buildPreSpeechPrompt, buildJudgePrompt, buildExpandPrompt, summarizeDay, } from './character-session.js';
+import { buildPreSpeechPrompt, buildJudgePrompt, buildExpandPrompt, summarizeDay, buildWolfPreSpeechPrompt, buildWolfExpandPrompt, summarizeWolfDiscussion, } from './character-session.js';
 import { noveltyPenalty } from './novelty.js';
 import { shuffleArray } from './utils.js';
 /** 安全閥：單一 AI 連續資訊不足次數上限（防卡死底線；只計真正資訊不足） */
 export const MAX_UNCERTAIN_ROUNDS = 100;
-/** 正規 flag：[決定:投P3]／[決定:棄票]／[決定:資訊不足]（方括號跳脫、全形/半形冒號、全域匹配） */
-export const DECISION_FLAG_RE = /\[決定[:：](投P\s*\d+|棄票|資訊不足)\]/g;
-const DECISION_TARGET_RE = /投P\s*(\d+)/;
+/** 正規 flag：[決定:投P3]／[決定:殺P3]／[決定:棄票]／[決定:資訊不足]（方括號跳脫、全形/半形冒號、全域匹配） */
+export const DECISION_FLAG_RE = /\[決定[:：](投P\s*\d+|殺P\s*\d+|棄票|資訊不足)\]/g;
+const DECISION_TARGET_RE = /(?:投|殺)P\s*(\d+)/;
 /** 寬鬆層：決策語境的投 Pn（動詞＋編號才認，避免討論提及誤判） */
 const LOOSE_VOTE_RES = [
     /我投\s*P?\s*(\d+)/,
@@ -39,6 +40,9 @@ const LOOSE_VOTE_RES = [
     /會投\s*P?\s*(\d+)/,
     /準備投\s*P?\s*(\d+)/,
     /投票給\s*P?\s*(\d+)/,
+    /決定殺\s*P?\s*(\d+)/,
+    /要殺\s*P?\s*(\d+)/,
+    /襲擊\s*P?\s*(\d+)/,
 ];
 const LOOSE_ABSTAIN_RE = /棄票|放棄投票|不投票|投棄權/;
 const LOOSE_UNCERTAIN_RE = /資訊不足|無法決定|還不能決定|不能決定|不確定|還不確定|再觀察|多聽|還要聽|再聽聽|觀望|難以判斷|沒有想法|沒想法|還沒想法/;
@@ -116,7 +120,8 @@ export class SpeechScheduler {
     onPhaseEntered(state) {
         if (this.stopped)
             return;
-        if (state.phase === 'DAY_DISCUSSION_OPEN') {
+        if (state.phase === 'DAY_DISCUSSION_OPEN' || state.phase === 'NIGHT_DISCUSSION_OPEN') {
+            // 模式一律由 state.phase 推導（NIGHT_DISCUSSION_OPEN = 狼），不另存可過期的 mode 欄位
             if (state.day !== this.lastDay) {
                 this.lastDay = state.day;
                 this.uncertainCounts.clear();
@@ -136,7 +141,7 @@ export class SpeechScheduler {
     onBoardUpdated(state) {
         if (this.stopped)
             return;
-        if (state.phase !== 'DAY_DISCUSSION_OPEN')
+        if (state.phase !== 'DAY_DISCUSSION_OPEN' && state.phase !== 'NIGHT_DISCUSSION_OPEN')
             return;
         if (state.boardVersion === this.lastSeenBoardVersion)
             return;
@@ -202,21 +207,23 @@ export class SpeechScheduler {
         catch {
             return;
         }
-        if (state.phase !== 'DAY_DISCUSSION_OPEN')
+        if (state.phase !== 'DAY_DISCUSSION_OPEN' && state.phase !== 'NIGHT_DISCUSSION_OPEN')
             return;
         this.cdReady = true;
         if (this.stash)
             void this.broadcastStash();
         // 無貨 → 等做好馬上播（生產完成時見 cdReady 直接播）
     }
-    /** 草稿候選：存活 AI 除上輪發言者外全員；為空 → 不生產（等真人） */
+    /** 草稿候選：存活 AI 除上輪發言者外全員（狼模式僅存活狼 AI）；為空 → 不生產（等真人） */
     candidateIds(state) {
+        const isWolf = state.phase === 'NIGHT_DISCUSSION_OPEN';
         const aliveAI = getAlivePlayers(state.players)
-            .filter((p) => p.controlledBy === 'ai')
+            .filter((p) => p.controlledBy === 'ai' && (!isWolf || p.role === Role.WEREWOLF))
             .map((p) => p.id);
         if (aliveAI.length === 0)
             return [];
-        const today = state.discussionLog.filter((d) => d.day === state.day);
+        const log = isWolf ? state.wolfDiscussionLog : state.discussionLog;
+        const today = log.filter((d) => d.day === state.day);
         const last = today[today.length - 1];
         if (!last)
             return [...aliveAI];
@@ -233,7 +240,7 @@ export class SpeechScheduler {
         catch {
             return;
         }
-        if (state.phase !== 'DAY_DISCUSSION_OPEN')
+        if (state.phase !== 'DAY_DISCUSSION_OPEN' && state.phase !== 'NIGHT_DISCUSSION_OPEN')
             return;
         const ids = this.candidateIds(state);
         if (ids.length === 0)
@@ -249,7 +256,7 @@ export class SpeechScheduler {
             if (token !== this.prodToken)
                 return;
             const cur1 = this.ctx.getState();
-            if (cur1.phase !== 'DAY_DISCUSSION_OPEN')
+            if (cur1.phase !== 'DAY_DISCUSSION_OPEN' && cur1.phase !== 'NIGHT_DISCUSSION_OPEN')
                 return;
             if (cur1.boardVersion !== startVersion)
                 return; // 作廢（新一輪已接手）
@@ -264,12 +271,14 @@ export class SpeechScheduler {
             if (token !== this.prodToken)
                 return;
             const cur2 = this.ctx.getState();
-            if (cur2.phase !== 'DAY_DISCUSSION_OPEN')
+            if (cur2.phase !== 'DAY_DISCUSSION_OPEN' && cur2.phase !== 'NIGHT_DISCUSSION_OPEN')
                 return;
             if (cur2.boardVersion !== startVersion)
                 return; // 作廢
             // ---- SELECT：新穎性懲罰 + top3 隨機 ----
-            const recent = cur2.discussionLog
+            const isWolfMode = cur2.phase === 'NIGHT_DISCUSSION_OPEN';
+            const discussLog = isWolfMode ? cur2.wolfDiscussionLog : cur2.discussionLog;
+            const recent = discussLog
                 .filter((d) => d.day === cur2.day)
                 .slice(-this.options.recentCompareCount)
                 .map((d) => d.text);
@@ -281,7 +290,9 @@ export class SpeechScheduler {
             const winner = top[Math.floor(Math.random() * top.length)];
             const commitVersion = this.ctx.getState().boardVersion;
             // ---- EXPAND：產出後清洗 flag（廉價保險），再暫存 ----
-            const expandPrompt = buildExpandPrompt(cur2, winner.playerId, winner.text);
+            const expandPrompt = isWolfMode
+                ? buildWolfExpandPrompt(cur2, winner.playerId, winner.text)
+                : buildExpandPrompt(cur2, winner.playerId, winner.text);
             let full;
             try {
                 full = stripDecisionFlags((await this.ctx.llm.generate(expandPrompt, {
@@ -295,7 +306,7 @@ export class SpeechScheduler {
             }
             if (token !== this.prodToken)
                 return;
-            if (this.ctx.getState().phase !== 'DAY_DISCUSSION_OPEN')
+            if (this.ctx.getState().phase !== 'DAY_DISCUSSION_OPEN' && this.ctx.getState().phase !== 'NIGHT_DISCUSSION_OPEN')
                 return;
             if (!full) {
                 this.scheduleRetry();
@@ -339,7 +350,11 @@ export class SpeechScheduler {
                 return [];
             const chunk = ids.slice(i, i + batch);
             const settled = await Promise.all(chunk.map(async (pid) => {
-                const prompt = buildPreSpeechPrompt(this.ctx.getState(), pid);
+                const st = this.ctx.getState();
+                const isWolf = st.phase === 'NIGHT_DISCUSSION_OPEN';
+                const prompt = isWolf
+                    ? buildWolfPreSpeechPrompt(st, pid)
+                    : buildPreSpeechPrompt(st, pid);
                 for (let attempt = 0; attempt < 2; attempt++) {
                     try {
                         const raw = (await this.ctx.llm.generate(prompt, {
@@ -402,7 +417,9 @@ export class SpeechScheduler {
         return { decided, abstain, uncertain };
     }
     async judge(token, state, drafts) {
-        const summary = summarizeDay(state, state.day);
+        const summary = state.phase === 'NIGHT_DISCUSSION_OPEN'
+            ? summarizeWolfDiscussion(state, state.day)
+            : summarizeDay(state, state.day);
         const prompt = buildJudgePrompt(summary, drafts.map((d) => ({ slot: d.slot, text: d.text })));
         let raw = '';
         try {
@@ -446,11 +463,14 @@ export class SpeechScheduler {
         catch {
             return;
         }
-        if (state.phase !== 'DAY_DISCUSSION_OPEN')
+        if (state.phase !== 'DAY_DISCUSSION_OPEN' && state.phase !== 'NIGHT_DISCUSSION_OPEN')
             return;
         if (state.boardVersion !== s.boardVersion)
             return; // 版本已動：作廢（新一輪接手）
-        this.ctx.enqueue({ type: 'AI_SPEECH_DONE', playerId: s.playerId, text: s.text, boardVersion: s.boardVersion });
+        const isWolf = state.phase === 'NIGHT_DISCUSSION_OPEN';
+        this.ctx.enqueue(isWolf
+            ? { type: 'AI_WOLF_SPEECH_DONE', playerId: s.playerId, text: s.text, boardVersion: s.boardVersion }
+            : { type: 'AI_SPEECH_DONE', playerId: s.playerId, text: s.text, boardVersion: s.boardVersion });
         // 發言成功確認：log 落子即成功（engine 同步處理；含版本檢查）
         let cur;
         try {
@@ -459,21 +479,29 @@ export class SpeechScheduler {
         catch {
             return;
         }
-        const today = cur.discussionLog.filter((d) => d.day === cur.day);
+        const log = isWolf ? cur.wolfDiscussionLog : cur.discussionLog;
+        const today = log.filter((d) => d.day === cur.day);
         const lastEntry = today[today.length - 1];
         const ok = !!lastEntry && lastEntry.playerId === s.playerId && lastEntry.text === s.text;
         if (!ok) {
             // 被拒（版本競態）→ 視為白板活動：重啟 CD＋重跑
-            if (cur.phase !== 'DAY_DISCUSSION_OPEN')
+            if (cur.phase !== 'DAY_DISCUSSION_OPEN' && cur.phase !== 'NIGHT_DISCUSSION_OPEN')
                 return;
             this.lastSeenBoardVersion = cur.boardVersion;
             this.restartCd(cur);
             this.startProduction();
             return;
         }
-        // 發言成功後 enqueue 新 decided（不帶版本；已在 voteReady 則免）
-        if (s.decision.status === 'decided' && !cur.voteReady.includes(s.playerId)) {
-            this.ctx.enqueue({ type: 'AI_READY_VOTE', playerId: s.playerId });
+        // 發言成功後 enqueue 新 decided（不帶版本；已在 ready 則免）
+        if (s.decision.status === 'decided') {
+            if (isWolf) {
+                if (!cur.wolfReady.includes(s.playerId)) {
+                    this.ctx.enqueue({ type: 'AI_WOLF_READY', playerId: s.playerId });
+                }
+            }
+            else if (!cur.voteReady.includes(s.playerId)) {
+                this.ctx.enqueue({ type: 'AI_READY_VOTE', playerId: s.playerId });
+            }
         }
         // 收斂直進投票由 transition 統一檢查完成；播出本身即白板更新，迴圈經 onBoardUpdated 回去。
     }

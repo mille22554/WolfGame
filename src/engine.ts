@@ -13,6 +13,7 @@ import type {
 } from './types.js';
 import { transition, buildPlayerSnapshot, buildSpectatorSnapshot, buildLobbySnapshot, saveState, createGameState, applyIdleTakeover } from './game-state.js';
 import { buildPrompt } from './character-session.js';
+import { Role } from './types.js';
 
 // 正典定義已移至 types.ts；此處再匯出以保持舊引用相容
 export type { LLMDispatcher, ClientRegistry } from './types.js';
@@ -150,8 +151,9 @@ export class GameEngine {
     if (this.state.gameOver && !prevGameOver) {
       this.options.onGameOver?.(this.state);
     }
-    // Phase 2：任何 boardVersion 變更（含 HUMAN_SPEAK）即時通知 scheduler（CD 重置）
-    if (this.state.boardVersion !== prevBoardVersion && this.options.scheduler) {
+    // Phase 2：討論中白板更新（boardVersion 變更且 phase 未變）即時通知 scheduler（CD 重置）。
+    // phase 進入不通知：由 onPhaseEntered 統一處理，避免 scheduler 以舊/未定 mode 誤啟動生產線
+    if (this.state.boardVersion !== prevBoardVersion && this.state.phase === prevPhase && this.options.scheduler) {
       this.options.scheduler.onBoardUpdated(this.state);
     }
     if (this.state.phase !== prevPhase) {
@@ -172,13 +174,23 @@ export class GameEngine {
     }
     switch (state.phase) {
       case 'DAY_DISCUSSION_OPEN':
+      case 'NIGHT_DISCUSSION_OPEN':
         // Phase 0：分派全存活 AI 發言；Phase 1 由 scheduler 決定
         if (this.options.scheduler) {
           this.options.scheduler.onPhaseEntered(state);
         } else if (this.options.llm) {
-          for (const p of state.players) {
-            if (p.alive && p.controlledBy === 'ai') {
-              void this.dispatchLLM(p.id, 'speech');
+          if (state.phase === 'DAY_DISCUSSION_OPEN') {
+            for (const p of state.players) {
+              if (p.alive && p.controlledBy === 'ai') {
+                void this.dispatchLLM(p.id, 'speech');
+              }
+            }
+          } else {
+            // 狼人密談：只分派存活 AI 狼人
+            for (const p of state.players) {
+              if (p.alive && p.controlledBy === 'ai' && p.role === Role.WEREWOLF) {
+                void this.dispatchLLM(p.id, 'wolf_speech');
+              }
             }
           }
         }
@@ -197,7 +209,7 @@ export class GameEngine {
       default:
         break;
     }
-    if (this.options.scheduler && state.phase !== 'DAY_DISCUSSION_OPEN') {
+    if (this.options.scheduler && state.phase !== 'DAY_DISCUSSION_OPEN' && state.phase !== 'NIGHT_DISCUSSION_OPEN') {
       this.options.scheduler.onPhaseEntered(state);
     }
   }
@@ -269,7 +281,7 @@ export class GameEngine {
     }
   }
 
-  private async dispatchLLM(playerId: number, kind: 'speech' | 'vote' | 'night'): Promise<void> {
+  private async dispatchLLM(playerId: number, kind: 'speech' | 'vote' | 'night' | 'wolf_speech'): Promise<void> {
     const llm = this.options.llm;
     if (!llm) return;
     const player = this.state.players.find((p) => p.id === playerId);
@@ -285,6 +297,13 @@ export class GameEngine {
           const { text } = await llm.requestSpeech(playerId, prompt);
           const result = this.processEvent({ type: 'AI_SPEECH_DONE', playerId, text, boardVersion: captured });
           this.drain();   // processEvent 的 ENQUEUE（如 gate 完成 → 結算）需 drain 才會執行
+          if (result.accepted) return;
+        } else if (kind === 'wolf_speech') {
+          // 狼人密談：沿用 speech 請求，事件走 AI_WOLF_SPEECH_DONE
+          const captured = this.state.boardVersion;
+          const { text } = await llm.requestSpeech(playerId, prompt);
+          const result = this.processEvent({ type: 'AI_WOLF_SPEECH_DONE', playerId, text, boardVersion: captured });
+          this.drain();
           if (result.accepted) return;
         } else if (kind === 'vote') {
           const { targetId } = await llm.requestVote(playerId, prompt);

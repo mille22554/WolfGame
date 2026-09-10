@@ -13,15 +13,16 @@ import { Personality } from './personalities.js';
 // Schema
 // ============================================
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 // ============================================
-// Phase（扁平，9 值）
+// Phase（扁平，10 值）
 // ============================================
 
 export type Phase =
   | 'SETUP_WAITING_JOIN'      // 等待玩家加入
   | 'SETUP_READY'             // 人數足夠，可開始
+  | 'NIGHT_DISCUSSION_OPEN'   // 狼人夜晚密談開放（僅狼可見）
   | 'NIGHT_COLLECTING'        // 夜晚，收集行動
   | 'NIGHT_RESOLVING'         // 夜晚行動結算
   | 'DAY_DISCUSSION_OPEN'     // 白天討論開放（自由發言；全員 ready 直進投票）
@@ -31,7 +32,7 @@ export type Phase =
   | 'GAME_OVER_FINAL';        // 遊戲結束
 
 // ============================================
-// GameEvent（union，22 事件）
+// GameEvent（union，27 事件）
 // ============================================
 
 export type GameEvent =
@@ -45,6 +46,11 @@ export type GameEvent =
   | { type: 'HUMAN_VOTE'; playerId: number; targetId: number }
   | { type: 'HUMAN_NIGHT_ACTION'; playerId: number; targetId: number }
   | { type: 'AI_SPEECH_DONE'; playerId: number; text: string; boardVersion: number }
+  | { type: 'AI_WOLF_SPEECH_DONE'; playerId: number; text: string; boardVersion: number }   // 狼密談 AI 發言完成
+  | { type: 'HUMAN_WOLF_SPEAK'; playerId: number; text: string }   // 狼密談真人發言
+  | { type: 'AI_WOLF_READY'; playerId: number }   // 狼密談 AI 準備就緒
+  | { type: 'HUMAN_WOLF_READY'; playerId: number }   // 狼密談真人準備就緒
+  | { type: 'HUMAN_WOLF_UNREADY'; playerId: number }   // 狼密談真人取消就緒
   | { type: 'AI_VOTE_DONE'; playerId: number; targetId: number }
   | { type: 'AI_NIGHT_DONE'; playerId: number; targetId: number }
   | { type: 'MASON_CHAT'; playerId: number; text: string }
@@ -173,6 +179,7 @@ export interface GameState {
   players: Player[];
   humanPlayerIndices: number[];
   discussionLog: DiscussionEntry[];
+  wolfDiscussionLog: DiscussionEntry[];   // 狼人夜晚密談記錄（僅狼可見）
   votes: Vote[];
   deathHistory: DeathRecord[];
   seerChecks: { seerId: number; targetId: number; result: Team; day: number }[];
@@ -182,6 +189,7 @@ export interface GameState {
   boardVersion: number;           // 白板版本號
   daySummaries: string[];         // 每天摘要（截斷用）
   voteReady: number[];            // 已準備投票的玩家（真人 + AI）
+  wolfReady: number[];            // 狼密談已就緒的玩家（真人 + AI）
   skippedHumans: number[];        // Phase 2：當天已跳過發言的真人 playerId（保留：待用戶確認刪除）
   /** 掛機計數：playerId → 該真人未定期間的 AI 發言次數；任一真人發話／跳過／收回即清空，到 10 觸發接管 */
   idleCounts: Record<number, number>;
@@ -225,6 +233,9 @@ export interface PlayerSnapshot {
     mediumResults?: { targetId: number; team: Team; day: number }[];  // 由 deathHistory 推導
     masonPartnerId?: number;
     masonChatLog?: { playerId: number; text: string }[];
+    wolfDiscussionLog?: { playerId: number; text: string }[];   // 狼密談記錄（僅狼本人可見）
+    wolfReady?: boolean;           // 狼密談：我是否已就緒（僅狼）
+    wolfReadyIds?: number[];       // 狼密談：已就緒的存活狼（僅狼）
     wolfAllyIds?: number[];
     canAct?: boolean;            // Phase 2：目前是否輪到我行動：pendingGate 存在 && required 含我 && done 不含我
     takenOver: boolean;          // 掛機接管標記：true → 顯示「AI 接管中」panel＋拿回座位鈕（每次快照重算）
@@ -510,8 +521,11 @@ export type ClientToServerMessage =
   | { type: 'SET_RANDOM_COUNT'; enabled: boolean }
   | { type: 'CHAT_SEND'; text: string }
   | { type: 'HUMAN_SPEAK'; text: string }
+  | { type: 'HUMAN_WOLF_SPEAK'; text: string }   // 狼密談發言
   | { type: 'HUMAN_SKIP' }
   | { type: 'HUMAN_READY_VOTE' }
   | { type: 'HUMAN_UNREADY_VOTE' }
+  | { type: 'HUMAN_WOLF_READY' }   // 狼密談就緒
+  | { type: 'HUMAN_WOLF_UNREADY' }   // 狼密談取消就緒
   | { type: 'HUMAN_VOTE'; targetId: number }
   | { type: 'HUMAN_NIGHT_ACTION'; targetId: number };

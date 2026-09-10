@@ -6,6 +6,7 @@
     SETUP_WAITING_JOIN: '等待玩家加入',
     SETUP_READY: '準備開始',
     NIGHT_COLLECTING: '夜晚（行動中）',
+    NIGHT_DISCUSSION_OPEN: '夜晚討論（狼）',
     NIGHT_RESOLVING: '夜晚結算',
     DAY_DISCUSSION_OPEN: '白天討論',
     DAY_VOTING_COLLECTING: '投票中',
@@ -916,6 +917,18 @@
     return html || '<div class="msg">等待遊戲開始…</div>';
   }
 
+  // 狼人密談：僅狼可見，不混入公開 discussionLog
+  function wolfDiscussionHtml(you) {
+    if (!you || you.role !== 'werewolf' || !Array.isArray(you.wolfDiscussionLog)) return '';
+    var log = you.wolfDiscussionLog.slice(-30);
+    var html = '<h2>狼人密談</h2>';
+    if (log.length === 0) return html + '<div class="msg">尚無密談</div>';
+    for (var i = 0; i < log.length; i++) {
+      html += '<div class="msg">P' + log[i].playerId + '：' + esc(log[i].text) + '</div>';
+    }
+    return html;
+  }
+
   // 玩家卡片：只顯示 P{id} name，不顯示 controlledBy / AI 標記
   function playersHtml(snapshot, selectable) {
     var alive = {};
@@ -1077,7 +1090,7 @@
     }
     dayEl.textContent = '第 ' + snapshot.day + ' 天';
     phaseEl.textContent = PHASE_LABELS[snapshot.phase] || snapshot.phase;
-    boardEl.innerHTML = boardHtml(snapshot);
+    boardEl.innerHTML = boardHtml(snapshot) + wolfDiscussionHtml(snapshot.you);
     boardEl.scrollTop = boardEl.scrollHeight;
 
     var needSelect = snapshot.phase === 'DAY_VOTING_COLLECTING'
@@ -1173,6 +1186,21 @@
       } else {
         html = '<div class="msg">無夜間行動</div>';
       }
+    } else if (snapshot.phase === 'NIGHT_DISCUSSION_OPEN') {
+      // 狼人密談：僅狼可發言＋準備；非狼等待（不開放選卡）
+      if (you.role !== 'werewolf') {
+        html = '<div class="msg">等待狼人討論…</div>';
+      } else {
+        var readyIds = Array.isArray(you.wolfReadyIds) ? you.wolfReadyIds : [];
+        html = '<div><input id="wolf-speak-input" type="text" placeholder="狼人密談…">'
+          + '<button id="wolf-speak-btn" type="button">發言</button></div>';
+        if (readyIds.length > 0) {
+          html += '<div class="msg">已準備：' + readyIds.map(function (id) { return 'P' + id; }).join('、') + '</div>';
+        }
+        html += you.wolfReady
+          ? '<div><button id="wolf-unready-btn" type="button">收回準備</button></div>'
+          : '<div><button id="wolf-ready-btn" type="button">準備收斂</button></div>';
+      }
     } else if (snapshot.phase === 'DAY_DISCUSSION_OPEN') {
       html = '<div><input id="speak-input" type="text" placeholder="發言…">'
         + '<button id="speak-btn" type="button">發言</button></div>';
@@ -1221,6 +1249,26 @@
       unreadyBtn.addEventListener('click', function () {
         state.readySent = false;
         send({ type: 'HUMAN_UNREADY_VOTE' });
+      });
+    }
+    // 狼人密談按鈕（同日間發言的 send 模式）
+    var wolfSpeakBtn = document.getElementById('wolf-speak-btn');
+    if (wolfSpeakBtn) {
+      wolfSpeakBtn.addEventListener('click', function () {
+        var text = document.getElementById('wolf-speak-input').value.trim();
+        if (text) send({ type: 'HUMAN_WOLF_SPEAK', text: text });
+      });
+    }
+    var wolfReadyBtn = document.getElementById('wolf-ready-btn');
+    if (wolfReadyBtn) {
+      wolfReadyBtn.addEventListener('click', function () {
+        send({ type: 'HUMAN_WOLF_READY' });
+      });
+    }
+    var wolfUnreadyBtn = document.getElementById('wolf-unready-btn');
+    if (wolfUnreadyBtn) {
+      wolfUnreadyBtn.addEventListener('click', function () {
+        send({ type: 'HUMAN_WOLF_UNREADY' });
       });
     }
     bindTargetInput();

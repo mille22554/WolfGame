@@ -30,6 +30,7 @@ function startedState(count = 9, humans: number[] = []): GameState {
   const s = joinedState(count, humans);
   const r = transition(s, { type: 'START_GAME' });
   assert.equal(r.accepted, true);
+  convergeWolfDiscussion(s);
   return s;
 }
 
@@ -37,7 +38,21 @@ function aliveIds(s: GameState): number[] {
   return s.players.filter((p) => p.alive).map((p) => p.id);
 }
 
+/** 狼密談收斂：全存活狼 ready → NIGHT_COLLECTING（新流程：START_GAME/ADVANCE_DAY 先進 NIGHT_DISCUSSION_OPEN） */
+function convergeWolfDiscussion(s: GameState): void {
+  for (const p of s.players) {
+    if (p.alive && p.role === Role.WEREWOLF) {
+      const r = transition(s, p.controlledBy === 'human'
+        ? { type: 'HUMAN_WOLF_READY', playerId: p.id }
+        : { type: 'AI_WOLF_READY', playerId: p.id });
+      assert.equal(r.accepted, true);
+    }
+  }
+  assert.equal(s.phase, 'NIGHT_COLLECTING');
+}
+
 function completeNight(s: GameState, targetForWolf?: number): void {
+  if (s.phase === 'NIGHT_DISCUSSION_OPEN') convergeWolfDiscussion(s);
   const actors = getNightActors(s);
   for (const pid of actors) {
     const me = s.players.find((p) => p.id === pid)!;
@@ -59,6 +74,7 @@ function toDiscussion(s: GameState): void {
 
 /** 確定性守夜：狼殺指定 keep 之外的最低存活非狼；keep 內玩家保證存活 */
 function nightKeeping(s: GameState, keep: number[] = []): void {
+  if (s.phase === 'NIGHT_DISCUSSION_OPEN') convergeWolfDiscussion(s);
   for (const pid of getNightActors(s)) {
     const me = s.players.find((p) => p.id === pid)!;
     let pool = aliveIds(s).filter((id) => id !== pid && !keep.includes(id));
@@ -110,27 +126,25 @@ test('SETUP_WAITING_JOIN：START_GAME 被拒絕（人數不足）', () => {
   assert.equal(s.phase, 'SETUP_WAITING_JOIN');
 });
 
-test('SETUP_READY：START_GAME → 角色分配 + NIGHT_COLLECTING + boardVersion++', () => {
+test('SETUP_READY：START_GAME → 角色分配 + NIGHT_DISCUSSION_OPEN + boardVersion++', () => {
   const s = joinedState(9);
   assert.equal(s.phase, 'SETUP_READY');
   const bv0 = s.boardVersion;
   const r = transition(s, { type: 'START_GAME' });
   assert.equal(r.accepted, true);
-  assert.equal(s.phase, 'NIGHT_COLLECTING');
+  assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
   assert.equal(s.day, 1);
   assert.equal(s.boardVersion, bv0 + 1);
   // 角色已分配（不再全是村民），9 人局應有 2 狼
   const wolves = s.players.filter((p) => p.role === Role.WEREWOLF);
   assert.equal(wolves.length, 2);
-  // night gate 已開，deadline 為 0（timer 由 engine 設定）
+  // 狼密談收斂 → NIGHT_COLLECTING + night gate 已開
+  convergeWolfDiscussion(s);
+  assert.equal(s.phase, 'NIGHT_COLLECTING');
   assert.ok(s.pendingGate);
   assert.equal(s.pendingGate!.kind, 'night');
   assert.equal(s.pendingGate!.deadline, 0);
   assert.deepEqual([...s.pendingGate!.required].sort(), [...getNightActors(s)].sort());
-  // effects 含 ARM_GATE + 對應 DISPATCH_LLM
-  assert.ok(r.effects.some((e) => e.type === 'ARM_GATE'));
-  const dispatches = r.effects.filter((e) => e.type === 'DISPATCH_LLM');
-  assert.equal(dispatches.length, s.pendingGate!.required.length);
 });
 
 // ---------- NIGHT ----------
@@ -331,12 +345,102 @@ test('DAY_RESULT_ANNOUNCING：ADVANCE_DAY → daySummary + NIGHT_COLLECTING', ()
   const r = transition(s, { type: 'ADVANCE_DAY' });
   assert.equal(r.accepted, true);
   assert.equal(s.day, day0 + 1);
-  assert.equal(s.phase, 'NIGHT_COLLECTING');
+  assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
   assert.equal(s.daySummaries.length, 1);
   assert.equal(s.boardVersion, bv0 + 1);
+  convergeWolfDiscussion(s);
+  assert.equal(s.phase, 'NIGHT_COLLECTING');
   assert.ok(s.pendingGate);
   assert.equal(s.pendingGate!.kind, 'night');
   assert.deepEqual(s.voteReady, []);
+});
+
+// ---------- 狼密談 ----------
+
+test('START_GAME → NIGHT_DISCUSSION_OPEN（wolfDiscussionLog/wolfReady 清空）', () => {
+  const s = joinedState(9);
+  transition(s, { type: 'START_GAME' });
+  assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
+  assert.deepEqual(s.wolfDiscussionLog, []);
+  assert.deepEqual(s.wolfReady, []);
+});
+
+test('HUMAN_WOLF_SPEAK（狼）→ wolfDiscussionLog + boardVersion++', () => {
+  const s = joinedState(9);
+  transition(s, { type: 'START_GAME' });
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
+  const bv = s.boardVersion;
+  const r = transition(s, { type: 'HUMAN_WOLF_SPEAK', playerId: wolf.id, text: '今晚殺P3' });
+  assert.equal(r.accepted, true);
+  assert.equal(s.wolfDiscussionLog.length, 1);
+  assert.equal(s.boardVersion, bv + 1);
+});
+
+test('HUMAN_WOLF_SPEAK（非狼）→ 拒絕', () => {
+  const s = joinedState(9);
+  transition(s, { type: 'START_GAME' });
+  const nonWolf = s.players.find((p) => p.role !== Role.WEREWOLF && p.alive)!;
+  assert.equal(transition(s, { type: 'HUMAN_WOLF_SPEAK', playerId: nonWolf.id, text: '我是好人' }).accepted, false);
+});
+
+test('AI_WOLF_SPEECH_DONE 版本不符 → 拒絕', () => {
+  const s = joinedState(9);
+  transition(s, { type: 'START_GAME' });
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
+  const r = transition(s, { type: 'AI_WOLF_SPEECH_DONE', playerId: wolf.id, text: '過期', boardVersion: s.boardVersion - 1 });
+  assert.equal(r.accepted, false);
+});
+
+test('全存活狼 ready → NIGHT_COLLECTING + 開夜晚 gate；部分 ready 維持 OPEN', () => {
+  const s = joinedState(9);
+  transition(s, { type: 'START_GAME' });
+  const wolves = s.players.filter((p) => p.alive && p.role === Role.WEREWOLF);
+  assert.ok(wolves.length >= 2);
+  const first = wolves[0];
+  transition(s, first.controlledBy === 'human'
+    ? { type: 'HUMAN_WOLF_READY', playerId: first.id }
+    : { type: 'AI_WOLF_READY', playerId: first.id });
+  assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
+  for (const w of wolves.slice(1)) {
+    transition(s, w.controlledBy === 'human'
+      ? { type: 'HUMAN_WOLF_READY', playerId: w.id }
+      : { type: 'AI_WOLF_READY', playerId: w.id });
+  }
+  assert.equal(s.phase, 'NIGHT_COLLECTING');
+  assert.ok(s.pendingGate);
+  assert.equal(s.pendingGate!.kind, 'night');
+});
+
+test('HUMAN_WOLF_UNREADY → 移出 wolfReady', () => {
+  const s = joinedState(9);
+  transition(s, { type: 'START_GAME' });
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
+  transition(s, wolf.controlledBy === 'human'
+    ? { type: 'HUMAN_WOLF_READY', playerId: wolf.id }
+    : { type: 'AI_WOLF_READY', playerId: wolf.id });
+  assert.ok(s.wolfReady.includes(wolf.id));
+  assert.equal(transition(s, { type: 'HUMAN_WOLF_UNREADY', playerId: wolf.id }).accepted, true);
+  assert.ok(!s.wolfReady.includes(wolf.id));
+});
+
+test('DISCONNECT（狼密談就緒真人狼）→ 移出 wolfReady + 翻轉為 ai', () => {
+  const s = createGameState(9);
+  transition(s, { type: 'HUMAN_JOIN', playerId: 1, name: 'H' });
+  for (let id = 2; id <= 9; id++) transition(s, { type: 'AI_JOIN', playerId: id });
+  transition(s, { type: 'START_GAME' });
+  const wolf1 = s.players.find((p) => p.id === 1)!;
+  if (wolf1.role !== Role.WEREWOLF) {
+    const other = s.players.find((p) => p.role === Role.WEREWOLF && p.controlledBy === 'human');
+    if (!other) return; // 本局真人非狼，跳過（角色隨機）
+  }
+  transition(s, { type: 'HUMAN_WOLF_READY', playerId: 1 });
+  if (s.players.find((p) => p.id === 1)!.role === Role.WEREWOLF) {
+    assert.ok(s.wolfReady.includes(1));
+  }
+  const r = transition(s, { type: 'DISCONNECT', playerId: 1 });
+  assert.equal(r.accepted, true);
+  assert.equal(s.players.find((p) => p.id === 1)!.controlledBy, 'ai');
+  assert.ok(!s.wolfReady.includes(1));
 });
 
 // ---------- GAME OVER ----------

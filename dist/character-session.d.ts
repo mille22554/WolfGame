@@ -10,7 +10,7 @@
  * 入選草稿由 expand 階段以性格潤飾（語氣收斂、不浮誇）。
  */
 import type { GameState } from './types.js';
-export type PromptKind = 'speech' | 'vote' | 'night';
+export type PromptKind = 'speech' | 'vote' | 'night' | 'wolf_speech';
 export declare function buildPrompt(state: GameState, playerId: number, kind: PromptKind, budget?: number): string;
 /**
  * summarizeDay：啟發式摘要 — top3 指控（被最多人點名）+ 投票結果
@@ -36,4 +36,18 @@ export declare function buildJudgePrompt(daySummary: string, preSpeeches: {
  * buildPrompt(state, playerId, 'speech') + 預發言草稿附加
  */
 export declare function buildExpandPrompt(state: GameState, playerId: number, preSpeech: string): string;
+/**
+ * summarizeWolfDiscussion：狼討論摘要 — top 提及的襲擊目標（無投票段）
+ */
+export declare function summarizeWolfDiscussion(state: GameState, day: number): string;
+/**
+ * buildWolfPreSpeechPrompt（狼預發言，輕量）：
+ * 私有知識 → 當晚狼討論最近 5 則 → 任務指令（含殺人決策旗標）
+ */
+export declare function buildWolfPreSpeechPrompt(state: GameState, playerId: number): string;
+/**
+ * buildWolfExpandPrompt（狼展開完整發言）：
+ * buildPrompt(state, playerId, 'wolf_speech') + 預發言草稿附加
+ */
+export declare function buildWolfExpandPrompt(state: GameState, playerId: number, preSpeech: string): string;
 //# sourceMappingURL=character-session.d.ts.map

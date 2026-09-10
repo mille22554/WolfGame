@@ -1,6 +1,6 @@
 /**
  * Game Master CLI — Phase 0：GameEngine 的 CLI 包裝
- * 用法：node dist/gm.js <init|join|state|start-day|night|speak|vote|mason-chat|reveal>
+ * 用法：node dist/gm.js <init|join|state|start-day|night|speak|wolf-ready|vote|mason-chat|reveal>
  */
 
 import { GameEngine } from './engine.js';
@@ -112,26 +112,59 @@ switch (command) {
   }
 
   case 'speak': {
-    // speak <playerId> <message>：真人 → HUMAN_SPEAK；AI → AI_SPEECH_DONE（帶當前 boardVersion）
+    // speak <playerId> <message>：狼會議階段 → HUMAN_WOLF_SPEAK / AI_WOLF_SPEECH_DONE；白天 → HUMAN_SPEAK / AI_SPEECH_DONE
     const playerId = parseInt(args[1], 10);
     const message = args.slice(2).join(' ');
     if (!Number.isInteger(playerId) || !message) {
       error('Usage: gm.js speak <playerId> <message>');
     }
     const engine = loadEngine();
-    const player = engine.getState().players.find((p) => p.id === playerId);
+    const state = engine.getState();
+    const player = state.players.find((p) => p.id === playerId);
     if (!player) error(`Unknown player P${playerId}`);
-    if (player!.controlledBy === 'human') {
+    if (state.phase === 'NIGHT_DISCUSSION_OPEN') {
+      if (player!.controlledBy === 'human') {
+        engine.enqueue({ type: 'HUMAN_WOLF_SPEAK', playerId, text: message });
+      } else {
+        engine.enqueue({
+          type: 'AI_WOLF_SPEECH_DONE',
+          playerId,
+          text: message,
+          boardVersion: state.boardVersion,
+        });
+      }
+    } else if (player!.controlledBy === 'human') {
       engine.enqueue({ type: 'HUMAN_SPEAK', playerId, text: message });
     } else {
       engine.enqueue({
         type: 'AI_SPEECH_DONE',
         playerId,
         text: message,
-        boardVersion: engine.getState().boardVersion,
+        boardVersion: state.boardVersion,
       });
     }
     flush(engine, `Recorded message from P${playerId}`);
+    break;
+  }
+
+  case 'wolf-ready': {
+    // wolf-ready <playerId>：存活狼收斂；AI → AI_WOLF_READY，真人 → HUMAN_WOLF_READY
+    const playerId = parseInt(args[1], 10);
+    if (!Number.isInteger(playerId)) {
+      error('Usage: gm.js wolf-ready <playerId>');
+    }
+    const engine = loadEngine();
+    const player = engine.getState().players.find((p) => p.id === playerId);
+    if (!player) error(`Unknown player P${playerId}`);
+    if (!player!.alive || player!.role !== Role.WEREWOLF) {
+      error(`P${playerId} is not an alive wolf`);
+    }
+    if (player!.controlledBy === 'ai') {
+      engine.enqueue({ type: 'AI_WOLF_READY', playerId });
+    } else {
+      engine.enqueue({ type: 'HUMAN_WOLF_READY', playerId });
+    }
+    flush(engine, `Wolf ready recorded for P${playerId}`);
     break;
   }
 
@@ -194,5 +227,5 @@ switch (command) {
   }
 
   default:
-    error(`Unknown command: ${command}. Available: init, join, state, start-day, night, speak, vote, mason-chat, reveal`);
+    error(`Unknown command: ${command}. Available: init, join, state, start-day, night, speak, wolf-ready, vote, mason-chat, reveal`);
 }

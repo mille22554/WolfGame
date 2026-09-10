@@ -197,7 +197,9 @@ export function isTakeoverFiltered(client, msgType) {
         return false;
     return msgType === 'HUMAN_SPEAK' || msgType === 'HUMAN_SKIP'
         || msgType === 'HUMAN_READY_VOTE' || msgType === 'HUMAN_UNREADY_VOTE'
-        || msgType === 'HUMAN_VOTE' || msgType === 'HUMAN_NIGHT_ACTION';
+        || msgType === 'HUMAN_VOTE' || msgType === 'HUMAN_NIGHT_ACTION'
+        || msgType === 'HUMAN_WOLF_SPEAK' || msgType === 'HUMAN_WOLF_READY'
+        || msgType === 'HUMAN_WOLF_UNREADY';
 }
 export class WebSocketRegistry {
     opts;
@@ -593,7 +595,10 @@ export class WebSocketRegistry {
             case 'HUMAN_READY_VOTE':
             case 'HUMAN_UNREADY_VOTE':
             case 'HUMAN_VOTE':
-            case 'HUMAN_NIGHT_ACTION': {
+            case 'HUMAN_NIGHT_ACTION':
+            case 'HUMAN_WOLF_SPEAK':
+            case 'HUMAN_WOLF_READY':
+            case 'HUMAN_WOLF_UNREADY': {
                 // 掛機接管中：舊 WS 的遊戲操作一律忽略（只收 RECONNECT；推送不受影響）
                 if (isTakeoverFiltered(client, msg.type))
                     return;
@@ -620,6 +625,15 @@ export class WebSocketRegistry {
                         break;
                     case 'HUMAN_NIGHT_ACTION':
                         event = { type: 'HUMAN_NIGHT_ACTION', playerId: pid, targetId: msg.targetId };
+                        break;
+                    case 'HUMAN_WOLF_SPEAK':
+                        event = { type: 'HUMAN_WOLF_SPEAK', playerId: pid, text: msg.text };
+                        break;
+                    case 'HUMAN_WOLF_READY':
+                        event = { type: 'HUMAN_WOLF_READY', playerId: pid };
+                        break;
+                    case 'HUMAN_WOLF_UNREADY':
+                        event = { type: 'HUMAN_WOLF_UNREADY', playerId: pid };
                         break;
                 }
                 const r = actions.humanEvent(event);

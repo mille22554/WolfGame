@@ -66,7 +66,7 @@ test('存檔觸發：phase 變更立即寫檔', () => {
     engine.drain();
     assert.ok(fs.existsSync(SAVE_FILE));
     const saved = JSON.parse(fs.readFileSync(SAVE_FILE, 'utf-8'));
-    assert.equal(saved.phase, 'NIGHT_COLLECTING');
+    assert.equal(saved.phase, 'NIGHT_DISCUSSION_OPEN');
     engine.close();
 });
 test('版本丟棄：舊 boardVersion 的 AI_SPEECH_DONE 被丟棄', () => {
@@ -74,6 +74,13 @@ test('版本丟棄：舊 boardVersion 的 AI_SPEECH_DONE 被丟棄', () => {
     for (let i = 0; i < 6; i++)
         engine.enqueue({ type: 'CLIENT_JOIN', name: `P${i + 1}` });
     engine.enqueue({ type: 'START_GAME' });
+    engine.drain();
+    for (const p of engine.getState().players.filter((x) => x.alive && x.role === Role.WEREWOLF)) {
+        engine.enqueue(p.controlledBy === 'human'
+            ? { type: 'HUMAN_WOLF_READY', playerId: p.id }
+            : { type: 'AI_WOLF_READY', playerId: p.id });
+    }
+    engine.drain();
     engine.enqueue({ type: 'ACTION_TIMEOUT', gateId: 'night-1' });
     engine.drain();
     assert.equal(engine.getState().phase, 'DAY_DISCUSSION_OPEN');
@@ -92,6 +99,12 @@ test('gate timer：web 模式超時自動 ACTION_TIMEOUT', async () => {
     for (let i = 0; i < 6; i++)
         engine.enqueue({ type: 'CLIENT_JOIN', name: `P${i + 1}` });
     engine.enqueue({ type: 'START_GAME' });
+    engine.drain();
+    for (const p of engine.getState().players.filter((x) => x.alive && x.role === Role.WEREWOLF)) {
+        engine.enqueue(p.controlledBy === 'human'
+            ? { type: 'HUMAN_WOLF_READY', playerId: p.id }
+            : { type: 'AI_WOLF_READY', playerId: p.id });
+    }
     engine.drain();
     assert.equal(engine.getState().phase, 'NIGHT_COLLECTING');
     assert.ok((engine.getState().pendingGate?.deadline ?? 0) > 0);
@@ -115,6 +128,15 @@ test('ScriptedGM：啟發式完整局跑通（確定性策略）', () => {
         steps++;
         const s = engine.getState();
         switch (s.phase) {
+            case 'NIGHT_DISCUSSION_OPEN': {
+                for (const p of engine.getState().players.filter((x) => x.alive && x.role === Role.WEREWOLF)) {
+                    engine.enqueue(p.controlledBy === 'human'
+                        ? { type: 'HUMAN_WOLF_READY', playerId: p.id }
+                        : { type: 'AI_WOLF_READY', playerId: p.id });
+                }
+                engine.drain();
+                break;
+            }
             case 'NIGHT_COLLECTING':
                 for (const pid of getNightActors(s)) {
                     engine.enqueue({ type: 'AI_NIGHT_DONE', playerId: pid, targetId: lowestAliveExcept(engine.getState(), pid) });
@@ -171,7 +193,15 @@ test('onGameOver：進入 GAME_OVER_FINAL 時觸發一次，結束後事件不�
     while (!engine.getState().gameOver && steps < 200) {
         steps++;
         const s = engine.getState();
-        if (s.phase === 'NIGHT_COLLECTING') {
+        if (s.phase === 'NIGHT_DISCUSSION_OPEN') {
+            for (const p of s.players.filter((x) => x.alive && x.role === Role.WEREWOLF)) {
+                engine.enqueue(p.controlledBy === 'human'
+                    ? { type: 'HUMAN_WOLF_READY', playerId: p.id }
+                    : { type: 'AI_WOLF_READY', playerId: p.id });
+            }
+            engine.drain();
+        }
+        else if (s.phase === 'NIGHT_COLLECTING') {
             for (const pid of getNightActors(s)) {
                 engine.enqueue({ type: 'AI_NIGHT_DONE', playerId: pid, targetId: lowestExcept(pid) });
             }
@@ -214,13 +244,20 @@ test('Phase 2：boardVersion 變更 → scheduler.onBoardUpdated 被呼叫', () 
     engine.drain();
     const beforeJoin = notified.length;
     engine.enqueue({ type: 'START_GAME' });
+    engine.drain();
+    for (const p of engine.getState().players.filter((x) => x.alive && x.role === Role.WEREWOLF)) {
+        engine.enqueue(p.controlledBy === 'human'
+            ? { type: 'HUMAN_WOLF_READY', playerId: p.id }
+            : { type: 'AI_WOLF_READY', playerId: p.id });
+    }
+    engine.drain();
     engine.enqueue({ type: 'ACTION_TIMEOUT', gateId: 'night-1' });
     engine.drain();
     assert.equal(engine.getState().phase, 'DAY_DISCUSSION_OPEN');
-    // START_GAME / RESOLVE_NIGHT 皆 boardVersion++ → 皆通知
-    assert.ok(notified.length > beforeJoin);
+    // phase 進入（START_GAME / RESOLVE_NIGHT / ADVANCE_DAY）不觸發 onBoardUpdated（由 onPhaseEntered 處理）
+    assert.equal(notified.length, beforeJoin);
     const n0 = notified.length;
-    // HUMAN_SPEAK 被接受 → boardVersion++ → 通知
+    // HUMAN_SPEAK 被接受 → boardVersion++（phase 未變）→ 通知
     const speaker = aliveIds(engine.getState())[0];
     engine.enqueue({ type: 'HUMAN_SPEAK', playerId: speaker, text: '真人發言' });
     engine.drain();
@@ -247,6 +284,12 @@ test('掛機接管鏈：10 次 AI 發言 → engine 切座位＋takenOver 標記
     for (let id = 2; id <= 6; id++)
         engine.enqueue({ type: 'AI_JOIN', playerId: id });
     engine.enqueue({ type: 'START_GAME' });
+    engine.drain();
+    for (const p of engine.getState().players.filter((x) => x.alive && x.role === Role.WEREWOLF)) {
+        engine.enqueue(p.controlledBy === 'human'
+            ? { type: 'HUMAN_WOLF_READY', playerId: p.id }
+            : { type: 'AI_WOLF_READY', playerId: p.id });
+    }
     engine.drain();
     // 確定性守夜：保 P1 存活（狼刀 P1 以外最低非狼）
     {

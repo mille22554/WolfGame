@@ -59,11 +59,24 @@ class MockLLM {
         return this.calls.map((c) => c.kind);
     }
 }
+/** 狼密談收斂：全存活狼 ready → NIGHT_COLLECTING（新流程：START_GAME/ADVANCE_DAY 先進 NIGHT_DISCUSSION_OPEN） */
+function convergeWolfDiscussion(s) {
+    for (const p of s.players) {
+        if (p.alive && p.role === Role.WEREWOLF) {
+            const r = transition(s, p.controlledBy === 'human'
+                ? { type: 'HUMAN_WOLF_READY', playerId: p.id }
+                : { type: 'AI_WOLF_READY', playerId: p.id });
+            assert.equal(r.accepted, true);
+        }
+    }
+    assert.equal(s.phase, 'NIGHT_COLLECTING');
+}
 function discussionState(playerCount = 9) {
     const s = createGameState(playerCount);
     for (let i = 0; i < playerCount; i++)
         transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
     transition(s, { type: 'START_GAME' });
+    convergeWolfDiscussion(s);
     for (const pid of getNightActors(s)) {
         transition(s, { type: 'AI_NIGHT_DONE', playerId: pid, targetId: s.players.filter((p) => p.alive && p.id !== pid)[0].id });
     }
@@ -86,6 +99,13 @@ function makeCtx(state, llm) {
                 }
                 if (e.type === 'AI_READY_VOTE' && !state.voteReady.includes(e.playerId)) {
                     state.voteReady.push(e.playerId);
+                }
+                if (e.type === 'AI_WOLF_SPEECH_DONE') {
+                    state.wolfDiscussionLog.push({ playerId: e.playerId, text: e.text, day: state.day });
+                    state.boardVersion++;
+                }
+                if (e.type === 'AI_WOLF_READY' && !state.wolfReady.includes(e.playerId)) {
+                    state.wolfReady.push(e.playerId);
                 }
                 if (e.type === 'HUMAN_SPEAK')
                     state.boardVersion++;
@@ -144,11 +164,13 @@ test('flag 正規解析：投Pn／棄票／資訊不足（全形冒號亦收）'
     assert.deepEqual(parseDecisionFlag('草稿內容\n[決定：投P12]'), { status: 'decided', target: 12 });
     assert.deepEqual(parseDecisionFlag('草稿\n[決定:棄票]'), { status: 'decided', target: 'abstain' });
     assert.deepEqual(parseDecisionFlag('草稿\n[決定:資訊不足]'), { status: 'uncertain' });
+    assert.deepEqual(parseDecisionFlag('草稿\n[決定:殺P3]'), { status: 'decided', target: 3 });
 });
 test('flag 寬鬆解析：決策語境關鍵字認 decided；不確定類詞認 uncertain；都不中才 uncertain', () => {
     assert.deepEqual(parseDecisionFlag('我想了很久，我投P2'), { status: 'decided', target: 2 });
     assert.deepEqual(parseDecisionFlag('我決定投 P5 吧'), { status: 'decided', target: 5 });
     assert.deepEqual(parseDecisionFlag('這一票要投P7'), { status: 'decided', target: 7 });
+    assert.deepEqual(parseDecisionFlag('我決定殺P5'), { status: 'decided', target: 5 });
     assert.deepEqual(parseDecisionFlag('我決定棄票好了'), { status: 'decided', target: 'abstain' });
     assert.deepEqual(parseDecisionFlag('資訊不足，還想再觀察'), { status: 'uncertain' });
     assert.deepEqual(parseDecisionFlag('今天天氣真好'), { status: 'uncertain' });
@@ -834,6 +856,7 @@ function mixedDiscussionState() {
             transition(s, { type: 'AI_JOIN', playerId: id });
     }
     transition(s, { type: 'START_GAME' });
+    convergeWolfDiscussion(s);
     const keep = [3, 7];
     const alive = s.players.filter((p) => p.alive).map((p) => p.id);
     for (const pid of getNightActors(s)) {
@@ -865,6 +888,66 @@ test('混合局：進場即全員草稿開工（不等任何門檻；quiet 已�
         assert.ok(llm.calls.some((c) => c.kind === 'pre_speech'), '進場即開工，不等 quiet／跳過');
         assert.ok(sch.stashForTest(), '生產完成暫存');
         void events;
+    }
+    finally {
+        sch.stop();
+    }
+});
+test('狼模式：進場即狼草稿開工；CD 到播 AI_WOLF_SPEECH_DONE + decided 後 AI_WOLF_READY', async () => {
+    const s = createGameState(9);
+    for (let i = 0; i < 9; i++)
+        transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+    transition(s, { type: 'START_GAME' });
+    assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
+    const llm = defaultMock();
+    const { ctx, events } = makeCtx(s, llm);
+    const sch = new SpeechScheduler(ctx, { cdMs: 60000 });
+    try {
+        sch.onPhaseEntered(s);
+        await flushN(3);
+        const pres = llm.calls.filter((c) => c.kind === 'pre_speech');
+        assert.ok(pres.length > 0, '狼模式應生產預發言');
+        for (const c of pres) {
+            assert.ok(c.prompt.includes('今晚') || c.prompt.includes('襲擊'), '狼預發言應為狼 prompt');
+        }
+        assert.ok(sch.stashForTest(), '生產完成應暫存');
+        assert.equal(events.length, 0, 'CD 內不廣播');
+        const bvBefore = s.boardVersion;
+        mock.timers.tick(60000);
+        await flush();
+        assert.ok(events.length >= 1);
+        assert.equal(events[0].type, 'AI_WOLF_SPEECH_DONE');
+        if (events[0].type === 'AI_WOLF_SPEECH_DONE') {
+            assert.equal(events[0].boardVersion, bvBefore);
+            assert.ok(!events[0].text.includes('[決定'), 'flag 永不進白板');
+        }
+        assert.ok(events.some((e) => e.type === 'AI_WOLF_READY'), 'decided 發言後應 enqueue AI_WOLF_READY');
+    }
+    finally {
+        sch.stop();
+    }
+});
+test('狼模式候選：僅存活 AI 狼（不含 seer/guard/真人）', async () => {
+    const s = createGameState(9);
+    for (let i = 0; i < 9; i++)
+        transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+    transition(s, { type: 'START_GAME' });
+    assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
+    const llm = defaultMock();
+    const { ctx } = makeCtx(s, llm);
+    const sch = new SpeechScheduler(ctx, { cdMs: 60000 });
+    try {
+        sch.onPhaseEntered(s);
+        await flushN(3);
+        const pres = llm.calls.filter((c) => c.kind === 'pre_speech').map((c) => {
+            const m = c.prompt.match(/你是 P(\d+)/);
+            return m ? parseInt(m[1], 10) : -1;
+        });
+        const expectWolves = s.players.filter((p) => p.alive && p.controlledBy === 'ai' && p.role === Role.WEREWOLF).map((p) => p.id);
+        assert.ok(expectWolves.length >= 1);
+        assert.deepEqual([...pres].sort((a, b) => a - b), [...expectWolves].sort((a, b) => a - b));
+        const seer = s.players.find((p) => p.role === Role.SEER);
+        assert.ok(!pres.includes(seer.id), 'seer 不應列入狼候選');
     }
     finally {
         sch.stop();

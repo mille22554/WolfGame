@@ -27,7 +27,7 @@ function readTextIfExists(filePath: string): string {
   }
 }
 
-export type PromptKind = 'speech' | 'vote' | 'night';
+export type PromptKind = 'speech' | 'vote' | 'night' | 'wolf_speech';
 
 function taskInstruction(kind: PromptKind, playerId: number): string {
   switch (kind) {
@@ -37,6 +37,8 @@ function taskInstruction(kind: PromptKind, playerId: number): string {
       return `【任務】你是 P${playerId}，請投票。回顧今天的發言與你的私有情報，選出最值得懷疑的一人。只回覆一句話，不要角色扮演。回覆格式：我投 P{編號}。`;
     case 'night':
       return `【任務】你是 P${playerId}，請選擇今晚行動的目標（必須是存活且非自己的玩家）。只回覆一句話，不要角色扮演。回覆：我選擇 P{編號}。`;
+    case 'wolf_speech':
+      return `【任務】你是 P${playerId}（人狼），請與同伴討論今晚要襲擊誰、協調目標（一句話，30-60字）。圍繞「誰威脅最大」「守衛可能保誰」聊，用「我覺得今晚…」語氣。以你的性格自然表達，但語氣不要過於強烈或浮誇。格式：P${playerId}：「你的發言」；結尾另起一行附加決策旗標[決定:殺P編號]（已決定目標時）或[決定:資訊不足]（尚無法決定時），只可附加其一。`;
   }
 }
 
@@ -100,9 +102,9 @@ export function buildPrompt(
   const maxCurrentDayEntries = 60;
 
   // --- 固定部分 ---
-  // 人格分層：night/vote 是中性行動決策，不帶人格；speech（正式發言）才帶人格
+  // 人格分層：night/vote 是中性行動決策，不帶人格；speech/wolf_speech（正式發言）才帶人格
   const personaId = player.personality || `p${playerId}`;
-  const includePersona = kind === 'speech';
+  const includePersona = kind === 'speech' || kind === 'wolf_speech';
   const personaPrompt = includePersona
     ? readTextIfExists(path.join(getResourceRoot(), 'character', personaId, 'agents.md'))
     : '';
@@ -124,11 +126,16 @@ export function buildPrompt(
   ].filter((s) => s !== '');
 
   // --- 可截斷部分 ---
-  const todayEntries = state.discussionLog
+  // 狼討論走 wolfDiscussionLog（當天），不帶白天歷史摘要
+  const isWolfSpeech = kind === 'wolf_speech';
+  const todayEntries = (isWolfSpeech ? state.wolfDiscussionLog : state.discussionLog)
     .filter((d) => d.day === state.day)
     .slice(-maxCurrentDayEntries);
   let currentLines = todayEntries.map((d) => `P${d.playerId}：${d.text}`);
-  let summaries = [...state.daySummaries];
+  // 狼討論無白天摘要；僅白天流程帶 daySummaries
+  let summaries = isWolfSpeech ? [] : [...state.daySummaries];
+  // 狼討論改用專屬標題，避免與白天對話混淆
+  const discussionTitle = isWolfSpeech ? '【今晚狼討論紀錄】' : '【今日對話紀錄】';
 
   // 組裝（與最終輸出逐字一致；截斷計量以此為準，含標題與 \n\n 連接符，
   // 舊 totalLength 只加總三區塊內容、漏算組裝開銷，邊界帶會超過預算）
@@ -137,7 +144,7 @@ export function buildPrompt(
     parts.splice(
       fixedParts.length - 1,
       0,
-      `【今日對話紀錄】\n${currentLines.length > 0 ? currentLines.join('\n') : '（尚無發言）'}`,
+      `${discussionTitle}\n${currentLines.length > 0 ? currentLines.join('\n') : '（尚無發言）'}`,
       summaries.length > 0 ? `【歷史摘要】\n${summaries.join('\n')}` : '',
     );
     return parts.filter((s) => s !== '').join('\n\n');
@@ -273,4 +280,64 @@ export function buildJudgePrompt(
 export function buildExpandPrompt(state: GameState, playerId: number, preSpeech: string): string {
   const base = buildPrompt(state, playerId, 'speech');
   return `${base}\n\n【你的預發言草稿】${preSpeech}\n你可以沿用或修改這則草稿，以你的性格自然潤飾，展開成完整發言（30-60 字）；語氣符合人格但不要過於強烈或浮誇。`;
+}
+
+/**
+ * summarizeWolfDiscussion：狼討論摘要 — top 提及的襲擊目標（無投票段）
+ */
+export function summarizeWolfDiscussion(state: GameState, day: number): string {
+  const entries = state.wolfDiscussionLog.filter((d) => d.day === day);
+  const alivePlayers = getAlivePlayers(state.players);
+  // 復用指控解析：狼文本中的 P編號提及即視為襲擊目標候選
+  const mentionCounts = new Map<number, number>();
+  for (const e of entries) {
+    for (const id of parseAccusatoryIds(e.text, alivePlayers)) {
+      mentionCounts.set(id, (mentionCounts.get(id) ?? 0) + 1);
+    }
+  }
+  const top3 = Array.from(mentionCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3);
+  if (top3.length > 0) {
+    return `第${day}天狼討論摘要：最多被提及的目標：${top3.map(([id, c]) => `P${id}（${c}次）`).join('、')}`;
+  }
+  return `第${day}天狼討論摘要：尚無明確目標`;
+}
+
+/**
+ * buildWolfPreSpeechPrompt（狼預發言，輕量）：
+ * 私有知識 → 當晚狼討論最近 5 則 → 任務指令（含殺人決策旗標）
+ */
+export function buildWolfPreSpeechPrompt(state: GameState, playerId: number): string {
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) throw new Error(`找不到玩家 P${playerId}`);
+  // 草稿中性：不讀 agents.md（入選後由 expand 階段以性格潤飾）
+  const privateLines = privateKnowledgeLines(state, playerId);
+  const recent = state.wolfDiscussionLog
+    .filter((d) => d.day === state.day)
+    .slice(-PRE_SPEECH_RECENT)
+    .map((d) => `P${d.playerId}：${d.text}`);
+  const parts: string[] = [
+    `【你的角色資訊】\n${privateLines.join('\n')}`,
+    `【今晚狼討論】\n${recent.length > 0 ? recent.join('\n') : '（尚無發言）'}`,
+    `【任務】你是 P${playerId}，請寫一句 20-40 字的預發言草稿，與同伴討論今晚要襲擊誰、協調目標（不超過 40 字，中性語氣）。\n格式：P${playerId}：「你的草稿」`,
+    `【決策旗標】草稿結尾另起一行附加你的襲擊決策狀態（中控內部判讀用，不會公開）：已決定襲擊某人→[決定:殺P編號]；資訊不足無法決定→[決定:資訊不足]。只可附加其一。`,
+  ];
+  let prompt = parts.join('\n\n');
+  // 超預算：先丟最近討論最舊條目（固定部分保留）
+  while (prompt.length > PRE_SPEECH_BUDGET && recent.length > 1) {
+    recent.shift();
+    parts[1] = `【今晚狼討論】\n${recent.join('\n')}`;
+    prompt = parts.join('\n\n');
+  }
+  return prompt;
+}
+
+/**
+ * buildWolfExpandPrompt（狼展開完整發言）：
+ * buildPrompt(state, playerId, 'wolf_speech') + 預發言草稿附加
+ */
+export function buildWolfExpandPrompt(state: GameState, playerId: number, preSpeech: string): string {
+  const base = buildPrompt(state, playerId, 'wolf_speech');
+  return `${base}\n\n【你的預發言草稿】${preSpeech}\n你可以沿用或修改這則草稿，以你的性格自然潤飾，展開成完整發言（30-60 字，討論今晚襲擊目標）；語氣符合人格但不要過於強烈或浮誇。`;
 }
