@@ -1262,6 +1262,9 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
       humanEvent: (event) => {
         if (!engine) return { accepted: false, reason: 'engine not ready' };
         const result = engine.tryEvent(event);
+        // 真人事件可能觸發 ENQUEUE 級聯（如完成夜間 gate → RESOLVE_NIGHT）；
+        // tryEvent 只處理單一事件不消化佇列，必須 drain，否則結算事件卡 queue、遊戲凍結
+        engine.drain();
         return { accepted: result.accepted, reason: result.reason };
       },
       disconnectPlayer: (playerId) => {

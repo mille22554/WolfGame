@@ -122,12 +122,22 @@ export function buildPrompt(
   let currentLines = todayEntries.map((d) => `P${d.playerId}：${d.text}`);
   let summaries = [...state.daySummaries];
 
-  const totalLength = (): number =>
-    fixedParts.join('\n\n').length + currentLines.join('\n').length + summaries.join('\n').length;
+  // 組裝（與最終輸出逐字一致；截斷計量以此為準，含標題與 \n\n 連接符，
+  // 舊 totalLength 只加總三區塊內容、漏算組裝開銷，邊界帶會超過預算）
+  const assemble = (): string => {
+    const parts: string[] = [...fixedParts];
+    parts.splice(
+      fixedParts.length - 1,
+      0,
+      `【今日對話紀錄】\n${currentLines.length > 0 ? currentLines.join('\n') : '（尚無發言）'}`,
+      summaries.length > 0 ? `【歷史摘要】\n${summaries.join('\n')}` : '',
+    );
+    return parts.filter((s) => s !== '').join('\n\n');
+  };
 
   // 截斷演算法：先丟最舊 daySummary，再丟當天最舊討論條目；
   // 固定部分超限 → 原樣輸出（不截斷）
-  while (totalLength() > maxChars) {
+  while (assemble().length > maxChars) {
     if (summaries.length > 0) {
       summaries = summaries.slice(1);
     } else if (currentLines.length > 0) {
@@ -137,14 +147,7 @@ export function buildPrompt(
     }
   }
 
-  const parts: string[] = [...fixedParts];
-  parts.splice(
-    fixedParts.length - 1,
-    0,
-    `【今日對話紀錄】\n${currentLines.length > 0 ? currentLines.join('\n') : '（尚無發言）'}`,
-    summaries.length > 0 ? `【歷史摘要】\n${summaries.join('\n')}` : '',
-  );
-  return parts.filter((s) => s !== '').join('\n\n');
+  return assemble();
 }
 
 /**

@@ -266,10 +266,12 @@ test('DAY_VOTING_RESOLVING：RESOLVE_VOTES → 最高票出局 + DAY_RESULT_ANNO
     const s = startedState(9);
     toVotingAllAI(s);
     const voters = [...s.pendingGate.required];
-    const target = voters[0];
+    // 硬化（flake 修復）：鎖定非狼為票死目標，避免洗牌使首日票死最後一狼而直接結束
+    // （原寫 voters[0] 在狼為最低存活 id 時觸發 GAME_OVER；同 ADVANCE_DAY 測試修法，斷言意圖不變）
+    const target = voters.find((v) => s.players.find((p) => p.id === v).role !== Role.WEREWOLF) ?? voters[0];
     const bv0 = s.boardVersion;
     for (const voter of voters) {
-        transition(s, { type: 'AI_VOTE_DONE', playerId: voter, targetId: voter === target ? voters[1] : target });
+        transition(s, { type: 'AI_VOTE_DONE', playerId: voter, targetId: voter === target ? voters.find((v) => v !== target) : target });
     }
     assert.equal(s.phase, 'DAY_VOTING_RESOLVING');
     transition(s, { type: 'RESOLVE_VOTES' });
