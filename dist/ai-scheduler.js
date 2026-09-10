@@ -295,11 +295,18 @@ export class SpeechScheduler {
                 ? buildWolfExpandPrompt(cur2, winner.playerId, winner.text)
                 : buildExpandPrompt(cur2, winner.playerId, winner.text);
             let full;
+            let decision = winner.decision;
             try {
-                full = stripSpeechPrefix(stripDecisionFlags((await this.ctx.llm.generate(expandPrompt, {
+                const rawExpand = (await this.ctx.llm.generate(expandPrompt, {
                     temperature: this.options.expandTemp,
                     maxTokens: 100,
-                })).trim()));
+                })).trim();
+                const expandDecision = parseDecisionFlag(rawExpand);
+                full = stripSpeechPrefix(stripDecisionFlags(rawExpand));
+                // 狼模式：expand 是對外最終承諾，其決策優先（無效目標→棄票）；expand 未決定→沿用草稿決策
+                if (isWolfMode && expandDecision.status === 'decided') {
+                    decision = this.updateDecision(winner.playerId, this.validateWolfTarget(cur2, winner.playerId, expandDecision));
+                }
             }
             catch {
                 this.scheduleRetry();
@@ -314,7 +321,7 @@ export class SpeechScheduler {
                 return;
             }
             this.stash = {
-                playerId: winner.playerId, text: full, boardVersion: commitVersion, decision: winner.decision,
+                playerId: winner.playerId, text: full, boardVersion: commitVersion, decision,
             };
             if (this.cdReady)
                 void this.broadcastStash();

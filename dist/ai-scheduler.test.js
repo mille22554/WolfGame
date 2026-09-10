@@ -983,5 +983,35 @@ test('狼模式：決策目標是同盟/自己 → 視為棄票（不計 decided
         sch.stop();
     }
 });
+test('狼模式：expand 決策優先 — pre_speech 資訊不足但 expand 殺P → 計 decided 且播出後 AI_WOLF_READY', async () => {
+    const s = createGameState(9);
+    for (let i = 0; i < 9; i++)
+        transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+    transition(s, { type: 'START_GAME' });
+    assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
+    const target = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF).id;
+    const llm = new MockLLM((prompt) => {
+        if (prompt.includes('【裁判任務】'))
+            return judgeBySlotDesc(prompt);
+        if (prompt.includes('【你的預發言草稿】'))
+            return `P0：「我決定襲擊P${target}。」\n[決定:殺P${target}]`;
+        const m = prompt.match(/你是 P(\d+)/);
+        const id = m ? m[1] : '1';
+        return `P${id}：「資訊還不足，我無法決定，想再聽聽大家的說法。」`;
+    });
+    const { ctx, events } = makeCtx(s, llm);
+    const sch = new SpeechScheduler(ctx, { cdMs: 60000 });
+    try {
+        sch.onPhaseEntered(s);
+        await flushN(3);
+        assert.equal(sch.flagStats().decided, 1, 'expand 已決定 → 應計為 decided');
+        mock.timers.tick(60000);
+        await flush();
+        assert.ok(events.some((e) => e.type === 'AI_WOLF_READY'), 'expand 已決定 → 播出後應 enqueue AI_WOLF_READY');
+    }
+    finally {
+        sch.stop();
+    }
+});
 void Role;
 //# sourceMappingURL=ai-scheduler.test.js.map
