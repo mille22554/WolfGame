@@ -198,8 +198,8 @@ test('flag 剝離：全域匹配（中置殘留亦清）；解析取最後一個
   assert.ok(!stripDecisionFlags('發言\n[決定:投P3]').includes('[決定'));
 });
 
-test('安全閥常數：MAX_UNCERTAIN_ROUNDS = 100', () => {
-  assert.equal(MAX_UNCERTAIN_ROUNDS, 100);
+test('安全閥常數：MAX_UNCERTAIN_ROUNDS = 50', () => {
+  assert.equal(MAX_UNCERTAIN_ROUNDS, 50);
 });
 
 // ---------- 白板更新驅動迴圈 ----------

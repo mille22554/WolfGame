@@ -16,7 +16,7 @@
  * - 每輪除上輪發言者外全員寫草稿；候選為空不生產，等真人講話。
  * - 草稿結尾 flag 兩層解析（正規＋寬鬆決策語境關鍵字，不用 LLM）；剝離統一在收草稿回傳前，
  *   broadcast 前再洗一次 expand 輸出；flag 永不進白板。
- * - 安全閥：單一 AI 連續 maxUncertainRounds（預設 100）次資訊不足 → 強制 decided:abstain。
+ * - 安全閥：單一 AI 連續 maxUncertainRounds（預設 50）次資訊不足 → 強制 decided:abstain。
  * - AI decided 且其發言成功播出後 → enqueue AI_READY_VOTE（不帶版本；單向不退；標的可變覆蓋）；
  *   transition 統一檢查全員 ready → 直進投票（無 CLOSING）。
  */
@@ -29,7 +29,7 @@ export type AIDecision = {
     status: 'uncertain';
 };
 /** 安全閥：單一 AI 連續資訊不足次數上限（防卡死底線；只計真正資訊不足） */
-export declare const MAX_UNCERTAIN_ROUNDS = 100;
+export declare const MAX_UNCERTAIN_ROUNDS = 50;
 /** 正規 flag：[決定:投P3]／[決定:殺P3]／[決定:棄票]／[決定:資訊不足]（方括號跳脫、全形/半形冒號、全域匹配） */
 export declare const DECISION_FLAG_RE: RegExp;
 /** 剝離 flag（全域，一律在收草稿回傳前＋broadcast 前各洗一次） */
