@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import {
   SpeechScheduler, parseDecisionFlag, stripDecisionFlags, MAX_UNCERTAIN_ROUNDS,
 } from './ai-scheduler.js';
-import { createGameState, transition, getNightActors } from './game-state.js';
+import { createGameState, transition, getNightActors, stripSpeechPrefix } from './game-state.js';
 import { noveltyPenalty, bigramJaccard, pNumberOverlap } from './novelty.js';
 import type { GameState, GameEvent, LLMDispatcher, SchedulerContext } from './types.js';
 import { Role } from './types.js';
@@ -102,17 +102,19 @@ function makeCtx(state: GameState, llm: LLMDispatcher): { ctx: SchedulerContext;
     ctx: {
       // 模擬 engine 行為：發言被接受 → log 落子＋boardVersion++；ready → voteReady
       // （engine 另會呼叫 onBoardUpdated，測試內手動呼叫以保確定性）
+      // 保真要點：production 的 transition 會 stripSpeechPrefix，這裡同樣剝離，
+      // 否則播出確認比對（lastEntry.text === s.text）永遠成功，測不到前綴相關 bug
       enqueue: (e: GameEvent) => {
         events.push(e);
         if (e.type === 'AI_SPEECH_DONE') {
-          state.discussionLog.push({ playerId: e.playerId, text: e.text, day: state.day });
+          state.discussionLog.push({ playerId: e.playerId, text: stripSpeechPrefix(e.text), day: state.day });
           state.boardVersion++;
         }
         if (e.type === 'AI_READY_VOTE' && !state.voteReady.includes(e.playerId)) {
           state.voteReady.push(e.playerId);
         }
         if (e.type === 'AI_WOLF_SPEECH_DONE') {
-          state.wolfDiscussionLog.push({ playerId: e.playerId, text: e.text, day: state.day });
+          state.wolfDiscussionLog.push({ playerId: e.playerId, text: stripSpeechPrefix(e.text), day: state.day });
           state.boardVersion++;
         }
         if (e.type === 'AI_WOLF_READY' && !state.wolfReady.includes(e.playerId)) {

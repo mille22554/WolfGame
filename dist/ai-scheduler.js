@@ -314,7 +314,8 @@ export class SpeechScheduler {
                     }
                     else {
                         decision = this.updateDecision(winner.playerId, winner.decision);
-                        full = winner.text;
+                        // 退回草稿文本時同樣要剝 P 前綴（與正常路徑一致），否則播出確認比對失敗會誤判為拒絕
+                        full = stripSpeechPrefix(winner.text);
                     }
                 }
             }
