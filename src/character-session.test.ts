@@ -318,6 +318,7 @@ test('wolf_speech 任務指令：行為理由僅限有觀察時，無材料時�
   const pre2 = buildWolfPreSpeechPrompt(s, wolf.id);
   assert.ok(pre2.includes('並給理由'), '有材料 pre_speech 應要求給理由');
   assert.ok(pre2.includes('只能基於【今晚狼討論】中的實際發言內容'), '有材料理由應限定為實際發言');
+  assert.ok(pre2.includes('直接跟進該目標並標已決定'), '有材料應含跟隨共識規則（孤狼猶豫時合法化跟進）');
   assert.ok(!pre2.includes('不需要給理由'), '有材料不應取消理由要求');
   assert.ok(pre2.includes('先點名回應一位【今晚狼討論】中有發言的同伴'), '今晚已有發言時應要求點名回應（對話感）');
   // 空板（首輪）不要求回應：無對象可回應
