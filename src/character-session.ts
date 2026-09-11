@@ -280,7 +280,7 @@ export function buildJudgePrompt(
  */
 export function buildExpandPrompt(state: GameState, playerId: number, preSpeech: string): string {
   const base = buildPrompt(state, playerId, 'speech');
-  return `${base}\n\n【你的預發言草稿】${preSpeech}\n你可以沿用或修改這則草稿，以你的性格自然潤飾，展開成完整發言（30-60 字）；語氣符合人格但不要過於強烈或浮誇。`;
+  return `${base}\n\n【你的預發言草稿】${preSpeech}\n你可以沿用或修改這則草稿的措辭，以你的性格自然潤飾，展開成完整發言（30-60 字）；語氣符合人格但不要過於強烈或浮誇。鐵則：草稿的核心論點不得改變，不得新增草稿中沒有的理由或觀察，你只調整語氣與措辭。`;
 }
 
 /**
@@ -366,5 +366,5 @@ export function buildWolfPreSpeechPrompt(state: GameState, playerId: number): st
  */
 export function buildWolfExpandPrompt(state: GameState, playerId: number, preSpeech: string): string {
   const base = buildPrompt(state, playerId, 'wolf_speech');
-  return `${base}\n\n${hasNoPublicBehaviorRecord(state) ? emptyBoardDeclaration() + '\n\n' : ''}【今晚可襲擊的存活玩家】${wolfValidTargets(state, playerId)}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮；守衛保護誰是秘密，不得以「守衛可能會保護P編號」這類預測作為選擇或排除目標的理由）\n\n【你的預發言草稿】${preSpeech}\n你可以沿用或修改這則草稿，以你的性格自然潤飾，展開成完整發言（30-60 字，討論今晚襲擊目標）；語氣符合人格但不要過於強烈或浮誇。`;
+  return `${base}\n\n${hasNoPublicBehaviorRecord(state) ? emptyBoardDeclaration() + '\n\n' : ''}【今晚可襲擊的存活玩家】${wolfValidTargets(state, playerId)}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮；守衛保護誰是秘密，不得以「守衛可能會保護P編號」這類預測作為選擇或排除目標的理由）\n\n【你的預發言草稿】${preSpeech}\n你可以沿用或修改這則草稿的措辭，以你的性格自然潤飾，展開成完整發言（30-60 字，討論今晚襲擊目標）；語氣符合人格但不要過於強烈或浮誇。鐵則：草稿指名的目標（P編號）與理由類型（策略考量）不得改變，不得新增草稿中沒有的理由（尤其不得新增守衛預測或任何行為觀察），你只調整語氣與措辭。`;
 }

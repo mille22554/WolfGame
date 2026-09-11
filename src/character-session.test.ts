@@ -250,3 +250,17 @@ test('wolf_speech 任務指令：示例含策略理由條件（行為理由僅�
   assert.ok(prompt.includes('僅當討論紀錄中真有此觀察時才可用行為理由'), '示例應條件化行為理由');
   assert.ok(prompt.includes('策略理由'), '應提供策略理由示例');
 });
+
+test('expand 潤飾約束：狼/白天 expand 均鎖定草稿目標與理由，只准調整語氣', () => {
+  const s = createGameState(9);
+  joinAll(s, 9);
+  transition(s, { type: 'START_GAME' });
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
+  const wolfExpand = buildWolfExpandPrompt(s, wolf.id, 'P1：「今晚先襲擊P3，先殺外圍編號。」');
+  assert.ok(wolfExpand.includes('草稿指名的目標（P編號）與理由類型（策略考量）不得改變'), '狼 expand 應鎖定目標與理由類型');
+  assert.ok(wolfExpand.includes('不得新增草稿中沒有的理由'), '狼 expand 應禁止新增理由');
+  assert.ok(wolfExpand.includes('不得新增守衛預測或任何行為觀察'), '狼 expand 應點名禁止守衛預測/行為觀察');
+  const dayExpand = buildExpandPrompt(s, aliveIds(s)[0], 'P1：「我比較在意P3的說法。」');
+  assert.ok(dayExpand.includes('草稿的核心論點不得改變'), '白天 expand 應鎖定核心論點');
+  assert.ok(dayExpand.includes('不得新增草稿中沒有的理由或觀察'), '白天 expand 應禁止新增理由');
+});
