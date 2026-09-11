@@ -341,8 +341,8 @@ export class SpeechScheduler implements AIScheduler {
         const expandDecision = parseDecisionFlag(rawExpand);
         full = stripSpeechPrefix(stripDecisionFlags(rawExpand));
         // 狼模式：expand 是對外最終承諾，其決策優先（無效目標→棄票）；expand 未決定→沿用草稿決策。
-        // 矛盾防護：expand 旗標目標與草稿決策目標不一致（模型旗標填寫失誤，如正文說殺P5旗標卻寫P15）
-        // → 不採信 expand 旗標，沿用草稿決策（草稿已通過 validateWolfTarget）
+        // 矛盾防護：expand 旗標目標與草稿決策目標不一致（模型違反鎖定鐵則，如文本/旗標一起漂移到別的目標）
+        // → 整份 expand 輸出不採信（文本可能也已漂移），退回草稿文本＋草稿決策（草稿已通過驗證）
         if (isWolfMode && expandDecision.status === 'decided' && expandDecision.target !== 'abstain') {
           const draftDecided = winner.decision.status === 'decided' && winner.decision.target !== 'abstain';
           const consistent = !draftDecided || expandDecision.target === (winner.decision as { target: number | 'abstain' }).target;
@@ -350,6 +350,7 @@ export class SpeechScheduler implements AIScheduler {
             decision = this.updateDecision(winner.playerId, this.validateWolfTarget(cur2, winner.playerId, expandDecision));
           } else {
             decision = this.updateDecision(winner.playerId, winner.decision);
+            full = winner.text;
           }
         }
       } catch {

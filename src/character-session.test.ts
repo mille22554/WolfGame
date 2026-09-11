@@ -177,7 +177,7 @@ test('狼 prompt：要求指名具體目標、禁止預測守衛動向、列舉�
     assert.ok(prompt.includes('襲擊同盟是規則上不可能的行為'), '應禁止殺同盟');
     assert.ok(prompt.includes('繁體中文'), '應要求繁體中文');
     assert.ok(prompt.includes('今晚可襲擊的存活玩家'), '應列舉合法目標');
-    assert.ok(prompt.includes('不得以「守衛可能會保護P編號」這類預測作為選擇或排除目標的理由'), '應禁止以守衛預測為理由');
+    assert.ok(prompt.includes('不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由'), '應禁止以守衛猜測（雙向）為理由');
     const seg = prompt.split('今晚可襲擊的存活玩家')[1]?.split('（')[0] ?? '';
     for (const a of allies) {
       assert.ok(!seg.includes(`P${a.id}`), `合法目標清單不應含同盟 P${a.id}`);
