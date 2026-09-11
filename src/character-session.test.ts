@@ -216,7 +216,7 @@ test('狼 prompt：要求指名具體目標、禁止預測守衛動向、列舉�
     assert.ok(prompt.includes('繁體中文'), '應要求繁體中文');
     assert.ok(prompt.includes('嚴禁任何簡體字'), '應明令禁止簡體字');
     assert.ok(prompt.includes('今晚可襲擊的存活玩家'), '應列舉合法目標');
-    assert.ok(prompt.includes('不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由'), '應禁止以守衛猜測（雙向）為理由');
+    assert.ok(prompt.includes('不得以任何守衛相關猜測') && prompt.includes('作為選擇或排除目標的理由'), '應禁止以守衛猜測為理由');
     const seg = prompt.split('今晚可襲擊的存活玩家')[1]?.split('（')[0] ?? '';
     for (const a of allies) {
       assert.ok(!seg.includes(`P${a.id}`), `合法目標清單不應含同盟 P${a.id}`);
@@ -262,14 +262,16 @@ test('防幻覺觀察：無任何討論材料時，狼/白天 prompt 帶現實�
   const expand = buildWolfExpandPrompt(s, wolf.id, 'P1：「今晚先襲擊P3。」');
   for (const prompt of [pre, expand]) {
     assert.ok(prompt.includes('現實材料狀態'), '狼 prompt 應含材料狀態聲明');
-    assert.ok(prompt.includes('禁止聲稱任何此類觀察'), '應明確禁止假觀察');
-    assert.ok(prompt.includes('暗示你長期觀察過對方的詞'), '應禁止時間性觀察暗示詞');
-    assert.ok(prompt.includes('沒有大小、遠近、邊緣或中央之分'), '應禁止編號位置聯想');
-    assert.ok(prompt.includes('直覺、隨機嘗試'), '應許可直覺/隨機作為無材料理由');
+    assert.ok(prompt.includes('第一晚沒有任何公開發言或行為紀錄'), '版本A：空板事實陳述');
+    assert.ok(prompt.includes('你沒有觀察過任何人'), '版本A：無觀察事實');
+    assert.ok(prompt.includes('對所有人的了解都是零'), '版本A：零了解事實');
+    assert.ok(prompt.includes('P編號只是代號，沒有位置、大小或遠近之分'), '版本A：編號無空間意義');
+    assert.ok(!prompt.includes('禁止聲稱任何此類觀察'), '版本A：不再使用舊禁令措辭');
   }
   // 白天 pre_speech：材料全空（第一天且狼密談也無紀錄）時同樣帶聲明
   const dayPre = buildPreSpeechPrompt(s, aliveIds(s)[0]);
   assert.ok(dayPre.includes('現實材料狀態'), '白天 pre_speech 應含材料狀態聲明');
+  assert.ok(dayPre.includes('第一晚沒有任何公開發言或行為紀錄'), '白天 pre_speech 同步新措辭');
 });
 
 test('防幻覺觀察：有討論材料後，prompt 不帶材料狀態聲明', () => {
@@ -300,19 +302,20 @@ test('非空板討論紀錄使用規則：狼 prompt 有材料時帶延續版禁
   assert.ok(expand.includes('【討論紀錄使用規則】'), 'expand 非空板亦應帶延續版規則');
 });
 
-test('wolf_speech 任務指令：行為理由僅限有觀察時，無材料時取消理由要求', () => {
+test('wolf_speech 任務指令：中性依據措辭、無行為描述範例', () => {
   const s = createGameState(9);
   joinAll(s, 9);
   transition(s, { type: 'START_GAME' });
   const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
   const prompt = buildPrompt(s, wolf.id, 'wolf_speech');
-  assert.ok(prompt.includes('僅當討論紀錄中真有此觀察時才可用行為理由'), '示例應條件化行為理由');
+  assert.ok(!prompt.includes('話多可能是占卜師'), '應刪除描述對方行為的範例');
+  assert.ok(prompt.includes('僅當討論紀錄中真有此依據時才可引用'), '依據引用應條件化');
   assert.ok(prompt.includes('誠實說直覺或隨機即可'), '無材料時應引導誠實理由');
   assert.ok(!prompt.includes('外圍編號'), '不應再提供編號位置類示例');
-  // 首夜極簡：三句固定措辭
+  // 首夜正向選單：三種形狀
   const pre = buildWolfPreSpeechPrompt(s, wolf.id);
-  assert.ok(pre.includes('只准談你自己的狀態'), '首夜應含只談自己');
-  assert.ok(pre.includes('不准描述對方'), '首夜應禁述對方');
+  assert.ok(pre.includes('三種形狀'), '首夜應含正向選單');
+  assert.ok(pre.includes('指名不需要理由'), '首夜指名不需要理由');
   // 有材料：後夜兩句固定措辭＋跟隨共識
   s.wolfDiscussionLog.push({ playerId: wolf.id, text: '我覺得P5可疑', day: s.day });
   const pre2 = buildWolfPreSpeechPrompt(s, wolf.id);
@@ -336,16 +339,69 @@ test('expand 潤飾約束：狼/白天 expand 均鎖定草稿目標與理由，�
   assert.ok(dayExpand.includes('改寫成自然的口語發言'), '白天 expand 應要求口語化改寫');
 });
 
-test('狼首夜極簡：三句固定措辭＋預算', () => {
+test('狼首夜正向選單：三種形狀＋預算', () => {
   const s = createGameState(9);
   joinAll(s, 9);
   transition(s, { type: 'START_GAME' });
   const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
   const pre = buildWolfPreSpeechPrompt(s, wolf.id);
-  assert.ok(pre.includes('只准談你自己的狀態'), '首夜應含只談自己');
-  assert.ok(pre.includes('不准描述對方'), '首夜應禁述對方');
-  assert.ok(pre.includes('拿不定就標[決定:資訊不足]'), '首夜應含資訊不足旗標指引');
+  assert.ok(pre.includes('5-30'), '首夜應含 5-30 字要求');
+  assert.ok(pre.includes('隨機指名'), '首夜應含隨機指名形狀');
+  assert.ok(pre.includes('交棒'), '首夜應含交棒形狀');
+  assert.ok(pre.includes('跟票'), '首夜應含跟票形狀');
+  assert.ok(pre.includes('指名不需要理由'), '首夜指名不需要理由');
+  assert.ok(pre.includes('說了就是謊言'), '首夜應含誠實禁令');
+  assert.ok(pre.includes('[決定:資訊不足]'), '首夜應含資訊不足旗標指引');
+  assert.ok(pre.includes(`格式：P${wolf.id}：「你的草稿」＋旗標行（另起一行）`), '格式行應含草稿＋旗標行兩部分');
+  assert.ok(pre.includes('【決策旗標】請在草稿結尾另起一行附加你的襲擊決策狀態'), '首夜應有獨立旗標段');
+  assert.ok(pre.indexOf('【決策旗標】') > pre.indexOf('【任務】'), '旗標段應在任務段之後');
+  assert.ok(pre.trimEnd().endsWith('只可附加其一。'), '旗標段應放 prompt 最後');
   assert.ok(pre.length <= PRE_SPEECH_BUDGET, `首夜 prompt ${pre.length} 字元應 ≤ ${PRE_SPEECH_BUDGET}`);
+});
+
+test('狼首夜版本A：範例編號隨機取自合法目標、persona 濾掉壓力台詞', () => {
+  const s = createGameState(9);
+  joinAll(s, 9);
+  transition(s, { type: 'START_GAME' });
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
+  const legalIds = s.players.filter((p) => p.alive && p.role !== Role.WEREWOLF).map((p) => p.id);
+  // 範例編號落在合法目標內（隨機抽樣，非寫死）
+  const pre = buildWolfPreSpeechPrompt(s, wolf.id);
+  const exampleHit = pre.match(/第一晚沒資訊，我隨便指一個，P(\d+)吧/);
+  assert.ok(exampleHit, '首夜應含隨機指名範例');
+  assert.ok(legalIds.includes(Number(exampleHit![1])), `範例編號 P${exampleHit![1]} 應為合法目標`);
+  // 非寫死： stub 隨機數，頭尾應取到不同合法目標
+  const origRandom = Math.random;
+  try {
+    Math.random = () => 0;
+    const low = buildWolfPreSpeechPrompt(s, wolf.id).match(/第一晚沒資訊，我隨便指一個，P(\d+)吧/)?.[1];
+    Math.random = () => 0.999999;
+    const high = buildWolfPreSpeechPrompt(s, wolf.id).match(/第一晚沒資訊，我隨便指一個，P(\d+)吧/)?.[1];
+    assert.ok(low && high, '兩次抽樣皆應有範例編號');
+    assert.equal(low, String(legalIds[0]), '隨機下限應取首個合法目標');
+    assert.equal(high, String(legalIds[legalIds.length - 1]), '隨機上限應取末個合法目標');
+  } finally {
+    Math.random = origRandom;
+  }
+  // persona 過濾：僅 pre_speech 濾掉壓力台詞，保留策略傾向
+  assert.ok(!pre.includes('## 壓力台詞'), '狼 pre_speech 應濾掉壓力台詞區塊');
+  assert.ok(pre.includes('策略傾向'), '應保留策略傾向欄位維持差異化');
+  const expand = buildWolfExpandPrompt(s, wolf.id, 'P1：「今晚先襲擊P3。」');
+  assert.ok(expand.includes('## 壓力台詞'), '其他 kind（expand）不動，仍帶壓力台詞');
+});
+
+test('狼 expand 首夜後夜皆免旗標', () => {
+  const s = createGameState(9);
+  joinAll(s, 9);
+  transition(s, { type: 'START_GAME' });
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
+  const first = buildWolfExpandPrompt(s, wolf.id, 'P1：「今晚先襲擊P3。」');
+  assert.ok(first.includes('【你的預發言草稿】P1：「今晚先襲擊P3。」 請把這則草稿改寫成'), '首夜附加段照抄（空格連接）');
+  assert.ok(first.includes('本發言不需要附加決策旗標——目標沿用草稿，中控自行判讀。'), '首夜 expand 應免旗標');
+  s.wolfDiscussionLog.push({ playerId: wolf.id, text: '先殺P5，直覺', day: s.day });
+  const later = buildWolfExpandPrompt(s, wolf.id, 'P1：「先殺P5，直覺。」');
+  assert.ok(later.includes('本發言不需要附加決策旗標——目標沿用草稿，中控自行判讀。'), '後夜 expand 亦應免旗標');
+  assert.ok(later.includes('【討論紀錄使用規則】'), '後夜仍帶延續版規則');
 });
 
 test('狼後夜極簡：兩句固定措辭＋白天討論段', () => {

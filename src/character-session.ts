@@ -39,7 +39,7 @@ function taskInstruction(kind: PromptKind, playerId: number): string {
     case 'night':
       return `【任務】你是 P${playerId}，請選擇今晚行動的目標（必須是存活且非自己的玩家）。只回覆一句話，不要角色扮演。回覆：我選擇 P{編號}。`;
     case 'wolf_speech':
-      return `【任務】你是 P${playerId}（人狼），請與同伴討論今晚要襲擊誰、協調目標（一句話，20-60字，短一點沒關係）。直接指名具體目標（P編號）並說理由，如「P3 話多可能是占卜師，先殺他」（僅當討論紀錄中真有此觀察時才可用行為理由；沒有材料時誠實說直覺或隨機即可，不要編造理由）。你的同盟列在【你的角色資訊】，襲擊同盟是規則上不可能的行為，絕對不要考慮。守衛保護誰、誰是甚麼職業都是秘密，無從得知：不得聲稱知道，也不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由。全篇只能使用繁體中文，嚴禁任何簡體字（如杀/发/对/说）。用「我覺得今晚…」語氣。像一般人自然講話，不要套用角色口頭禪或壓力台詞，語氣不要強烈或浮誇。格式：P${playerId}：「你的發言」；結尾另起一行附加決策旗標[決定:殺P編號]（已決定目標時）或[決定:資訊不足]（尚無法決定時），只可附加其一。`;
+      return `【任務】你是 P${playerId}（人狼），請與同伴討論今晚要襲擊誰、協調目標（一句話，20-60字，短一點沒關係）。直接指名具體目標（P編號）並簡述依據（僅當討論紀錄中真有此依據時才可引用；沒有材料時誠實說直覺或隨機即可，不要編造理由）。你的同盟列在【你的角色資訊】，襲擊同盟是規則上不可能的行為，絕對不要考慮。守衛保護誰、誰是甚麼職業都是秘密，無從得知：不得聲稱知道，也不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由。全篇只能使用繁體中文，嚴禁任何簡體字（如杀/发/对/说）。用「我覺得今晚…」語氣。像一般人自然講話，不要套用角色口頭禪或壓力台詞，語氣不要強烈或浮誇。格式：P${playerId}：「你的發言」；結尾另起一行附加決策旗標[決定:殺P編號]（已決定目標時）或[決定:資訊不足]（尚無法決定時），只可附加其一。`;
   }
 }
 
@@ -347,14 +347,10 @@ function todayDiscussionLines(state: GameState): string[] {
 }
 
 /**
- * 現實材料狀態聲明（防幻覺觀察＋防編號幻覺）：
- * 討論紀錄為空（尚無任何公開發言）時，明確告知模型：
- * 1. 不可聲稱觀察到任何人的活動或行為（防「他最近活動頻繁」假觀察）
- * 2. P編號只是代號，無大小/遠近/邊緣意義，不可當理由（防「他位於邊緣」空間幻覺）
- * 3. 沒材料時說出直覺目標本身就是完整決定（防全員謙虛導致會議永不收斂）
+ * 現實材料狀態聲明（版本A正向選單：只說已知事實，不列禁令）
  */
 function emptyBoardDeclaration(): string {
-  return `【現實材料狀態】目前尚無任何公開發言或行為紀錄，你不可能觀察到任何人的活動、發言量或在場時間，禁止聲稱任何此類觀察（如「他活動頻繁」「他在場時間長」「他有異常的活動模式」「他不太對勁」）。也不要用「一直」「總是」「經常」「近期」「最近」這類暗示你長期觀察過對方的詞。P編號只是代號，沒有大小、遠近、邊緣或中央之分，禁止以編號本身作為理由（如「他位於邊緣」「外圍編號」）。沒有材料時可用的依據只有直覺、隨機嘗試或跟隨他人已提出的建議；直覺就說直覺，不得把直覺包裝成觀察。沒有依據時，直接說出直覺目標並標已決定——第一晚本來就沒有依據，這不算不誠實；只有整句完全沒提到任何目標時，才標資訊不足。`;
+  return `【現實材料狀態】第一晚沒有任何公開發言或行為紀錄。你沒有觀察過任何人，對所有人的了解都是零。P編號只是代號，沒有位置、大小或遠近之分。`;
 }
 
 /**
@@ -375,6 +371,38 @@ function hasNoPublicBehaviorRecord(state: GameState): boolean {
   return state.discussionLog.length === 0 && state.wolfDiscussionLog.length === 0;
 }
 
+/** 濾掉人格壓力台詞區塊（僅狼 pre_speech；保留策略傾向等差異欄位） */
+function stripPressureBlock(personaPrompt: string): string {
+  if (!personaPrompt.includes('壓力台詞')) return personaPrompt;
+  const kept: string[] = [];
+  let skipping = false;
+  for (const line of personaPrompt.split('\n')) {
+    if (line.startsWith('## 壓力台詞')) {
+      skipping = true;
+      continue;
+    }
+    if (skipping && line.startsWith('## ')) skipping = false;
+    if (!skipping) kept.push(line);
+  }
+  return kept.join('\n');
+}
+
+/** 從合法目標隨機取範例編號（每次重抽，不得寫死） */
+function pickWolfExampleId(legalIds: number[]): number {
+  if (legalIds.length === 0) return 1;
+  return legalIds[Math.floor(Math.random() * legalIds.length)];
+}
+
+/** 首夜正向選單任務段（版本A措辭照抄；旗標另立獨立段） */
+function buildWolfFirstNightTask(playerId: number, exampleId: number, legalTargets: string): string {
+  return `【任務】你是 P${playerId}，請寫一句 5-30 字的預發言草稿（越短越好，誠實優先）。第一晚沒有資訊，你的發言只能從以下三種形狀選一種：\n1. 隨機指名：「第一晚沒資訊，我隨便指一個，P${exampleId}吧。」\n2. 交棒：「你們先定，我跟票。」\n3. 跟票：「我沒想法，跟P${exampleId}，殺P${exampleId}。」（僅當同伴已指名目標時）\n指名不需要理由——你沒有觀察過任何人，無從給理由。禁止描述任何人的行為、狀態或感覺（如「有問題」「可疑」「不對勁」——你沒有依據，說了就是謊言）。全篇只能使用繁體中文，嚴禁任何簡體字（如杀/发/对/说）。今晚可襲擊的存活玩家只有：${legalTargets}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮）。守衛保護誰、誰是甚麼職業都是秘密，無從得知：不得聲稱知道，也不得以任何守衛相關猜測作為選擇或排除目標的理由。\n格式：P${playerId}：「你的草稿」＋旗標行（另起一行）`;
+}
+
+/** 首夜獨立旗標段（版本A2：與任務段分離、放 prompt 最後） */
+function buildWolfFirstNightFlag(): string {
+  return `【決策旗標】請在草稿結尾另起一行附加你的襲擊決策狀態（中控內部判讀用，不會公開）：指名目標（含隨機指名與跟票）→[決定:殺P編號]；交棒（你們先定）→[決定:資訊不足]。只可附加其一。`;
+}
+
 /**
  * buildWolfPreSpeechPrompt（狼預發言，輕量）：
  * 私有知識 → 當晚狼討論最近 5 則 → 任務指令（含殺人決策旗標）
@@ -382,28 +410,32 @@ function hasNoPublicBehaviorRecord(state: GameState): boolean {
 export function buildWolfPreSpeechPrompt(state: GameState, playerId: number): string {
   const player = state.players.find((p) => p.id === playerId);
   if (!player) throw new Error(`找不到玩家 P${playerId}`);
-  // 草稿帶人格：人格是決策依據之一（懷疑度/風格/投票模式），草稿由人格驅動產生差異
+  // 草稿帶人格但濾掉壓力台詞：保留策略傾向等差異欄位
   const personaId = player.personality || `p${playerId}`;
-  const personaPrompt = readTextIfExists(path.join(getResourceRoot(), 'character', personaId, 'agents.md'));
+  const rawPersona = readTextIfExists(path.join(getResourceRoot(), 'character', personaId, 'agents.md'));
+  const personaPrompt = stripPressureBlock(rawPersona);
   const privateLines = privateKnowledgeLines(state, playerId);
   const isFirstNight = hasNoPublicBehaviorRecord(state);
   let recentEntries = state.wolfDiscussionLog.slice(-PRE_SPEECH_RECENT);
   let recent = renderDiscussionLines(recentEntries);
   let dayEntries: string[] = isFirstNight ? [] : todayDiscussionLines(state);
-  // 首夜／後夜極簡：措辭固定；跟隨共識保留
-  const firstReq = `直接指名一個具體目標（P編號）。第一晚沒有公開發言：只准談你自己的狀態，不准描述對方。說出想殺誰就標[決定:殺P編號]，拿不定就標[決定:資訊不足]。`;
+  const legalTargets = wolfValidTargets(state, playerId);
+  // 首夜正向選單：範例編號每次從合法目標隨機取一個
+  const exampleId = pickWolfExampleId(wolfLegalIds(state, playerId));
+  const firstTask = buildWolfFirstNightTask(playerId, exampleId, legalTargets);
   const laterReq = `直接指名一個具體目標（P編號）。理由只能引用【白天討論】或【今晚狼討論】裡實際出現的發言。`
     + `若其他同伴都已指名同一目標、而你沒有更想殺的人選，直接跟進該目標並標已決定（跟隨共識本身就是決定）。`;
-  const reasonReq = isFirstNight ? firstReq : laterReq;
   const dayBlock = isFirstNight ? '' : `【白天討論】\n${dayEntries.length > 0 ? dayEntries.join('\n') : '（今日尚無白天發言）'}`;
+  const laterTask = `【任務】你是 P${playerId}，請寫一句 10-40 字的預發言草稿，與同伴討論今晚要襲擊誰、協調目標（不超過 40 字；短一點沒關係，誠實優先於湊字數）。用一般人的自然語氣寫，不要刻意扮演角色口吻、不要浮誇；人格設定只作為你的思考傾向參考（懷疑誰、敢不敢果斷），不要求模仿其說話風格。全篇只能使用繁體中文，嚴禁任何簡體字（如杀/发/对/说）。${laterReq}今晚可襲擊的存活玩家只有：${legalTargets}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮）。守衛保護誰、誰是甚麼職業都是秘密，無從得知：不得聲稱知道，也不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由。\n格式：P${playerId}：「你的草稿」`;
+  const laterFlag = `【決策旗標】草稿結尾另起一行附加你的襲擊決策狀態（中控內部判讀用，不會公開）：已決定襲擊某人（說出具體目標即算已決定，即使理由只是直覺）→[決定:殺P編號]；連提名誰都拿不定→[決定:資訊不足]。只可附加其一。`;
   const parts: string[] = [
     personaPrompt ? `【人格設定】\n${personaPrompt}` : '',
     `【你的角色資訊】\n${privateLines.join('\n')}`,
     `【今晚狼討論】\n${recent.length > 0 ? recent.join('\n') : '（尚無發言）'}`,
     dayBlock,
     isFirstNight ? emptyBoardDeclaration() : nonEmptyBoardDeclaration(),
-    `【任務】你是 P${playerId}，請寫一句 10-40 字的預發言草稿，與同伴討論今晚要襲擊誰、協調目標（不超過 40 字；短一點沒關係，誠實優先於湊字數）。用一般人的自然語氣寫，不要刻意扮演角色口吻、不要浮誇；人格設定只作為你的思考傾向參考（懷疑誰、敢不敢果斷），不要求模仿其說話風格。全篇只能使用繁體中文，嚴禁任何簡體字（如杀/发/对/说）。${reasonReq}今晚可襲擊的存活玩家只有：${wolfValidTargets(state, playerId)}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮）。守衛保護誰、誰是甚麼職業都是秘密，無從得知：不得聲稱知道，也不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由。\n格式：P${playerId}：「你的草稿」`,
-    `【決策旗標】草稿結尾另起一行附加你的襲擊決策狀態（中控內部判讀用，不會公開）：已決定襲擊某人（說出具體目標即算已決定，即使理由只是直覺）→[決定:殺P編號]；連提名誰都拿不定→[決定:資訊不足]。只可附加其一。`,
+    isFirstNight ? firstTask : laterTask,
+    isFirstNight ? buildWolfFirstNightFlag() : laterFlag,
   ];
   let prompt = parts.filter((s) => s !== '').join('\n\n');
   // 超預算：先丟白天最舊，再丟今晚最舊（固定部分保留）
@@ -427,7 +459,11 @@ export function buildWolfPreSpeechPrompt(state: GameState, playerId: number): st
  */
 export function buildWolfExpandPrompt(state: GameState, playerId: number, preSpeech: string): string {
   const base = buildPrompt(state, playerId, 'wolf_speech');
-  const boardDecl = hasNoPublicBehaviorRecord(state) ? emptyBoardDeclaration() : nonEmptyBoardDeclaration();
-  // 接地極簡：只留不得新增理由鐵則
-  return `${base}\n\n${boardDecl}\n\n【今晚可襲擊的存活玩家】${wolfValidTargets(state, playerId)}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮；守衛保護誰是秘密，不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由）\n\n【你的預發言草稿】${preSpeech}\n請把這則草稿改寫成自然的口語發言（20-60 字，像一般人在會議中講話；短一點沒關係，不要為了湊字數而新增內容），不必保留草稿的字句與句構，也不要套用任何固定句式。鐵則：草稿指名的目標（P編號）與理由不得改變，不得新增草稿中沒有的理由。`;
+  const isFirstNight = hasNoPublicBehaviorRecord(state);
+  const boardDecl = isFirstNight ? emptyBoardDeclaration() : nonEmptyBoardDeclaration();
+  const targetSeg = `【今晚可襲擊的存活玩家】${wolfValidTargets(state, playerId)}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮；守衛保護誰是秘密，不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由）`;
+  // 首夜／後夜附加段：expand 皆免旗標（目標沿用草稿）；後夜其他文字不動
+  const firstAppend = `【你的預發言草稿】${preSpeech} 請把這則草稿改寫成自然的口語發言（20-60 字，像一般人在會議中講話；短一點沒關係，不要為了湊字數而新增內容），不必保留草稿的字句與句構，也不要套用任何固定句式。鐵則：草稿指名的目標（P編號）與理由不得改變，不得新增草稿中沒有的理由。本發言不需要附加決策旗標——目標沿用草稿，中控自行判讀。`;
+  const laterAppend = `【你的預發言草稿】${preSpeech}\n請把這則草稿改寫成自然的口語發言（20-60 字，像一般人在會議中講話；短一點沒關係，不要為了湊字數而新增內容），不必保留草稿的字句與句構，也不要套用任何固定句式。鐵則：草稿指名的目標（P編號）與理由不得改變，不得新增草稿中沒有的理由。本發言不需要附加決策旗標——目標沿用草稿，中控自行判讀。`;
+  return `${base}\n\n${boardDecl}\n\n${targetSeg}\n\n${isFirstNight ? firstAppend : laterAppend}`;
 }
