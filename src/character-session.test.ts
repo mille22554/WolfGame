@@ -88,6 +88,43 @@ test('截斷：超長討論 → 先丟 daySummary 再丟當天最舊', () => {
   assert.ok(truncated.includes('發言59'), '最新討論應保留');
 });
 
+test('跨日分隔線：多天討論以 === 第N天 === 分隔；單日時無分隔線', () => {
+  const s = discussionState();
+  const speaker = aliveIds(s)[0];
+  transition(s, { type: 'HUMAN_SPEAK', playerId: speaker, text: '今天第一句' });
+  // 單日：無分隔線（與舊輸出一致）
+  const single = buildPrompt(s, speaker, 'speech', 1_000_000);
+  assert.ok(single.includes('今天第一句'));
+  assert.ok(!single.includes('=== 第'), '單日時不應有分隔線');
+  // 跨日：直接塞前一天紀錄，prompt 應出現分隔線＋兩天內容
+  const today = s.day;
+  s.discussionLog.unshift({ playerId: speaker, text: '昨天說過的話', day: today - 1 });
+  const multi = buildPrompt(s, speaker, 'speech', 1_000_000);
+  assert.ok(multi.includes(`=== 第${today - 1}天 ===`), '應有前一天分隔線');
+  assert.ok(multi.includes(`=== 第${today}天 ===`), '應有當天分隔線');
+  assert.ok(multi.includes('昨天說過的話'), '應保留前一天內容');
+  assert.ok(multi.includes('今天第一句'), '應保留當天內容');
+  // 分隔線順序：舊天在前
+  assert.ok(multi.indexOf(`=== 第${today - 1}天 ===`) < multi.indexOf(`=== 第${today}天 ===`), '天數應由舊到新');
+});
+
+test('跨日分隔線：狼討論跨日時同樣分隔', () => {
+  const s = createGameState(9);
+  joinAll(s, 9);
+  transition(s, { type: 'START_GAME' });
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
+  s.wolfDiscussionLog.push({ playerId: wolf.id, text: '昨晚說殺P3', day: s.day });
+  // 推進一天（不清空狼紀錄）：直接改 day 模擬跨日
+  const nextDay = s.day + 1;
+  s.day = nextDay;
+  s.wolfDiscussionLog.push({ playerId: wolf.id, text: '今晚改殺P5', day: nextDay });
+  const prompt = buildPrompt(s, wolf.id, 'wolf_speech', 1_000_000);
+  assert.ok(prompt.includes('=== 第1天 ==='), '應有前一晚分隔線');
+  assert.ok(prompt.includes('=== 第2天 ==='), '應有今晚分隔線');
+  assert.ok(prompt.includes('昨晚說殺P3'), '應保留前一晚內容');
+  assert.ok(prompt.includes('今晚改殺P5'), '應保留今晚內容');
+});
+
 test('buildPrompt 預設預算 4000：超量輸入截到 ≤4000（daySummaries 機制保留）', () => {
   const s = discussionState();
   const speaker = aliveIds(s)[0];

@@ -891,7 +891,8 @@ export function transition(state: GameState, event: GameEvent): TransitionResult
         state.nightActions = [];
         state.voteReady = [];
         state.wolfReady = [];
-        state.wolfDiscussionLog = [];
+        // 狼會議紀錄跨日保留（不再清空）：狼群需要記得前幾晚的討論，
+        // prompt 層以「=== 第N天 ===」分隔線呈現；新局由 START_GAME 清空
         state.skippedHumans = [];
         state.idleCounts = {};
         delete state.wolfKillTarget;

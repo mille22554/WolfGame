@@ -8,14 +8,14 @@
  * 設計取捨：
  * - 機械式推導（純函式 builder）：零幻覺風險、零 LLM 成本、可單測
  * - 寫入走 getDataDir()（pkg 環境 exe 旁 data/ 可寫）；讀取 fallback resource root（dev 同源）
- * - 只記「事實」（誰說了/投了/殺了誰），不做主觀總結 — 主觀沉澝屬 external-accumulation-plan 範圍
- * - 天數上限（預設 3 天）：防 memory 無限膨脹吃掉 prompt 預算
+ * - 只記「事實」（誰說了/投了/殺了誰），不做主觀總結 — 主觀沉澱屬 external-accumulation-plan 範圍
+ * - 整局保留：不設天數上限；單日發言取最後 5 則（防單日話癆膨脹 prompt）
  */
 import * as fs from 'fs';
 import * as path from 'path';
 import { getDataDir, getResourceRoot } from './utils.js';
-/** memory 保留天數上限（含當天；最舊的先丟） */
-export const MEMORY_MAX_DAYS = 3;
+/** 單日發言保留上限（每人每天，防話癆膨脹） */
+export const MEMORY_SPEECHES_PER_DAY = 5;
 /**
  * 為單一玩家生成某天的記憶段（純函式）：
  * 我的白天發言 / 我的投票 / 我的夜間行動 / 我的狼會議發言與最終擊殺。
@@ -23,7 +23,9 @@ export const MEMORY_MAX_DAYS = 3;
  */
 export function buildDailyMemory(state, playerId, day) {
     const lines = [];
-    const mySpeeches = state.discussionLog.filter((d) => d.playerId === playerId && d.day === day);
+    const mySpeeches = state.discussionLog
+        .filter((d) => d.playerId === playerId && d.day === day)
+        .slice(-MEMORY_SPEECHES_PER_DAY);
     for (const s of mySpeeches)
         lines.push(`我說：「${s.text}」`);
     const myVote = state.votes.find((v) => v.voterId === playerId && v.day === day);
@@ -37,7 +39,9 @@ export function buildDailyMemory(state, playerId, day) {
     }
     const player = state.players.find((p) => p.id === playerId);
     if (player?.role === 'werewolf') {
-        const myWolfSpeeches = state.wolfDiscussionLog.filter((d) => d.playerId === playerId && d.day === day);
+        const myWolfSpeeches = state.wolfDiscussionLog
+            .filter((d) => d.playerId === playerId && d.day === day)
+            .slice(-MEMORY_SPEECHES_PER_DAY);
         for (const s of myWolfSpeeches)
             lines.push(`狼會議我說：「${s.text}」`);
         if (state.wolfKillTarget !== undefined)
@@ -47,11 +51,10 @@ export function buildDailyMemory(state, playerId, day) {
         return '';
     return `第${day}天：\n${lines.map((l) => `- ${l}`).join('\n')}`;
 }
-/** memory 檔內容（純函式）：多天記憶段組合，超過 maxDays 丟最舊 */
-export function buildMemoryContent(state, playerId, days, maxDays = MEMORY_MAX_DAYS) {
-    const kept = days.slice(-maxDays);
+/** memory 檔內容（純函式）：多天記憶段組合，整局保留（不設天數上限） */
+export function buildMemoryContent(state, playerId, days) {
     const sections = [];
-    for (const day of kept) {
+    for (const day of days) {
         const sec = buildDailyMemory(state, playerId, day);
         if (sec)
             sections.push(sec);

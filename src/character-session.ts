@@ -90,6 +90,26 @@ function privateKnowledgeLines(state: GameState, playerId: number): string[] {
   return lines;
 }
 
+/**
+ * 討論紀錄渲染：按天分組，跨日時插入「=== 第N天 ===」分隔線；
+ * 單日時不加分隔線（與舊輸出逐字一致，night-1 prompt 不受影響）。
+ * 呼叫方傳入已按時間排序的條目（state 內一律追加寫入，日增單調）。
+ */
+function renderDiscussionLines(entries: { playerId: number; text: string; day: number }[]): string[] {
+  if (entries.length === 0) return [];
+  const lines: string[] = [];
+  const multiDay = new Set(entries.map((e) => e.day)).size > 1;
+  let lastDay = -1;
+  for (const e of entries) {
+    if (multiDay && e.day !== lastDay) {
+      lines.push(`=== 第${e.day}天 ===`);
+      lastDay = e.day;
+    }
+    lines.push(`P${e.playerId}：${e.text}`);
+  }
+  return lines;
+}
+
 export function buildPrompt(
   state: GameState,
   playerId: number,
@@ -100,7 +120,7 @@ export function buildPrompt(
   if (!player) throw new Error(`找不到玩家 P${playerId}`);
 
   const maxChars = budget ?? 4000;
-  const maxCurrentDayEntries = 60;
+  const maxDiscussionEntries = 60;
 
   // --- 固定部分 ---
   // 人格分層：night/vote 是中性行動決策，不帶人格；speech/wolf_speech（正式發言）與草稿（pre_speech）帶人格
@@ -127,12 +147,11 @@ export function buildPrompt(
   ].filter((s) => s !== '');
 
   // --- 可截斷部分 ---
-  // 狼討論走 wolfDiscussionLog（當天），不帶白天歷史摘要
+  // 討論紀錄跨日保留：取最近 N 則（含前幾天），渲染時以「=== 第N天 ===」分隔；
+  // 狼討論走 wolfDiscussionLog，不帶白天歷史摘要
   const isWolfSpeech = kind === 'wolf_speech';
-  const todayEntries = (isWolfSpeech ? state.wolfDiscussionLog : state.discussionLog)
-    .filter((d) => d.day === state.day)
-    .slice(-maxCurrentDayEntries);
-  let currentLines = todayEntries.map((d) => `P${d.playerId}：${d.text}`);
+  let historyEntries = (isWolfSpeech ? state.wolfDiscussionLog : state.discussionLog)
+    .slice(-maxDiscussionEntries);
   // 狼討論無白天摘要；僅白天流程帶 daySummaries
   let summaries = isWolfSpeech ? [] : [...state.daySummaries];
   // 狼討論改用專屬標題，避免與白天對話混淆
@@ -142,6 +161,7 @@ export function buildPrompt(
   // 舊 totalLength 只加總三區塊內容、漏算組裝開銷，邊界帶會超過預算）
   const assemble = (): string => {
     const parts: string[] = [...fixedParts];
+    const currentLines = renderDiscussionLines(historyEntries);
     parts.splice(
       fixedParts.length - 1,
       0,
@@ -151,13 +171,13 @@ export function buildPrompt(
     return parts.filter((s) => s !== '').join('\n\n');
   };
 
-  // 截斷演算法：先丟最舊 daySummary，再丟當天最舊討論條目；
+  // 截斷演算法：先丟最舊 daySummary，再丟最舊討論條目（跨日時含前幾天）；
   // 固定部分超限 → 原樣輸出（不截斷）
   while (assemble().length > maxChars) {
     if (summaries.length > 0) {
       summaries = summaries.slice(1);
-    } else if (currentLines.length > 0) {
-      currentLines = currentLines.slice(1);
+    } else if (historyEntries.length > 0) {
+      historyEntries = historyEntries.slice(1);
     } else {
       break;
     }
@@ -237,10 +257,8 @@ export function buildPreSpeechPrompt(state: GameState, playerId: number): string
   const lastSummary = state.daySummaries.length > 0
     ? state.daySummaries[state.daySummaries.length - 1]
     : '尚無摘要';
-  const recent = state.discussionLog
-    .filter((d) => d.day === state.day)
-    .slice(-PRE_SPEECH_RECENT)
-    .map((d) => `P${d.playerId}：${d.text}`);
+  const recentEntries = state.discussionLog.slice(-PRE_SPEECH_RECENT);
+  let recent = renderDiscussionLines(recentEntries);
 
   const parts: string[] = [
     personaPrompt ? `【人格設定】\n${personaPrompt}` : '',
@@ -253,8 +271,9 @@ export function buildPreSpeechPrompt(state: GameState, playerId: number): string
   ];
   let prompt = parts.filter((s) => s !== '').join('\n\n');
   // 超預算：先丟最近討論最舊條目（固定部分保留）
-  while (prompt.length > PRE_SPEECH_BUDGET && recent.length > 1) {
-    recent.shift();
+  while (prompt.length > PRE_SPEECH_BUDGET && recentEntries.length > 1) {
+    recentEntries.shift();
+    recent = renderDiscussionLines(recentEntries);
     parts[3] = `【最近討論】\n${recent.join('\n')}`;
     prompt = parts.filter((s) => s !== '').join('\n\n');
   }
@@ -347,10 +366,8 @@ export function buildWolfPreSpeechPrompt(state: GameState, playerId: number): st
   const personaId = player.personality || `p${playerId}`;
   const personaPrompt = readTextIfExists(path.join(getResourceRoot(), 'character', personaId, 'agents.md'));
   const privateLines = privateKnowledgeLines(state, playerId);
-  const recent = state.wolfDiscussionLog
-    .filter((d) => d.day === state.day)
-    .slice(-PRE_SPEECH_RECENT)
-    .map((d) => `P${d.playerId}：${d.text}`);
+  let recentEntries = state.wolfDiscussionLog.slice(-PRE_SPEECH_RECENT);
+  let recent = renderDiscussionLines(recentEntries);
   // 根因修復：空板時「並給理由」會逼模型把直覺包裝成觀察（「直覺說P15有異動」），
   // 無材料時直接取消理由要求（指名＋直覺即可）；有材料才要求基於實際發言的理由
   const reasonReq = hasNoPublicBehaviorRecord(state)
@@ -366,8 +383,9 @@ export function buildWolfPreSpeechPrompt(state: GameState, playerId: number): st
   ];
   let prompt = parts.filter((s) => s !== '').join('\n\n');
   // 超預算：先丟最近討論最舊條目（固定部分保留）
-  while (prompt.length > PRE_SPEECH_BUDGET && recent.length > 1) {
-    recent.shift();
+  while (prompt.length > PRE_SPEECH_BUDGET && recentEntries.length > 1) {
+    recentEntries.shift();
+    recent = renderDiscussionLines(recentEntries);
     parts[2] = `【今晚狼討論】\n${recent.join('\n')}`;
     prompt = parts.filter((s) => s !== '').join('\n\n');
   }

@@ -371,6 +371,42 @@ test('START_GAME → NIGHT_DISCUSSION_OPEN（wolfDiscussionLog/wolfReady 清空�
     assert.deepEqual(s.wolfDiscussionLog, []);
     assert.deepEqual(s.wolfReady, []);
 });
+test('ADVANCE_DAY → 狼會議紀錄跨日保留（不清空，prompt 層以分隔線呈現）', () => {
+    const s = joinedState(9);
+    transition(s, { type: 'START_GAME' });
+    const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive);
+    transition(s, { type: 'HUMAN_WOLF_SPEAK', playerId: wolf.id, text: '今晚先殺P3' });
+    assert.equal(s.wolfDiscussionLog.length, 1);
+    // 收斂進夜晚 → timeout → 結算 → 公布 → 推進下一天
+    for (const p of s.players) {
+        if (p.alive && p.role === Role.WEREWOLF) {
+            transition(s, { type: 'AI_WOLF_READY', playerId: p.id });
+        }
+    }
+    assert.equal(s.phase, 'NIGHT_COLLECTING');
+    transition(s, { type: 'ACTION_TIMEOUT', gateId: 'night-1' });
+    transition(s, { type: 'RESOLVE_NIGHT' });
+    assert.equal(s.phase, 'DAY_DISCUSSION_OPEN');
+    // 白天：全員 ready → 投票 → 結算 → 公布
+    for (const p of s.players.filter((x) => x.alive)) {
+        transition(s, { type: 'HUMAN_READY_VOTE', playerId: p.id });
+    }
+    assert.equal(s.phase, 'DAY_VOTING_COLLECTING');
+    for (const p of s.players.filter((x) => x.alive)) {
+        const target = s.players.find((x) => x.alive && x.id !== p.id);
+        transition(s, { type: 'HUMAN_VOTE', playerId: p.id, targetId: target.id });
+    }
+    assert.equal(s.phase, 'DAY_VOTING_RESOLVING');
+    transition(s, { type: 'RESOLVE_VOTES' });
+    if (s.phase === 'DAY_RESULT_ANNOUNCING') {
+        const before = s.wolfDiscussionLog.length;
+        assert.ok(before >= 1, '推進前應有狼會議紀錄');
+        transition(s, { type: 'ADVANCE_DAY' });
+        assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
+        assert.equal(s.wolfDiscussionLog.length, before, 'ADVANCE_DAY 不得清空狼會議紀錄');
+        assert.ok(s.wolfDiscussionLog.some((d) => d.text === '今晚先殺P3'), '前一天紀錄應保留');
+    }
+});
 test('HUMAN_WOLF_SPEAK（狼）→ wolfDiscussionLog + boardVersion++', () => {
     const s = joinedState(9);
     transition(s, { type: 'START_GAME' });

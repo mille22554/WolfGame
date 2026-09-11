@@ -8,7 +8,7 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   buildDailyMemory, buildMemoryContent, writeMemory, clearMemory, readMemory,
-  memoryFilePath, MEMORY_MAX_DAYS,
+  memoryFilePath, MEMORY_SPEECHES_PER_DAY,
 } from './memory.js';
 import { createGameState, transition } from './game-state.js';
 import type { GameState } from './types.js';
@@ -65,7 +65,7 @@ test('buildDailyMemory：無事實的一天 → 空字串', () => {
   assert.equal(buildDailyMemory(s, quiet.id, s.day), '');
 });
 
-test('buildMemoryContent：超過 MEMORY_MAX_DAYS 丟最舊', () => {
+test('buildMemoryContent：整局保留，不設天數上限', () => {
   const s = day1State();
   const speaker = s.players.find((p) => p.alive && p.role === Role.VILLAGER)!;
   // 為 1..5 天各塞一筆發言事實（day 欄位直接標），確保每天都有非空段
@@ -73,11 +73,23 @@ test('buildMemoryContent：超過 MEMORY_MAX_DAYS 丟最舊', () => {
     s.discussionLog.push({ playerId: speaker.id, text: `第${d}天的發言`, day: d });
   }
   const days = [1, 2, 3, 4, 5];
-  const content = buildMemoryContent(s, speaker.id, days, MEMORY_MAX_DAYS);
-  assert.ok(content.includes('第3天'), `應保留第3天（上限${MEMORY_MAX_DAYS}）`);
-  assert.ok(content.includes('第5天'), '應保留最新天');
-  assert.ok(!content.includes('第1天'), '應丟最舊');
-  assert.ok(!content.includes('第2天'), '應丟次舊');
+  const content = buildMemoryContent(s, speaker.id, days);
+  for (const d of days) {
+    assert.ok(content.includes(`第${d}天`), `應保留第${d}天（整局記憶）`);
+  }
+});
+
+test('buildDailyMemory：單日發言超過上限只記最後 N 則（防膨脹）', () => {
+  const s = day1State();
+  const speaker = s.players.find((p) => p.alive && p.role === Role.VILLAGER)!;
+  for (let i = 0; i < MEMORY_SPEECHES_PER_DAY + 3; i++) {
+    s.discussionLog.push({ playerId: speaker.id, text: `發言${i}`, day: s.day });
+  }
+  const mem = buildDailyMemory(s, speaker.id, s.day);
+  assert.ok(!mem.includes('發言0'), '應丟最舊發言');
+  assert.ok(!mem.includes('發言1'), '應丟次舊發言');
+  assert.ok(!mem.includes('發言2'), '應丟第三舊發言');
+  assert.ok(mem.includes(`發言${MEMORY_SPEECHES_PER_DAY + 2}`), '應保留最新發言');
 });
 
 test('writeMemory/readMemory/clearMemory：IO 注入目錄往返', () => {

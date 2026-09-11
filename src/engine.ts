@@ -13,7 +13,7 @@ import type {
 } from './types.js';
 import { transition, buildPlayerSnapshot, buildSpectatorSnapshot, buildLobbySnapshot, saveState, createGameState, applyIdleTakeover } from './game-state.js';
 import { buildPrompt } from './character-session.js';
-import { buildDailyMemory, buildMemoryContent, writeMemory, clearMemory, memoryFilePath, MEMORY_MAX_DAYS } from './memory.js';
+import { buildDailyMemory, buildMemoryContent, writeMemory, clearMemory, memoryFilePath } from './memory.js';
 import { Role } from './types.js';
 import * as fs from 'fs';
 
@@ -366,13 +366,13 @@ export class GameEngine {
 
 /**
  * ADVANCE_DAY pre-transition 快照：深拷貝當天完整事實
- * （transition 會清空 nightActions / wolfKillTarget / wolfDiscussionLog / votes 等）
+ * （transition 會清空 nightActions / wolfKillTarget 等；wolfDiscussionLog 跨日保留）
  */
 function snapshotForMemory(state: GameState): GameState {
   return JSON.parse(JSON.stringify(state)) as GameState;
 }
 
-/** 為每位玩家寫入當天記當天記憶：讀現有 memory → 追加當天段 → 保留最近 MEMORY_MAX_DAYS 天 */
+/** 為每位玩家寫入當天記當天記憶：讀現有 memory → 追加當天段（整局保留，不設天數上限） */
 function writeDailyMemories(snapshot: GameState, memoryDir?: string): void {
   const day = snapshot.day;
   for (const p of snapshot.players) {
@@ -382,9 +382,8 @@ function writeDailyMemories(snapshot: GameState, memoryDir?: string): void {
     const todaySection = buildDailyMemory(snapshot, p.id, day);
     if (!todaySection) continue;
     sections.set(String(day), todaySection);
-    const days = [...sections.keys()].sort((a, b) => Number(a) - Number(b));
-    const kept = days.slice(-MEMORY_MAX_DAYS).map(Number);
-    const content = buildMemoryContent(snapshot, p.id, kept);
+    const days = [...sections.keys()].sort((a, b) => Number(a) - Number(b)).map(Number);
+    const content = buildMemoryContent(snapshot, p.id, days);
     writeMemory(p.personality, content, memoryDir);
   }
 }

@@ -8,20 +8,20 @@
  * 設計取捨：
  * - 機械式推導（純函式 builder）：零幻覺風險、零 LLM 成本、可單測
  * - 寫入走 getDataDir()（pkg 環境 exe 旁 data/ 可寫）；讀取 fallback resource root（dev 同源）
- * - 只記「事實」（誰說了/投了/殺了誰），不做主觀總結 — 主觀沉澝屬 external-accumulation-plan 範圍
- * - 天數上限（預設 3 天）：防 memory 無限膨脹吃掉 prompt 預算
+ * - 只記「事實」（誰說了/投了/殺了誰），不做主觀總結 — 主觀沉澱屬 external-accumulation-plan 範圍
+ * - 整局保留：不設天數上限；單日發言取最後 5 則（防單日話癆膨脹 prompt）
  */
 import type { GameState } from './types.js';
-/** memory 保留天數上限（含當天；最舊的先丟） */
-export declare const MEMORY_MAX_DAYS = 3;
+/** 單日發言保留上限（每人每天，防話癆膨脹） */
+export declare const MEMORY_SPEECHES_PER_DAY = 5;
 /**
  * 為單一玩家生成某天的記憶段（純函式）：
  * 我的白天發言 / 我的投票 / 我的夜間行動 / 我的狼會議發言與最終擊殺。
  * 只含該玩家自身視角的事實，不含他人私有資訊。
  */
 export declare function buildDailyMemory(state: GameState, playerId: number, day: number): string;
-/** memory 檔內容（純函式）：多天記憶段組合，超過 maxDays 丟最舊 */
-export declare function buildMemoryContent(state: GameState, playerId: number, days: number[], maxDays?: number): string;
+/** memory 檔內容（純函式）：多天記憶段組合，整局保留（不設天數上限） */
+export declare function buildMemoryContent(state: GameState, playerId: number, days: number[]): string;
 /** memory 檔案路徑（寫入用：getDataDir 下，pkg 環境可寫） */
 export declare function memoryFilePath(personaId: string, dataDir?: string): string;
 /** 寫入單一玩家 memory（覆寫） */
