@@ -309,22 +309,15 @@ test('wolf_speech 任務指令：行為理由僅限有觀察時，無材料時�
   assert.ok(prompt.includes('僅當討論紀錄中真有此觀察時才可用行為理由'), '示例應條件化行為理由');
   assert.ok(prompt.includes('誠實說直覺或隨機即可'), '無材料時應引導誠實理由');
   assert.ok(!prompt.includes('外圍編號'), '不應再提供編號位置類示例');
-  // 空板：理由要求直接取消（指名＋直覺即可），避免「並給理由」逼出直覺包裝的觀察
+  // 首夜極簡：三句固定措辭
   const pre = buildWolfPreSpeechPrompt(s, wolf.id);
-  assert.ok(pre.includes('不需要給理由'), '空板 pre_speech 應取消理由要求');
-  assert.ok(pre.includes('怪怪的'), '空板 pre_speech 應點名禁用空話詞（禁空話條款存在性）');
-  assert.ok(pre.includes('文本與旗標須一致'), '空板 pre_speech 應要求文本與旗標一致');
-  assert.ok(!pre.includes('並給理由'), '空板 pre_speech 不應再要求給理由');
-  // 有材料：恢復基於實際發言的理由要求
+  assert.ok(pre.includes('只准談你自己的狀態'), '首夜應含只談自己');
+  assert.ok(pre.includes('不准描述對方'), '首夜應禁述對方');
+  // 有材料：後夜兩句固定措辭＋跟隨共識
   s.wolfDiscussionLog.push({ playerId: wolf.id, text: '我覺得P5可疑', day: s.day });
   const pre2 = buildWolfPreSpeechPrompt(s, wolf.id);
-  assert.ok(pre2.includes('並給理由'), '有材料 pre_speech 應要求給理由');
-  assert.ok(pre2.includes('只能引用【白天討論】或【今晚狼討論】實際出現的發言'), '有材料理由應限定為兩白板實發言');
+  assert.ok(pre2.includes('實際出現的發言'), '後夜理由只准引用實發言');
   assert.ok(pre2.includes('直接跟進該目標並標已決定'), '有材料應含跟隨共識規則（孤狼猶豫時合法化跟進）');
-  assert.ok(!pre2.includes('不需要給理由'), '有材料不應取消理由要求');
-  assert.ok(pre2.includes('先點名回應一位【今晚狼討論】中有發言的同伴'), '今晚已有發言時應要求點名回應（對話感）');
-  // 空板（首輪）不要求回應：無對象可回應
-  assert.ok(!pre.includes('點名回應'), '空板不應要求點名回應');
 });
 
 test('expand 潤飾約束：狼/白天 expand 均鎖定草稿目標與理由，只准調整語氣', () => {
@@ -335,10 +328,7 @@ test('expand 潤飾約束：狼/白天 expand 均鎖定草稿目標與理由，�
   const wolfExpand = buildWolfExpandPrompt(s, wolf.id, 'P1：「今晚先襲擊P3，直覺。」');
   assert.ok(wolfExpand.includes('草稿指名的目標（P編號）與理由不得改變'), '狼 expand 應鎖定目標與理由');
   assert.ok(wolfExpand.includes('不得新增草稿中沒有的理由'), '狼 expand 應禁止新增理由');
-  assert.ok(wolfExpand.includes('不得新增守衛預測、行為觀察或編號位置聯想'), '狼 expand 應點名禁止守衛預測/行為觀察/編號聯想');
   assert.ok(wolfExpand.includes('改寫成自然的口語發言'), '狼 expand 應要求口語化改寫');
-  assert.ok(wolfExpand.includes('改寫接地規則'), '狼 expand 應同步 grounding 規則');
-  assert.ok(wolfExpand.includes('可疑一律禁用'), '狼 expand 應含禁詞表（與 pre_speech 一致）');
   assert.ok(!wolfExpand.includes('說不上為什麼'), '狼 expand 不應含固定句式示例（防照搬）');
   const dayExpand = buildExpandPrompt(s, aliveIds(s)[0], 'P1：「我比較在意P3的說法。」');
   assert.ok(dayExpand.includes('草稿的核心論點不得改變'), '白天 expand 應鎖定核心論點');
@@ -346,29 +336,19 @@ test('expand 潤飾約束：狼/白天 expand 均鎖定草稿目標與理由，�
   assert.ok(dayExpand.includes('改寫成自然的口語發言'), '白天 expand 應要求口語化改寫');
 });
 
-test('狼首夜 grounding＋動態範例：禁述他人、只談自己、編號合法', () => {
+test('狼首夜極簡：三句固定措辭＋預算', () => {
   const s = createGameState(9);
   joinAll(s, 9);
   transition(s, { type: 'START_GAME' });
   const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
-  const allies = s.players.filter((p) => p.role === Role.WEREWOLF && p.alive).map((p) => p.id);
   const pre = buildWolfPreSpeechPrompt(s, wolf.id);
-  assert.ok(pre.includes('理由的材料必須存在'), '首夜應聲明 grounding 原則');
-  assert.ok(pre.includes('只准談你自己的狀態'), '首夜只准談自己狀態');
-  assert.ok(pre.includes('可疑一律禁用'), '首夜應禁用可疑類描述');
-  assert.ok(pre.includes('第一晚沒資訊，我隨便指一個'), '首夜應有隨便指形狀範例');
-  assert.ok(pre.includes('你們先定，我跟票'), '首夜應有跟票形狀範例');
-  assert.ok(pre.includes('編號僅示範形狀'), '範例應加註編號僅示範');
-  assert.ok(pre.includes('[決定:資訊不足]'), '跟票範例應配資訊不足旗標');
-  const seg = pre.split('形狀範例')[1]?.split('。')[0] ?? '';
-  for (const m of seg.matchAll(/P(\d+)/g)) {
-    const id = Number(m[1]);
-    assert.ok(!allies.includes(id), `範例編號 P${id} 須為合法目標、不可為同盟`);
-  }
+  assert.ok(pre.includes('只准談你自己的狀態'), '首夜應含只談自己');
+  assert.ok(pre.includes('不准描述對方'), '首夜應禁述對方');
+  assert.ok(pre.includes('拿不定就標[決定:資訊不足]'), '首夜應含資訊不足旗標指引');
   assert.ok(pre.length <= PRE_SPEECH_BUDGET, `首夜 prompt ${pre.length} 字元應 ≤ ${PRE_SPEECH_BUDGET}`);
 });
 
-test('狼後夜白天討論段：威脅評估只准引用實發言', () => {
+test('狼後夜極簡：兩句固定措辭＋白天討論段', () => {
   const s = createGameState(9);
   joinAll(s, 9);
   transition(s, { type: 'START_GAME' });
@@ -377,12 +357,11 @@ test('狼後夜白天討論段：威脅評估只准引用實發言', () => {
   const preEmpty = buildWolfPreSpeechPrompt(s, wolf.id);
   assert.ok(preEmpty.includes('【白天討論】'), '後夜應含白天討論段');
   assert.ok(preEmpty.includes('（今日尚無白天發言）'), '無白天發言時應填佔位');
-  assert.ok(preEmpty.includes('帶票強'), '後夜應以帶票強做威脅評估');
-  assert.ok(preEmpty.includes('行為像神者優先'), '後夜應以像神者優先');
-  assert.ok(preEmpty.includes('嚴禁聲稱知道任何人職業'), '後夜嚴禁自稱知職業');
+  assert.ok(preEmpty.includes('實際出現的發言'), '後夜理由只准引用實發言');
   const speaker = aliveIds(s)[0];
   s.discussionLog.push({ playerId: speaker, text: '我帶票投P5', day: s.day });
   const preFull = buildWolfPreSpeechPrompt(s, wolf.id);
   assert.ok(preFull.includes('我帶票投P5'), '白天段應含當天實際發言文本');
+  assert.ok(preFull.includes('實際出現的發言'), '後夜應要求引用實發言');
   assert.ok(preFull.length <= 4000, '後夜 prompt 應保持可控長度');
 });

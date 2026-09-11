@@ -304,25 +304,6 @@ function wolfLegalIds(state, playerId) {
 function wolfValidTargets(state, playerId) {
     return wolfLegalIds(state, playerId).map((id) => `P${id}`).join('、');
 }
-/** 今晚已發言的同伴（取最近一位，供首夜跟票範例引用真實同伴） */
-function tonightCompanionId(state, playerId) {
-    const tonight = state.wolfDiscussionLog.filter((d) => d.day === state.day && d.playerId !== playerId);
-    return tonight.length > 0 ? tonight[tonight.length - 1].playerId : undefined;
-}
-/** 首夜動態形狀範例：編號從合法目標隨機抽，跟票例只在有同伴發言時出現 */
-function firstNightExamples(state, playerId) {
-    const ids = wolfLegalIds(state, playerId);
-    if (ids.length === 0)
-        return '';
-    const pickA = ids[Math.floor(Math.random() * ids.length)];
-    const pickB = ids[Math.floor(Math.random() * ids.length)];
-    const companion = tonightCompanionId(state, playerId);
-    const ex1 = `如「第一晚沒資訊，我隨便指一個，P${pickA}吧。」→[決定:殺P${pickA}]`;
-    const ex2 = companion !== undefined ? `如「我沒想法，跟P${companion}，殺P${pickB}。」→[決定:殺P${pickB}]` : '';
-    const ex3 = `如「你們先定，我跟票。」→[決定:資訊不足]`;
-    const list = [ex1, ex2, ex3].filter((s) => s !== '').join('；');
-    return `形狀範例（編號僅示範形狀，不要照抄）：${list}。`;
-}
 /** 當天白天討論最近 5 則（只取文本，附說話人以便引用；供後夜威脅評估） */
 function todayDiscussionLines(state) {
     return state.discussionLog.filter((d) => d.day === state.day).slice(-PRE_SPEECH_RECENT).map((e) => `P${e.playerId}：${e.text}`);
@@ -369,14 +350,10 @@ export function buildWolfPreSpeechPrompt(state, playerId) {
     let recentEntries = state.wolfDiscussionLog.slice(-PRE_SPEECH_RECENT);
     let recent = renderDiscussionLines(recentEntries);
     let dayEntries = isFirstNight ? [] : todayDiscussionLines(state);
-    // 首夜 grounding：理由材料須存在，無公開發言禁述他人、只談自己＋動態形狀範例；
-    // 後夜威脅評估：理由只准引用兩白板實發言，帶票強/主導/像神者優先，嚴禁自稱知職業；
-    // 跟隨共識＋點名回應保留；空話詞＋旗標一致延續（措辭精簡，預算見 PRE_SPEECH_BUDGET）。
-    const hasTonightDiscussion = state.wolfDiscussionLog.some((d) => d.day === state.day);
-    const firstReq = `理由的材料必須存在：只能引用【今晚狼討論】裡同伴實際說過的話；第一晚沒有任何公開發言，只准談你自己的狀態（如沒想法、隨便指、跟票），不得描述任何人的行為、狀態或感覺（不對勁／怪怪的／有異狀／有問題／可疑一律禁用）。${firstNightExamples(state, playerId)}直接指名一個具體目標（P編號），並說這是你的直覺即可；不需要給理由。說出想殺誰本身就是決定，請標[決定:殺P編號]；只有連提名誰都拿不定時，才標[決定:資訊不足]。文本與旗標須一致：寫不確定／再看看就不要提名並標[決定:資訊不足]，提名了就是已決定。`;
-    const laterReq = `直接指名一個具體目標（P編號）並給理由（只能引用【白天討論】或【今晚狼討論】實際出現的發言做威脅評估：帶票強、主導發言、行為像神者優先；嚴禁聲稱知道任何人職業）。`
-        + `若其他同伴都已指名同一目標、而你沒有更想殺的人選，直接跟進該目標並標已決定（跟隨共識本身就是決定）。`
-        + (hasTonightDiscussion ? `先點名回應一位【今晚狼討論】中有發言的同伴（同意、補充或反對他的說法），再講你的判斷，讓討論像開會對話一樣接續下去。` : '');
+    // 首夜／後夜極簡：措辭固定；跟隨共識保留
+    const firstReq = `直接指名一個具體目標（P編號）。第一晚沒有公開發言：只准談你自己的狀態，不准描述對方。說出想殺誰就標[決定:殺P編號]，拿不定就標[決定:資訊不足]。`;
+    const laterReq = `直接指名一個具體目標（P編號）。理由只能引用【白天討論】或【今晚狼討論】裡實際出現的發言。`
+        + `若其他同伴都已指名同一目標、而你沒有更想殺的人選，直接跟進該目標並標已決定（跟隨共識本身就是決定）。`;
     const reasonReq = isFirstNight ? firstReq : laterReq;
     const dayBlock = isFirstNight ? '' : `【白天討論】\n${dayEntries.length > 0 ? dayEntries.join('\n') : '（今日尚無白天發言）'}`;
     const parts = [
@@ -411,8 +388,7 @@ export function buildWolfPreSpeechPrompt(state, playerId) {
 export function buildWolfExpandPrompt(state, playerId, preSpeech) {
     const base = buildPrompt(state, playerId, 'wolf_speech');
     const boardDecl = hasNoPublicBehaviorRecord(state) ? emptyBoardDeclaration() : nonEmptyBoardDeclaration();
-    // 接地同步：與 pre_speech 同規則，禁詞表＋材料限制各一份（「不得新增理由」鐵則保留）
-    const groundRule = `【改寫接地規則】理由的材料必須存在：只准談你自己的狀態或引用【今晚狼討論】／【白天討論】實際出現的發言，不得描述任何人的行為、狀態或感覺（不對勁／怪怪的／有異狀／有問題／可疑一律禁用）。`;
-    return `${base}\n\n${boardDecl}\n\n${groundRule}\n\n【今晚可襲擊的存活玩家】${wolfValidTargets(state, playerId)}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮；守衛保護誰是秘密，不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由）\n\n【你的預發言草稿】${preSpeech}\n請把這則草稿改寫成自然的口語發言（20-60 字，像一般人在會議中講話；短一點沒關係，不要為了湊字數而新增內容），不必保留草稿的字句與句構，也不要套用任何固定句式。鐵則：草稿指名的目標（P編號）與理由不得改變，不得新增草稿中沒有的理由（尤其不得新增守衛預測、行為觀察或編號位置聯想）。`;
+    // 接地極簡：只留不得新增理由鐵則
+    return `${base}\n\n${boardDecl}\n\n【今晚可襲擊的存活玩家】${wolfValidTargets(state, playerId)}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮；守衛保護誰是秘密，不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由）\n\n【你的預發言草稿】${preSpeech}\n請把這則草稿改寫成自然的口語發言（20-60 字，像一般人在會議中講話；短一點沒關係，不要為了湊字數而新增內容），不必保留草稿的字句與句構，也不要套用任何固定句式。鐵則：草稿指名的目標（P編號）與理由不得改變，不得新增草稿中沒有的理由。`;
 }
 //# sourceMappingURL=character-session.js.map
