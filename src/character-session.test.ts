@@ -243,7 +243,7 @@ test('防幻覺觀察：有討論材料後，prompt 不帶材料狀態聲明', (
   assert.ok(!dayPre.includes('現實材料狀態'), '白天 pre_speech 有材料時不應帶空板聲明');
 });
 
-test('wolf_speech 任務指令：行為理由僅限有觀察時，無材料時誠實說直覺', () => {
+test('wolf_speech 任務指令：行為理由僅限有觀察時，無材料時取消理由要求', () => {
   const s = createGameState(9);
   joinAll(s, 9);
   transition(s, { type: 'START_GAME' });
@@ -252,8 +252,16 @@ test('wolf_speech 任務指令：行為理由僅限有觀察時，無材料時�
   assert.ok(prompt.includes('僅當討論紀錄中真有此觀察時才可用行為理由'), '示例應條件化行為理由');
   assert.ok(prompt.includes('誠實說直覺或隨機即可'), '無材料時應引導誠實理由');
   assert.ok(!prompt.includes('外圍編號'), '不應再提供編號位置類示例');
+  // 空板：理由要求直接取消（指名＋直覺即可），避免「並給理由」逼出直覺包裝的觀察
   const pre = buildWolfPreSpeechPrompt(s, wolf.id);
-  assert.ok(pre.includes('誠實說直覺或隨機即可，不要編造理由'), 'pre_speech 應引導誠實理由');
+  assert.ok(pre.includes('不需要給理由，也不要描述對方的任何行為或狀態'), '空板 pre_speech 應取消理由要求');
+  assert.ok(!pre.includes('並給理由'), '空板 pre_speech 不應再要求給理由');
+  // 有材料：恢復基於實際發言的理由要求
+  s.wolfDiscussionLog.push({ playerId: wolf.id, text: '我覺得P5可疑', day: s.day });
+  const pre2 = buildWolfPreSpeechPrompt(s, wolf.id);
+  assert.ok(pre2.includes('並給理由'), '有材料 pre_speech 應要求給理由');
+  assert.ok(pre2.includes('只能基於【今晚狼討論】中的實際發言內容'), '有材料理由應限定為實際發言');
+  assert.ok(!pre2.includes('不需要給理由'), '有材料不應取消理由要求');
 });
 
 test('expand 潤飾約束：狼/白天 expand 均鎖定草稿目標與理由，只准調整語氣', () => {

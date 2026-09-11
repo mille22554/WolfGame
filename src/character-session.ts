@@ -351,12 +351,17 @@ export function buildWolfPreSpeechPrompt(state: GameState, playerId: number): st
     .filter((d) => d.day === state.day)
     .slice(-PRE_SPEECH_RECENT)
     .map((d) => `P${d.playerId}：${d.text}`);
+  // 根因修復：空板時「並給理由」會逼模型把直覺包裝成觀察（「直覺說P15有異動」），
+  // 無材料時直接取消理由要求（指名＋直覺即可）；有材料才要求基於實際發言的理由
+  const reasonReq = hasNoPublicBehaviorRecord(state)
+    ? '直接指名一個具體目標（P編號），並說這是你的直覺即可；不需要給理由，也不要描述對方的任何行為或狀態。'
+    : '直接指名一個具體目標（P編號）並給理由（只能基於【今晚狼討論】中的實際發言內容）。';
   const parts: string[] = [
     personaPrompt ? `【人格設定】\n${personaPrompt}` : '',
     `【你的角色資訊】\n${privateLines.join('\n')}`,
     `【今晚狼討論】\n${recent.length > 0 ? recent.join('\n') : '（尚無發言）'}`,
     hasNoPublicBehaviorRecord(state) ? emptyBoardDeclaration() : '',
-    `【任務】你是 P${playerId}，請寫一句 20-40 字的預發言草稿，與同伴討論今晚要襲擊誰、協調目標（不超過 40 字）。用一般人的自然語氣寫，不要刻意扮演角色口吻、不要浮誇；人格設定只作為你的思考傾向參考（懷疑誰、敢不敢果斷），不要求模仿其說話風格。直接指名一個具體目標（P編號）並給理由；沒有材料時誠實說直覺或隨機即可，不要編造理由。今晚可襲擊的存活玩家只有：${wolfValidTargets(state, playerId)}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮）。守衛保護誰、誰是甚麼職業都是秘密，無從得知：不得聲稱知道，也不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由。請使用繁體中文。\n格式：P${playerId}：「你的草稿」`,
+    `【任務】你是 P${playerId}，請寫一句 20-40 字的預發言草稿，與同伴討論今晚要襲擊誰、協調目標（不超過 40 字）。用一般人的自然語氣寫，不要刻意扮演角色口吻、不要浮誇；人格設定只作為你的思考傾向參考（懷疑誰、敢不敢果斷），不要求模仿其說話風格。${reasonReq}今晚可襲擊的存活玩家只有：${wolfValidTargets(state, playerId)}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮）。守衛保護誰、誰是甚麼職業都是秘密，無從得知：不得聲稱知道，也不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由。請使用繁體中文。\n格式：P${playerId}：「你的草稿」`,
     `【決策旗標】草稿結尾另起一行附加你的襲擊決策狀態（中控內部判讀用，不會公開）：已決定襲擊某人→[決定:殺P編號]；資訊不足無法決定→[決定:資訊不足]。只可附加其一。`,
   ];
   let prompt = parts.filter((s) => s !== '').join('\n\n');
