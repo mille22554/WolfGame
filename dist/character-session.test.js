@@ -152,6 +152,7 @@ test('buildPreSpeechPrompt：輕量段落齊全、≤ 2000 字元', () => {
     assert.ok(prompt.includes('最近討論'));
     assert.ok(prompt.includes('大家早安'));
     assert.ok(prompt.includes('預發言草稿'));
+    assert.ok(prompt.includes('嚴禁任何簡體字'), '白天草稿應明令禁止簡體字');
     assert.ok(prompt.length <= PRE_SPEECH_BUDGET, `預發言 prompt ${prompt.length} 字元應 ≤ ${PRE_SPEECH_BUDGET}`);
 });
 test('buildJudgePrompt：全盲（打亂匿名、不含 P 編號）+ 評分指令', () => {
@@ -197,6 +198,7 @@ test('狼 prompt：要求指名具體目標、禁止預測守衛動向、列舉�
         assert.ok(prompt.includes('指名'), '應要求指名具體目標');
         assert.ok(prompt.includes('襲擊同盟是規則上不可能的行為'), '應禁止殺同盟');
         assert.ok(prompt.includes('繁體中文'), '應要求繁體中文');
+        assert.ok(prompt.includes('嚴禁任何簡體字'), '應明令禁止簡體字');
         assert.ok(prompt.includes('今晚可襲擊的存活玩家'), '應列舉合法目標');
         assert.ok(prompt.includes('不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由'), '應禁止以守衛猜測（雙向）為理由');
         const seg = prompt.split('今晚可襲擊的存活玩家')[1]?.split('（')[0] ?? '';
@@ -279,6 +281,9 @@ test('wolf_speech 任務指令：行為理由僅限有觀察時，無材料時�
     assert.ok(pre2.includes('並給理由'), '有材料 pre_speech 應要求給理由');
     assert.ok(pre2.includes('只能基於【今晚狼討論】中的實際發言內容'), '有材料理由應限定為實際發言');
     assert.ok(!pre2.includes('不需要給理由'), '有材料不應取消理由要求');
+    assert.ok(pre2.includes('先點名回應一位【今晚狼討論】中有發言的同伴'), '今晚已有發言時應要求點名回應（對話感）');
+    // 空板（首輪）不要求回應：無對象可回應
+    assert.ok(!pre.includes('點名回應'), '空板不應要求點名回應');
 });
 test('expand 潤飾約束：狼/白天 expand 均鎖定草稿目標與理由，只准調整語氣', () => {
     const s = createGameState(9);

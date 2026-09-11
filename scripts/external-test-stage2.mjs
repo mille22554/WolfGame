@@ -50,7 +50,7 @@ function fmtDecision(decision) {
   return `殺P${decision.target}`;
 }
 
-const calls = [];   // { kind, playerId, prompt, raw, decision, boardVersion, ts }
+const calls = [];   // { kind, playerId, raw, decision, boardVersion, ts }（不存 prompt：stage 2 只驗收行為）
 
 const inner = new WorkerDispatcher({ modelPath: MODEL_PATH, contextSize: 8192, contextCount: 3 });
 
@@ -65,7 +65,6 @@ const llm = {
     const rec = {
       kind: inferKind(config),
       playerId: m ? parseInt(m[1], 10) : null,
-      prompt,
       raw,
       decision: parseDecisionFlag(raw),
       boardVersion: engine.getState().boardVersion,
@@ -125,7 +124,7 @@ try {
       lastBv = cur.boardVersion;
       roundSnapshots.push({ boardVersion: lastBv, wolfReady: [...cur.wolfReady], ts: Date.now() });
       console.log(`回合 ${lastBv - startBv} 播出：boardVersion=${lastBv}，wolfReady=[${cur.wolfReady.join(', ')}]`);
-      // 中間持久化：崩潰不丟失已產生的 prompt/草稿（最終報告覆寫 REPORT 本體，此 sidecar 僅救援用）
+      // 中間持久化：崩潰不丟失已產生的草稿/決策（最終報告覆寫 REPORT 本體，此 sidecar 僅救援用；不含 prompt）
       try {
         writeFileSync(REPORT + '.calls.json', JSON.stringify({
           wolves: wolves.map((w) => w.id),
@@ -169,13 +168,6 @@ try {
     for (const c of group) {
       push();
       push(`### ${c.kind} P${c.playerId ?? '-'} → 決策：${fmtDecision(c.decision)}`);
-      push();
-      push('**中控 prompt：**');
-      push('```');
-      push(c.prompt);
-      push('```');
-      push();
-      push('**AI 草稿回復：**');
       push('```');
       push(c.raw);
       push('```');
@@ -264,9 +256,22 @@ try {
   push(longGaps > 0
     ? `- ⚠ 呼叫間隔超過 ${RETRY_MS * 2 / 1000} 秒共 ${longGaps} 次，疑似生產失敗重試（SPEECH_RETRY_MS=${RETRY_MS}）。`
     : `- 無長間隔（生產無失敗重試）。`);
-  const leaked = calls.filter((c) => c.kind === 'expand' && c.prompt.includes('決定:資訊不足') && !c.prompt.includes('[決定:資訊不足]'));
-  if (leaked.length > 0) {
-    push(`- ⚠ 決策旗標洩漏：AI 以「決定:資訊不足」（無方括號）回覆時，stripDecisionFlags 只剝 [決定:...]（有方括號），旗標殘留在草稿中進入 expand prompt（${leaked.length} 次）。`);
+  const flagRemnant = final.wolfDiscussionLog.filter((d) =>
+    /\[決定[:：]/.test(d.text) || /(^|\n)\s*決定\s*[:：]\s*(投P\s*\d+|殺P\s*\d+|棄票|資訊不足)\s*($|\n)/.test(d.text));
+  if (flagRemnant.length > 0) {
+    push(`- ⚠ 決策旗標洩漏進白板：${flagRemnant.length} 筆播出含旗標殘留（stripDecisionFlags 未清乾淨）。`);
+  }
+  // 簡體字檢查：只認繁簡字形不同的高頻字（避免誤判兩岸通用字）
+  const simpRe = /[杀发对个说话认让过这进远运时实现务汉买读听观觉]/;
+  const simpHits = [];
+  for (const c of calls) {
+    const m = c.raw.match(simpRe);
+    if (m) simpHits.push(`P${c.playerId ?? '-'}(${c.kind})含「${m[0]}」`);
+  }
+  if (simpHits.length > 0) {
+    push(`- ⚠ 簡體字混入：${simpHits.length} 筆（${simpHits.slice(0, 5).join('、')}${simpHits.length > 5 ? '…' : ''}）。`);
+  } else {
+    push(`- 無簡體字混入（抽查 ${calls.length} 筆回覆）。`);
   }
   const doublePrefix = final.wolfDiscussionLog.filter((d) => d.text.startsWith(`P${d.playerId}：`)).length;
   if (doublePrefix > 0) {
