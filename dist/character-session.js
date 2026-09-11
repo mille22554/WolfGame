@@ -246,7 +246,7 @@ export function buildJudgePrompt(daySummary, preSpeeches) {
  */
 export function buildExpandPrompt(state, playerId, preSpeech) {
     const base = buildPrompt(state, playerId, 'speech');
-    return `${base}\n\n【你的預發言草稿】${preSpeech}\n你可以沿用或修改這則草稿的措辭，以你的性格自然潤飾，展開成完整發言（30-60 字）；語氣符合人格但不要過於強烈或浮誇。鐵則：草稿的核心論點不得改變，不得新增草稿中沒有的理由或觀察，你只調整語氣與措辭。`;
+    return `${base}\n\n【你的預發言草稿】${preSpeech}\n請把這則草稿大幅改寫成自然的口語發言（30-60 字，像真人在會議中講話，帶你的性格口吻），不必保留草稿的字句與句構。鐵則：草稿的核心論點不得改變，不得新增草稿中沒有的理由或觀察。`;
 }
 /**
  * summarizeWolfDiscussion：狼討論摘要 — top 提及的襲擊目標（無投票段）
@@ -329,6 +329,6 @@ export function buildWolfPreSpeechPrompt(state, playerId) {
  */
 export function buildWolfExpandPrompt(state, playerId, preSpeech) {
     const base = buildPrompt(state, playerId, 'wolf_speech');
-    return `${base}\n\n${hasNoPublicBehaviorRecord(state) ? emptyBoardDeclaration() + '\n\n' : ''}【今晚可襲擊的存活玩家】${wolfValidTargets(state, playerId)}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮；守衛保護誰是秘密，不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由）\n\n【你的預發言草稿】${preSpeech}\n你可以沿用或修改這則草稿的措辭，以你的性格自然潤飾，展開成完整發言（30-60 字，討論今晚襲擊目標）；語氣符合人格但不要過於強烈或浮誇。鐵則：草稿指名的目標（P編號）與理由不得改變，不得新增草稿中沒有的理由（尤其不得新增守衛預測、行為觀察或編號位置聯想），你只調整語氣與措辭。`;
+    return `${base}\n\n${hasNoPublicBehaviorRecord(state) ? emptyBoardDeclaration() + '\n\n' : ''}【今晚可襲擊的存活玩家】${wolfValidTargets(state, playerId)}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮；守衛保護誰是秘密，不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由）\n\n【你的預發言草稿】${preSpeech}\n請把這則草稿大幅改寫成自然的口語發言（30-60 字，像真人在會議中講話，帶你的性格口吻），不必保留草稿的字句與句構。改寫方向示例：草稿「根據直覺，今晚應該襲擊P12」→「我覺得今晚先殺P12吧，說不上為什麼，就直覺。」（實際說法依你的性格變化，不要逐字照搬示例）。鐵則：草稿指名的目標（P編號）與理由不得改變，不得新增草稿中沒有的理由（尤其不得新增守衛預測、行為觀察或編號位置聯想）。`;
 }
 //# sourceMappingURL=character-session.js.map

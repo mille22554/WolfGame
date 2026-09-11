@@ -245,8 +245,11 @@ test('expand 潤飾約束：狼/白天 expand 均鎖定草稿目標與理由，�
     assert.ok(wolfExpand.includes('草稿指名的目標（P編號）與理由不得改變'), '狼 expand 應鎖定目標與理由');
     assert.ok(wolfExpand.includes('不得新增草稿中沒有的理由'), '狼 expand 應禁止新增理由');
     assert.ok(wolfExpand.includes('不得新增守衛預測、行為觀察或編號位置聯想'), '狼 expand 應點名禁止守衛預測/行為觀察/編號聯想');
+    assert.ok(wolfExpand.includes('大幅改寫成自然的口語發言'), '狼 expand 應要求口語化改寫');
+    assert.ok(wolfExpand.includes('說不上為什麼，就直覺'), '狼 expand 應提供口語化示例');
     const dayExpand = buildExpandPrompt(s, aliveIds(s)[0], 'P1：「我比較在意P3的說法。」');
     assert.ok(dayExpand.includes('草稿的核心論點不得改變'), '白天 expand 應鎖定核心論點');
     assert.ok(dayExpand.includes('不得新增草稿中沒有的理由或觀察'), '白天 expand 應禁止新增理由');
+    assert.ok(dayExpand.includes('大幅改寫成自然的口語發言'), '白天 expand 應要求口語化改寫');
 });
 //# sourceMappingURL=character-session.test.js.map
