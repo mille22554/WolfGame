@@ -261,17 +261,21 @@ try {
   if (flagRemnant.length > 0) {
     push(`- ⚠ 決策旗標洩漏進白板：${flagRemnant.length} 筆播出含旗標殘留（stripDecisionFlags 未清乾淨）。`);
   }
-  // 簡體字檢查：只認繁簡字形不同的高頻字（避免誤判兩岸通用字）
+  // 簡體字檢查：驗白板（最終播出，scheduler 正規化後）為準；
+  // raw 殘留僅供參考（正規化前原文，預期仍有零星混入，已被清洗）。
   const simpRe = /[杀发对个说话认让过这进远运时实现务汉买读听观觉]/;
-  const simpHits = [];
-  for (const c of calls) {
-    const m = c.raw.match(simpRe);
-    if (m) simpHits.push(`P${c.playerId ?? '-'}(${c.kind})含「${m[0]}」`);
-  }
-  if (simpHits.length > 0) {
-    push(`- ⚠ 簡體字混入：${simpHits.length} 筆（${simpHits.slice(0, 5).join('、')}${simpHits.length > 5 ? '…' : ''}）。`);
+  const boardSimp = final.wolfDiscussionLog.filter((d) => simpRe.test(d.text));
+  if (boardSimp.length > 0) {
+    push(`- ⚠ 白板簡體字混入：${boardSimp.length} 筆播出含簡體（正規化未覆蓋，須補映射表）。`);
   } else {
-    push(`- 無簡體字混入（抽查 ${calls.length} 筆回覆）。`);
+    push(`- 白板無簡體字混入（scheduler 正規化生效）。`);
+  }
+  let rawSimp = 0;
+  for (const c of calls) {
+    if (simpRe.test(c.raw)) rawSimp++;
+  }
+  if (rawSimp > 0) {
+    push(`- （模型原文含簡體 ${rawSimp} 筆，已於 intake 正規化，不影響播出。）`);
   }
   const doublePrefix = final.wolfDiscussionLog.filter((d) => d.text.startsWith(`P${d.playerId}：`)).length;
   if (doublePrefix > 0) {
