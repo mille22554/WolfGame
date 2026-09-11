@@ -210,3 +210,42 @@ test('buildWolfExpandPrompt：狼 speech prompt + 草稿附加', () => {
   assert.ok(prompt.includes(draft));
   assert.ok(prompt.includes('襲擊') || prompt.includes('今晚'));
 });
+
+test('防幻覺觀察：無任何討論材料時，狼/白天 prompt 帶現實材料狀態聲明', () => {
+  const s = createGameState(9);
+  joinAll(s, 9);
+  transition(s, { type: 'START_GAME' });
+  assert.equal(s.discussionLog.length, 0);
+  assert.equal(s.wolfDiscussionLog.length, 0);
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
+  const pre = buildWolfPreSpeechPrompt(s, wolf.id);
+  const expand = buildWolfExpandPrompt(s, wolf.id, 'P1：「今晚先襲擊P3。」');
+  for (const prompt of [pre, expand]) {
+    assert.ok(prompt.includes('現實材料狀態'), '狼 prompt 應含材料狀態聲明');
+    assert.ok(prompt.includes('禁止聲稱任何此類觀察'), '應明確禁止假觀察');
+  }
+  // 白天 pre_speech：材料全空（第一天且狼密談也無紀錄）時同樣帶聲明
+  const dayPre = buildPreSpeechPrompt(s, aliveIds(s)[0]);
+  assert.ok(dayPre.includes('現實材料狀態'), '白天 pre_speech 應含材料狀態聲明');
+});
+
+test('防幻覺觀察：有討論材料後，prompt 不帶材料狀態聲明', () => {
+  const s = discussionState();
+  transition(s, { type: 'HUMAN_SPEAK', playerId: aliveIds(s)[0], text: '大家早安' });
+  assert.ok(s.discussionLog.length > 0);
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
+  const pre = buildWolfPreSpeechPrompt(s, wolf.id);
+  assert.ok(!pre.includes('現實材料狀態'), '有材料時不應帶空板聲明');
+  const dayPre = buildPreSpeechPrompt(s, aliveIds(s)[0]);
+  assert.ok(!dayPre.includes('現實材料狀態'), '白天 pre_speech 有材料時不應帶空板聲明');
+});
+
+test('wolf_speech 任務指令：示例含策略理由條件（行為理由僅限有觀察時）', () => {
+  const s = createGameState(9);
+  joinAll(s, 9);
+  transition(s, { type: 'START_GAME' });
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
+  const prompt = buildPrompt(s, wolf.id, 'wolf_speech');
+  assert.ok(prompt.includes('僅當討論紀錄中真有此觀察時才可用行為理由'), '示例應條件化行為理由');
+  assert.ok(prompt.includes('策略理由'), '應提供策略理由示例');
+});

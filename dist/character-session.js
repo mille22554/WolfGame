@@ -34,7 +34,7 @@ function taskInstruction(kind, playerId) {
         case 'night':
             return `【任務】你是 P${playerId}，請選擇今晚行動的目標（必須是存活且非自己的玩家）。只回覆一句話，不要角色扮演。回覆：我選擇 P{編號}。`;
         case 'wolf_speech':
-            return `【任務】你是 P${playerId}（人狼），請與同伴討論今晚要襲擊誰、協調目標（一句話，30-60字）。直接指名具體目標（P編號）並說理由，如「P3 話多可能是占卜師，先殺他」。你的同盟列在【你的角色資訊】，襲擊同盟是規則上不可能的行為，絕對不要考慮。守衛保護誰、誰是甚麼職業都是秘密，無從得知，不要討論這類無法觀察的資訊。請使用繁體中文。用「我覺得今晚…」語氣。以你的性格自然表達，但語氣不要過於強烈或浮誇。格式：P${playerId}：「你的發言」；結尾另起一行附加決策旗標[決定:殺P編號]（已決定目標時）或[決定:資訊不足]（尚無法決定時），只可附加其一。`;
+            return `【任務】你是 P${playerId}（人狼），請與同伴討論今晚要襲擊誰、協調目標（一句話，30-60字）。直接指名具體目標（P編號）並說理由，如「P3 話多可能是占卜師，先殺他」（僅當討論紀錄中真有此觀察時才可用行為理由；否則用策略理由，如「先殺外圍編號，避免打草驚蛇」）。你的同盟列在【你的角色資訊】，襲擊同盟是規則上不可能的行為，絕對不要考慮。守衛保護誰、誰是甚麼職業都是秘密，無從得知，不要討論這類無法觀察的資訊。請使用繁體中文。用「我覺得今晚…」語氣。以你的性格自然表達，但語氣不要過於強烈或浮誇。格式：P${playerId}：「你的發言」；結尾另起一行附加決策旗標[決定:殺P編號]（已決定目標時）或[決定:資訊不足]（尚無法決定時），只可附加其一。`;
     }
 }
 function privateKnowledgeLines(state, playerId) {
@@ -214,6 +214,7 @@ export function buildPreSpeechPrompt(state, playerId) {
         `【你的角色資訊】\n${privateLines.join('\n')}`,
         `【當天摘要】\n${lastSummary}`,
         `【最近討論】\n${recent.length > 0 ? recent.join('\n') : '（尚無發言）'}`,
+        hasNoPublicBehaviorRecord(state) ? emptyBoardDeclaration() : '',
         `【任務】你是 P${playerId}，請寫一句 20-40 字的預發言草稿（不超過 40 字）。\n這是候選草稿，稍後可能被選中展開；內容保持中性，不需個人風格。圍繞當前局勢，提出一個值得討論的點。\n格式：P${playerId}：「你的草稿」`,
         `【決策旗標】草稿結尾另起一行附加你的投票準備狀態（中控內部判讀用，不會公開）：已決定投某人→[決定:投P編號]；已決定棄票→[決定:棄票]；資訊不足無法決定→[決定:資訊不足]。只可附加其一。`,
     ];
@@ -279,6 +280,18 @@ function wolfValidTargets(state, playerId) {
         .join('、');
 }
 /**
+ * 現實材料狀態聲明（防幻覺觀察）：
+ * 討論紀錄為空（尚無任何公開發言）時，明確告知模型「不可聲稱觀察到任何人的活動或行為」，
+ * 理由只能基於策略考量。避免模型在無材料下編造「他最近活動頻繁」這類假觀察。
+ */
+function emptyBoardDeclaration() {
+    return `【現實材料狀態】目前尚無任何公開發言或行為紀錄，你不可能觀察到任何人的活動、發言量或在場時間。禁止聲稱任何此類觀察（如「他活動頻繁」「他在場時間長」）；選擇目標的理由只能基於策略考量（編號位置、直覺、分散風險等）。`;
+}
+/** 是否尚無任何公開行為材料：白天討論與狼討論紀錄全空（含歷史天數） */
+function hasNoPublicBehaviorRecord(state) {
+    return state.discussionLog.length === 0 && state.wolfDiscussionLog.length === 0;
+}
+/**
  * buildWolfPreSpeechPrompt（狼預發言，輕量）：
  * 私有知識 → 當晚狼討論最近 5 則 → 任務指令（含殺人決策旗標）
  */
@@ -295,6 +308,7 @@ export function buildWolfPreSpeechPrompt(state, playerId) {
     const parts = [
         `【你的角色資訊】\n${privateLines.join('\n')}`,
         `【今晚狼討論】\n${recent.length > 0 ? recent.join('\n') : '（尚無發言）'}`,
+        hasNoPublicBehaviorRecord(state) ? emptyBoardDeclaration() : '',
         `【任務】你是 P${playerId}，請寫一句 20-40 字的預發言草稿，與同伴討論今晚要襲擊誰、協調目標（不超過 40 字，中性語氣）。直接指名一個具體目標（P編號）並給理由；今晚可襲擊的存活玩家只有：${wolfValidTargets(state, playerId)}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮）。守衛保護誰、誰是甚麼職業都是秘密，無從得知，不要討論這類無法觀察的資訊。請使用繁體中文。\n格式：P${playerId}：「你的草稿」`,
         `【決策旗標】草稿結尾另起一行附加你的襲擊決策狀態（中控內部判讀用，不會公開）：已決定襲擊某人→[決定:殺P編號]；資訊不足無法決定→[決定:資訊不足]。只可附加其一。`,
     ];
@@ -313,6 +327,6 @@ export function buildWolfPreSpeechPrompt(state, playerId) {
  */
 export function buildWolfExpandPrompt(state, playerId, preSpeech) {
     const base = buildPrompt(state, playerId, 'wolf_speech');
-    return `${base}\n\n【今晚可襲擊的存活玩家】${wolfValidTargets(state, playerId)}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮）\n\n【你的預發言草稿】${preSpeech}\n你可以沿用或修改這則草稿，以你的性格自然潤飾，展開成完整發言（30-60 字，討論今晚襲擊目標）；語氣符合人格但不要過於強烈或浮誇。`;
+    return `${base}\n\n${hasNoPublicBehaviorRecord(state) ? emptyBoardDeclaration() + '\n\n' : ''}【今晚可襲擊的存活玩家】${wolfValidTargets(state, playerId)}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮）\n\n【你的預發言草稿】${preSpeech}\n你可以沿用或修改這則草稿，以你的性格自然潤飾，展開成完整發言（30-60 字，討論今晚襲擊目標）；語氣符合人格但不要過於強烈或浮誇。`;
 }
 //# sourceMappingURL=character-session.js.map
