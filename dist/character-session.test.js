@@ -109,8 +109,8 @@ test('buildPreSpeechPrompt：輕量段落齊全、≤ 2000 字元', () => {
     transition(s, { type: 'HUMAN_SPEAK', playerId: speaker, text: '大家早安，今天多聽聽' });
     s.daySummaries.push('第0天摘要標記');
     const prompt = buildPreSpeechPrompt(s, speaker);
-    assert.ok(!prompt.includes('人格設定'), '草稿中性：不含人格設定');
-    assert.ok(!prompt.includes('persona:'), '草稿中性：不含 agents.md 內容');
+    assert.ok(prompt.includes('人格設定'), '草稿帶人格：人格是決策依據');
+    assert.ok(prompt.includes('persona:'), '草稿帶人格：含 agents.md 內容');
     assert.ok(prompt.includes('你的角色資訊'));
     assert.ok(prompt.includes('當天摘要'));
     assert.ok(prompt.includes('第0天摘要標記'));

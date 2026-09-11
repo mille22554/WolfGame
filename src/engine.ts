@@ -13,7 +13,9 @@ import type {
 } from './types.js';
 import { transition, buildPlayerSnapshot, buildSpectatorSnapshot, buildLobbySnapshot, saveState, createGameState, applyIdleTakeover } from './game-state.js';
 import { buildPrompt } from './character-session.js';
+import { buildDailyMemory, buildMemoryContent, writeMemory, clearMemory, memoryFilePath, MEMORY_MAX_DAYS } from './memory.js';
 import { Role } from './types.js';
+import * as fs from 'fs';
 
 // 正典定義已移至 types.ts；此處再匯出以保持舊引用相容
 export type { LLMDispatcher, ClientRegistry } from './types.js';
@@ -21,12 +23,14 @@ export type { LLMDispatcher, ClientRegistry } from './types.js';
 export interface EngineOptions {
   mode: 'gm' | 'web';
   nightTimeoutMs?: number;    // web: 90000, gm: Infinity
-  voteTimeoutMs?: number;     // web: 60000
+  voteTimeoutMs?: number;      // web: 60000
   llm?: LLMDispatcher;
   scheduler?: AIScheduler;    // Phase 1 實作（發言選擇機制）
   registry?: ClientRegistry;  // web 模式需要
   saveDebounceMs?: number;    // 存檔 debounce，預設 5000（測試可調小）
   onGameOver?: (state: GameState) => void;   // 遊戲結束掛鉤（僅觸發一次；server 用來安排回大廳）
+  writeMemory?: boolean;      // 私有記憶層：ADVANCE_DAY 沉澝、START_GAME 清空（預設 false，測試可關）
+  memoryDir?: string;         // memory 寫入目錄（預設 getDataDir()/character-memory/）
 }
 
 export interface AIScheduler {
@@ -111,8 +115,27 @@ export class GameEngine {
     const prevPhase = this.state.phase;
     const prevBoardVersion = this.state.boardVersion;
     const prevGameOver = this.state.gameOver;
+    // 私有記憶快照：ADVANCE_DAY 的 transition 會清空 nightActions/wolfKillTarget 等，
+    // 寫 memory 必須用 pre-transition 內容（當天完整事實）
+    const memorySnapshot = this.options.writeMemory && event.type === 'ADVANCE_DAY'
+      ? snapshotForMemory(this.state)
+      : null;
     const result = transition(this.state, event);
     if (!result.accepted) return result;
+    // 私有記憶寫入：ADVANCE_DAY 後為每位玩家沉澝當天記憶（機械式，無 LLM）
+    if (memorySnapshot && this.options.writeMemory) {
+      try {
+        writeDailyMemories(memorySnapshot, this.options.memoryDir);
+      } catch { /* 記憶寫入失敗不影響遊戲 */ }
+    }
+    // 新局清空記憶：START_GAME 重置所有私有記憶（跨局殘留會污染新局）
+    if (this.options.writeMemory && event.type === 'START_GAME' && prevPhase === 'SETUP_READY') {
+      try {
+        for (const p of this.state.players) {
+          clearMemory(p.personality, this.options.memoryDir);
+        }
+      } catch { /* 清空失敗不影響遊戲 */ }
+    }
     for (const effect of result.effects) {
       switch (effect.type) {
         case 'BROADCAST':
@@ -335,4 +358,54 @@ export class GameEngine {
   currentPhase(): Phase {
     return this.state.phase;
   }
+}
+
+// ============================================
+// 私有記憶層 helpers（writeMemory 開啟時用）
+// ============================================
+
+/**
+ * ADVANCE_DAY pre-transition 快照：深拷貝當天完整事實
+ * （transition 會清空 nightActions / wolfKillTarget / wolfDiscussionLog / votes 等）
+ */
+function snapshotForMemory(state: GameState): GameState {
+  return JSON.parse(JSON.stringify(state)) as GameState;
+}
+
+/** 為每位玩家寫入當天記當天記憶：讀現有 memory → 追加當天段 → 保留最近 MEMORY_MAX_DAYS 天 */
+function writeDailyMemories(snapshot: GameState, memoryDir?: string): void {
+  const day = snapshot.day;
+  for (const p of snapshot.players) {
+    const existing = readMemoryText(p.personality, memoryDir);
+    // 解析既有天數段，追加當天後重建（冪等：同天重寫覆蓫舊段）
+    const sections = parseMemorySections(existing);
+    const todaySection = buildDailyMemory(snapshot, p.id, day);
+    if (!todaySection) continue;
+    sections.set(String(day), todaySection);
+    const days = [...sections.keys()].sort((a, b) => Number(a) - Number(b));
+    const kept = days.slice(-MEMORY_MAX_DAYS).map(Number);
+    const content = buildMemoryContent(snapshot, p.id, kept);
+    writeMemory(p.personality, content, memoryDir);
+  }
+}
+
+/** 讀取現有 memory 文字（不 fallback resource root：運行期記憶只認 dataDir） */
+function readMemoryText(personaId: string, memoryDir?: string): string {
+  try {
+    const file = memoryFilePath(personaId, memoryDir);
+    if (fs.existsSync(file)) return fs.readFileSync(file, 'utf-8');
+  } catch { /* 無檔 */ }
+  return '';
+}
+
+/** 解析 memory 內容的「第N天：」段落 → Map(day, section) */
+function parseMemorySections(content: string): Map<string, string> {
+  const map = new Map<string, string>();
+  if (!content) return map;
+  const re = /第(\d+)天：\n([\s\S]*?)(?=\n\n第\d+天：|$)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) {
+    map.set(m[1], `第${m[1]}天：\n${m[2]}`);
+  }
+  return map;
 }

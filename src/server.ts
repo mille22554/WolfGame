@@ -1104,7 +1104,7 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
       lobby.fillDisconnectedAsAi();
       try {
         engine = new GameEngine(
-          { mode: 'web', llm: dispatcher, scheduler, registry, onGameOver: () => scheduleLobbyReturn() },
+          { mode: 'web', llm: dispatcher, scheduler, registry, onGameOver: () => scheduleLobbyReturn(), writeMemory: true },
           createGameState(count),
         );
         for (const s of lobby.seatsForStart()) {

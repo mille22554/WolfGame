@@ -1041,7 +1041,7 @@ export async function startServer(options = {}) {
             // 斷線未歸的真人座位先轉 AI（否則 HUMAN_JOIN 進遊戲，gate 等無連線者卡死）
             lobby.fillDisconnectedAsAi();
             try {
-                engine = new GameEngine({ mode: 'web', llm: dispatcher, scheduler, registry, onGameOver: () => scheduleLobbyReturn() }, createGameState(count));
+                engine = new GameEngine({ mode: 'web', llm: dispatcher, scheduler, registry, onGameOver: () => scheduleLobbyReturn(), writeMemory: true }, createGameState(count));
                 for (const s of lobby.seatsForStart()) {
                     if (s.controlledBy === 'human') {
                         engine.enqueue({ type: 'HUMAN_JOIN', playerId: s.playerId, name: s.name === '' ? undefined : s.name });

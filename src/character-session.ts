@@ -5,9 +5,9 @@
  * 公開知識（buildPublicKnowledge）→ 私有知識（依角色）→ 當天討論 →
  * 歷史摘要（daySummaries）→ 任務指令（依 kind）
  *
- * 人格分層：agents.md 僅正式發言（speech/expand）帶入；
- * night/vote 行動決策與預發言草稿保持中性（不帶人格），
- * 入選草稿由 expand 階段以性格潤飾（語氣收斂、不浮誇）。
+ * 人格分層：草稿（pre_speech）與正式發言（speech/expand）皆帶人格
+ * （人格是決策依據之一）；night/vote 行動決策保持中性（不帶人格），
+ * 維持嚴格輸出格式的服從性。
  */
 
 import * as fs from 'fs';
@@ -17,6 +17,7 @@ import { Role, Team } from './types.js';
 import { buildPublicKnowledge, parseAccusatoryIds } from './ai.js';
 import { getAlivePlayers } from './assignment.js';
 import { getResourceRoot } from './utils.js';
+import { readMemory } from './memory.js';
 
 function readTextIfExists(filePath: string): string {
   try {
@@ -102,13 +103,13 @@ export function buildPrompt(
   const maxCurrentDayEntries = 60;
 
   // --- 固定部分 ---
-  // 人格分層：night/vote 是中性行動決策，不帶人格；speech/wolf_speech（正式發言）才帶人格
+  // 人格分層：night/vote 是中性行動決策，不帶人格；speech/wolf_speech（正式發言）與草稿（pre_speech）帶人格
   const personaId = player.personality || `p${playerId}`;
   const includePersona = kind === 'speech' || kind === 'wolf_speech';
   const personaPrompt = includePersona
     ? readTextIfExists(path.join(getResourceRoot(), 'character', personaId, 'agents.md'))
     : '';
-  const privateMemory = readTextIfExists(path.join(getResourceRoot(), 'character', personaId, 'memory.md'));
+  const privateMemory = readMemory(personaId);
   const rules = readTextIfExists(path.join(getResourceRoot(), 'character', 'game-rules.md'));
 
   const pub = buildPublicKnowledge(state);
@@ -228,7 +229,10 @@ export function buildPreSpeechPrompt(state: GameState, playerId: number): string
   const player = state.players.find((p) => p.id === playerId);
   if (!player) throw new Error(`找不到玩家 P${playerId}`);
 
-  // 草稿中性：不讀 agents.md（入選後由 expand 階段以性格潤飾）
+  // 草稿帶人格：人格是決策依據之一（懷疑度/風格/投票模式），草稿由人格驅動產生差異；
+  // expand 階段仍會以同一人格潤飾，不會衝突
+  const personaId = player.personality || `p${playerId}`;
+  const personaPrompt = readTextIfExists(path.join(getResourceRoot(), 'character', personaId, 'agents.md'));
   const privateLines = privateKnowledgeLines(state, playerId);
   const lastSummary = state.daySummaries.length > 0
     ? state.daySummaries[state.daySummaries.length - 1]
@@ -239,6 +243,7 @@ export function buildPreSpeechPrompt(state: GameState, playerId: number): string
     .map((d) => `P${d.playerId}：${d.text}`);
 
   const parts: string[] = [
+    personaPrompt ? `【人格設定】\n${personaPrompt}` : '',
     `【你的角色資訊】\n${privateLines.join('\n')}`,
     `【當天摘要】\n${lastSummary}`,
     `【最近討論】\n${recent.length > 0 ? recent.join('\n') : '（尚無發言）'}`,
@@ -246,13 +251,12 @@ export function buildPreSpeechPrompt(state: GameState, playerId: number): string
     `【任務】你是 P${playerId}，請寫一句 20-40 字的預發言草稿（不超過 40 字）。\n這是候選草稿，稍後可能被選中展開；內容保持中性，不需個人風格。圍繞當前局勢，提出一個值得討論的點；沒有材料時可談直覺或對局勢的疑問，不要編造對他人的觀察。\n格式：P${playerId}：「你的草稿」`,
     `【決策旗標】草稿結尾另起一行附加你的投票準備狀態（中控內部判讀用，不會公開）：已決定投某人→[決定:投P編號]；已決定棄票→[決定:棄票]；資訊不足無法決定→[決定:資訊不足]。只可附加其一。`,
   ];
-
-  let prompt = parts.join('\n\n');
+  let prompt = parts.filter((s) => s !== '').join('\n\n');
   // 超預算：先丟最近討論最舊條目（固定部分保留）
   while (prompt.length > PRE_SPEECH_BUDGET && recent.length > 1) {
     recent.shift();
     parts[3] = `【最近討論】\n${recent.join('\n')}`;
-    prompt = parts.join('\n\n');
+    prompt = parts.filter((s) => s !== '').join('\n\n');
   }
   return prompt;
 }
@@ -339,25 +343,28 @@ function hasNoPublicBehaviorRecord(state: GameState): boolean {
 export function buildWolfPreSpeechPrompt(state: GameState, playerId: number): string {
   const player = state.players.find((p) => p.id === playerId);
   if (!player) throw new Error(`找不到玩家 P${playerId}`);
-  // 草稿中性：不讀 agents.md（入選後由 expand 階段以性格潤飾）
+  // 草稿帶人格：人格是決策依據之一（懷疑度/風格/投票模式），草稿由人格驅動產生差異
+  const personaId = player.personality || `p${playerId}`;
+  const personaPrompt = readTextIfExists(path.join(getResourceRoot(), 'character', personaId, 'agents.md'));
   const privateLines = privateKnowledgeLines(state, playerId);
   const recent = state.wolfDiscussionLog
     .filter((d) => d.day === state.day)
     .slice(-PRE_SPEECH_RECENT)
     .map((d) => `P${d.playerId}：${d.text}`);
   const parts: string[] = [
+    personaPrompt ? `【人格設定】\n${personaPrompt}` : '',
     `【你的角色資訊】\n${privateLines.join('\n')}`,
     `【今晚狼討論】\n${recent.length > 0 ? recent.join('\n') : '（尚無發言）'}`,
     hasNoPublicBehaviorRecord(state) ? emptyBoardDeclaration() : '',
     `【任務】你是 P${playerId}，請寫一句 20-40 字的預發言草稿，與同伴討論今晚要襲擊誰、協調目標（不超過 40 字，中性語氣）。直接指名一個具體目標（P編號）並給理由；沒有材料時誠實說直覺或隨機即可，不要編造理由。今晚可襲擊的存活玩家只有：${wolfValidTargets(state, playerId)}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮）。守衛保護誰、誰是甚麼職業都是秘密，無從得知：不得聲稱知道，也不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由。請使用繁體中文。\n格式：P${playerId}：「你的草稿」`,
     `【決策旗標】草稿結尾另起一行附加你的襲擊決策狀態（中控內部判讀用，不會公開）：已決定襲擊某人→[決定:殺P編號]；資訊不足無法決定→[決定:資訊不足]。只可附加其一。`,
   ];
-  let prompt = parts.join('\n\n');
+  let prompt = parts.filter((s) => s !== '').join('\n\n');
   // 超預算：先丟最近討論最舊條目（固定部分保留）
   while (prompt.length > PRE_SPEECH_BUDGET && recent.length > 1) {
     recent.shift();
-    parts[1] = `【今晚狼討論】\n${recent.join('\n')}`;
-    prompt = parts.join('\n\n');
+    parts[2] = `【今晚狼討論】\n${recent.join('\n')}`;
+    prompt = parts.filter((s) => s !== '').join('\n\n');
   }
   return prompt;
 }
@@ -368,5 +375,5 @@ export function buildWolfPreSpeechPrompt(state: GameState, playerId: number): st
  */
 export function buildWolfExpandPrompt(state: GameState, playerId: number, preSpeech: string): string {
   const base = buildPrompt(state, playerId, 'wolf_speech');
-  return `${base}\n\n${hasNoPublicBehaviorRecord(state) ? emptyBoardDeclaration() + '\n\n' : ''}【今晚可襲擊的存活玩家】${wolfValidTargets(state, playerId)}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮；守衛保護誰是秘密，不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由）\n\n【你的預發言草稿】${preSpeech}\n請把這則草稿大幅改寫成自然的口語發言（30-60 字，像真人在會議中講話，帶你的性格口吻），不必保留草稿的字句與句構。改寫方向示例：草稿「根據直覺，今晚應該襲擊P12」→「我覺得今晚先殺P12吧，說不上為什麼，就直覺。」（實際說法依你的性格變化，不要逐字照搬示例）。鐵則：草稿指名的目標（P編號）與理由不得改變，不得新增草稿中沒有的理由（尤其不得新增守衛預測、行為觀察或編號位置聯想）。`;
+  return `${base}\n\n${hasNoPublicBehaviorRecord(state) ? emptyBoardDeclaration() + '\n\n' : ''}【今晚可襲擊的存活玩家】${wolfValidTargets(state, playerId)}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮；守衛保護誰是秘密，不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由）\n\n【你的預發言草稿】${preSpeech}\n請把這則草稿大幅改寫成自然的口語發言（30-60 字，像真人在會議中講話，帶你的性格口吻），不必保留草稿的字句與句構。改寫方向參考（僅示意語感，句式必須與兩者都不同，禁止逐字照搬）：草稿「根據直覺，今晚應該襲擊P12」→「我覺得今晚先殺P12吧，說不上為什麼，就直覺。」或「P12 吧，硬要說原因的話就是直覺。」。鐵則：草稿指名的目標（P編號）與理由不得改變，不得新增草稿中沒有的理由（尤其不得新增守衛預測、行為觀察或編號位置聯想）。`;
 }

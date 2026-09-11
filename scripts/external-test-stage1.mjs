@@ -77,7 +77,7 @@ const scheduler = new SpeechScheduler(
   { cdMs: 0, preSpeechBatch: 3 },
 );
 
-engine = new GameEngine({ mode: 'gm', llm, scheduler }, createGameState(PLAYER_COUNT));
+engine = new GameEngine({ mode: 'gm', llm, scheduler, writeMemory: true }, createGameState(PLAYER_COUNT));
 
 let final;
 try {

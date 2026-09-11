@@ -5,9 +5,9 @@
  * 公開知識（buildPublicKnowledge）→ 私有知識（依角色）→ 當天討論 →
  * 歷史摘要（daySummaries）→ 任務指令（依 kind）
  *
- * 人格分層：agents.md 僅正式發言（speech/expand）帶入；
- * night/vote 行動決策與預發言草稿保持中性（不帶人格），
- * 入選草稿由 expand 階段以性格潤飾（語氣收斂、不浮誇）。
+ * 人格分層：草稿（pre_speech）與正式發言（speech/expand）皆帶人格
+ * （人格是決策依據之一）；night/vote 行動決策保持中性（不帶人格），
+ * 維持嚴格輸出格式的服從性。
  */
 import type { GameState } from './types.js';
 export type PromptKind = 'speech' | 'vote' | 'night' | 'wolf_speech';

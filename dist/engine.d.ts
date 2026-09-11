@@ -17,6 +17,8 @@ export interface EngineOptions {
     registry?: ClientRegistry;
     saveDebounceMs?: number;
     onGameOver?: (state: GameState) => void;
+    writeMemory?: boolean;
+    memoryDir?: string;
 }
 export interface AIScheduler {
     onBoardUpdated(state: GameState): void;
