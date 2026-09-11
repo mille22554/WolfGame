@@ -149,7 +149,7 @@ test('buildWolfPreSpeechPrompt：含襲擊/今晚語境 + 殺P 決策旗標指�
     assert.ok(prompt.includes('殺P'));
     assert.ok(prompt.includes('資訊不足'));
 });
-test('狼 prompt：要求指名具體目標、禁止討論無法得知的資訊、列舉合法目標（不含同盟）', () => {
+test('狼 prompt：要求指名具體目標、禁止預測守衛動向、列舉合法目標（不含同盟）', () => {
     const s = createGameState(9);
     joinAll(s, 9);
     transition(s, { type: 'START_GAME' });
@@ -163,6 +163,7 @@ test('狼 prompt：要求指名具體目標、禁止討論無法得知的資訊�
         assert.ok(prompt.includes('襲擊同盟是規則上不可能的行為'), '應禁止殺同盟');
         assert.ok(prompt.includes('繁體中文'), '應要求繁體中文');
         assert.ok(prompt.includes('今晚可襲擊的存活玩家'), '應列舉合法目標');
+        assert.ok(prompt.includes('不得以「守衛可能會保護P編號」這類預測作為選擇或排除目標的理由'), '應禁止以守衛預測為理由');
         const seg = prompt.split('今晚可襲擊的存活玩家')[1]?.split('（')[0] ?? '';
         for (const a of allies) {
             assert.ok(!seg.includes(`P${a.id}`), `合法目標清單不應含同盟 P${a.id}`);
