@@ -30,7 +30,7 @@ export interface EngineOptions {
   saveDebounceMs?: number;    // 存檔 debounce，預設 5000（測試可調小）
   onGameOver?: (state: GameState) => void;   // 遊戲結束掛鉤（僅觸發一次；server 用來安排回大廳）
   writeMemory?: boolean;      // 私有記憶層：ADVANCE_DAY 沉澝、START_GAME 清空（預設 false，測試可關）
-  memoryDir?: string;         // memory 寫入目錄（預設 getDataDir()/character-memory/）
+  memoryDir?: string;         // memory 寫入根目錄（預設 getDataDir()，memory 落在 <dir>/character/<id>/memory.md）
 }
 
 export interface AIScheduler {

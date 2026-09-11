@@ -91,12 +91,11 @@ test('writeMemory/readMemory/clearMemory：IO 注入目錄往返', () => {
         fs.rmSync(dir, { recursive: true, force: true });
     }
 });
-test('memoryFilePath：落在注入目錄的 character-memory/ 下', () => {
+test('memoryFilePath：與 character/ 源結構同位（<base>/character/<id>/memory.md）', () => {
     const dir = tmpDir();
     try {
         const p = memoryFilePath('rin', dir);
-        assert.ok(p.includes('character-memory'), '應在 character-memory 子目錄');
-        assert.ok(p.endsWith('rin.md'), '檔名應為 personaId.md');
+        assert.ok(p.includes(path.join('character', 'rin', 'memory.md')), '應與源結構同位');
     }
     finally {
         fs.rmSync(dir, { recursive: true, force: true });

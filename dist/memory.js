@@ -61,9 +61,11 @@ export function buildMemoryContent(state, playerId, days) {
     }
     return sections.join('\n\n');
 }
-/** memory 檔案路徑（寫入用：getDataDir 下，pkg 環境可寫） */
+/** memory 檔案路徑：與 character/ 源結構同位（<base>/character/<personaId>/memory.md）。
+ * 寫入走 dataDir（dev＝repo 根＝源文件本身；pkg＝exe 旁 data/ 可寫）；
+ * 與 GM 流程慣例一致：直接寫 character/<id>/memory.md，不另設目錄。 */
 export function memoryFilePath(personaId, dataDir) {
-    return path.join(dataDir ?? getDataDir(), 'character-memory', `${personaId}.md`);
+    return path.join(dataDir ?? getDataDir(), 'character', personaId, 'memory.md');
 }
 /** 寫入單一玩家 memory（覆寫） */
 export function writeMemory(personaId, content, dataDir) {
@@ -77,7 +79,7 @@ export function clearMemory(personaId, dataDir) {
 }
 /**
  * 讀取單一玩家 memory：優先 dataDir（運行期寫入處），無檔則 fallback resource root
- * （dev 環境兩者同源；pkg 環境 character/ 打包唯讀，運行期記憶在 data/character-memory/）
+ * （dev 環境兩者同源，即同一檔案；pkg 環境 character/ 打包唯讀，運行期記憶在 data/character/ 下覆蓋）
  */
 export function readMemory(personaId, dataDir) {
     const writable = memoryFilePath(personaId, dataDir);
