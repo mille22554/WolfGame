@@ -2,7 +2,7 @@
  * ai-scheduler.ts — SpeechScheduler（白板更新驅動迴圈＋AI 決策 flag 收斂）
  *
  * 迴圈（用戶定案）：
- * - 白板更新 → 開工生產（除上輪發言者外全員草稿）＋ CD 重啟。
+ * - 白板更新 → 開工生產（未就緒 AI 除上輪發言者外全員草稿；已就緒者不再草稿）＋ CD 重啟。
  * - 生產完成 → 暫存，不直接播。
  * - CD 到有貨 → 播出（播出即白板更新，迴圈回去）。
  * - CD 到沒貨 → 等做好馬上播。
@@ -13,7 +13,7 @@
  * - quiet 整組拔除；跳過按鈕（HUMAN_SKIP／allAliveHumansSkipped）保留但 scheduler 不再依賴。
  *
  * 收斂（第 2 項）：
- * - 每輪除上輪發言者外全員寫草稿；候選為空不生產，等真人講話。
+ * - 每輪未就緒 AI 除上輪發言者外寫草稿；候選為空不生產，等真人講話；唯一候選不斷線。
  * - 草稿結尾 flag 兩層解析（正規＋寬鬆決策語境關鍵字，不用 LLM）；剝離統一在收草稿回傳前，
  *   broadcast 前再洗一次 expand 輸出；flag 永不進白板。
  * - 安全閥：單一 AI 連續 maxUncertainRounds（預設 50）次資訊不足 → 強制 decided:abstain。
@@ -43,15 +43,21 @@ const LOOSE_VOTE_RES = [
     /投票給\s*P?\s*(\d+)/,
     /決定殺\s*P?\s*(\d+)/,
     /要殺\s*P?\s*(\d+)/,
+    /該殺\s*P?\s*(\d+)/,
+    /先殺\s*P?\s*(\d+)/,
     /襲擊\s*P?\s*(\d+)/,
 ];
 const LOOSE_ABSTAIN_RE = /棄票|放棄投票|不投票|投棄權/;
 const LOOSE_UNCERTAIN_RE = /資訊不足|無法決定|還不能決定|不能決定|不確定|還不確定|再觀察|多聽|還要聽|再聽聽|觀望|難以判斷|沒有想法|沒想法|還沒想法/;
-/** 剝離 flag（全域，一律在收草稿回傳前＋broadcast 前各洗一次） */
+/** 無方括號裸 flag 行（如模型漏寫括號、獨佔一行的「決定:資訊不足」）：白板/草稿清洗用。
+ *  僅整行完全匹配才剝離；句中提及（如「我決定投P3出去」）保留，避免誤傷正常發言。 */
+const BARE_FLAG_LINE_RE = /^\s*決定\s*[:：]\s*(投P\s*\d+|殺P\s*\d+|棄票|資訊不足)\s*$/;
+/** 剝離 flag（全域，一律在收草稿回傳前＋broadcast 前各洗一次；含無方括號裸 flag 整行） */
 export function stripDecisionFlags(text) {
     return text
         .replace(DECISION_FLAG_RE, '')
         .split('\n')
+        .filter((line) => !BARE_FLAG_LINE_RE.test(line))
         .map((line) => line.trimEnd())
         .join('\n')
         .replace(/\n{3,}/g, '\n\n')
@@ -215,21 +221,27 @@ export class SpeechScheduler {
             void this.broadcastStash();
         // 無貨 → 等做好馬上播（生產完成時見 cdReady 直接播）
     }
-    /** 草稿候選：存活 AI 除上輪發言者外全員（狼模式僅存活狼 AI）；為空 → 不生產（等真人） */
+    /** 草稿候選：存活 AI 除上輪發言者外全員（狼模式僅存活狼 AI）；為空 → 不生產（等真人）。
+     *  已就緒（voteReady/wolfReady）者排除：已表態者不再草稿，降噪＋省算力＋加速收斂；
+     *  收回就緒（人類）會重回候選。唯一候選時不斷線（避免單人僵局）。 */
     candidateIds(state) {
         const isWolf = state.phase === 'NIGHT_DISCUSSION_OPEN';
+        const readySet = isWolf ? state.wolfReady : state.voteReady;
         const aliveAI = getAlivePlayers(state.players)
             .filter((p) => p.controlledBy === 'ai' && (!isWolf || p.role === Role.WEREWOLF))
-            .map((p) => p.id);
+            .filter((p) => !readySet.includes(p.id));
         if (aliveAI.length === 0)
             return [];
+        const aliveIds = aliveAI.map((p) => p.id);
+        if (aliveIds.length === 1)
+            return aliveIds;
         const log = isWolf ? state.wolfDiscussionLog : state.discussionLog;
         const today = log.filter((d) => d.day === state.day);
         const last = today[today.length - 1];
         if (!last)
-            return [...aliveAI];
-        const cands = aliveAI.filter((id) => id !== last.playerId);
-        return cands;
+            return [...aliveIds];
+        const cands = aliveIds.filter((id) => id !== last.playerId);
+        return cands.length > 0 ? cands : aliveIds;
     }
     startProduction() {
         if (this.stopped || this.producing)

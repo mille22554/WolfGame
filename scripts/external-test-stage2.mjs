@@ -125,6 +125,16 @@ try {
       lastBv = cur.boardVersion;
       roundSnapshots.push({ boardVersion: lastBv, wolfReady: [...cur.wolfReady], ts: Date.now() });
       console.log(`回合 ${lastBv - startBv} 播出：boardVersion=${lastBv}，wolfReady=[${cur.wolfReady.join(', ')}]`);
+      // 中間持久化：崩潰不丟失已產生的 prompt/草稿（最終報告覆寫 REPORT 本體，此 sidecar 僅救援用）
+      try {
+        writeFileSync(REPORT + '.calls.json', JSON.stringify({
+          wolves: wolves.map((w) => w.id),
+          rounds: lastBv - startBv,
+          wolfReady: [...cur.wolfReady],
+          whiteboard: cur.wolfDiscussionLog,
+          calls,
+        }, null, 1));
+      } catch { /* 中間寫入失敗不影響主流程 */ }
     }
   }
   final = engine.getState();

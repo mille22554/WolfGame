@@ -198,6 +198,15 @@ test('flag 剝離：全域匹配（中置殘留亦清）；解析取最後一個
   assert.equal(stripDecisionFlags('A[決定:投P3]B\n[決定:棄票]C'), 'AB\nC');
   assert.deepEqual(parseDecisionFlag('前言[決定:投P3]結論[決定:棄票]'), { status: 'decided', target: 'abstain' });
   assert.ok(!stripDecisionFlags('發言\n[決定:投P3]').includes('[決定'));
+  // 無方括號裸 flag 整行亦剝離（模型漏寫括號時防白板污染）；句中提及保留
+  assert.equal(stripDecisionFlags('發言\n決定:資訊不足\n下一句'), '發言\n下一句');
+  assert.equal(stripDecisionFlags('發言\n決定：殺P5  \n下一句'), '發言\n下一句');
+  assert.equal(stripDecisionFlags('我決定投P3出去'), '我決定投P3出去');
+});
+
+test('flag 寬鬆解析：該殺／先殺亦認 decided（首夜常見說法）', () => {
+  assert.deepEqual(parseDecisionFlag('我覺得今晚該殺P12'), { status: 'decided', target: 12 });
+  assert.deepEqual(parseDecisionFlag('今晚先殺P5吧'), { status: 'decided', target: 5 });
 });
 
 test('安全閥常數：MAX_UNCERTAIN_ROUNDS = 50', () => {
@@ -619,7 +628,7 @@ test('除上輪發言者外全員草稿：上輪發言者不列入候選；真�
   }
 });
 
-test('候選為空不生產：僅上輪發言者一人存活 → 等真人，不連發', async () => {
+test('唯一候選不斷線：僅剩一人時即使是上輪發言者也繼續（防僵局）', async () => {
   const s = discussionState(6);
   const lone = s.players.filter((p) => p.alive && p.controlledBy === 'ai')[0].id;
   for (const p of s.players) {
@@ -627,15 +636,38 @@ test('候選為空不生產：僅上輪發言者一人存活 → 等真人，不
   }
   s.discussionLog.push({ playerId: lone, text: '只剩我一人', day: s.day });
   const llm = defaultMock();
-  const { ctx, events } = makeCtx(s, llm);
+  const { ctx } = makeCtx(s, llm);
   const sch = new SpeechScheduler(ctx, { cdMs: 1000 });
   try {
     sch.onPhaseEntered(s);
     await flushN(2);
     mock.timers.tick(5000);
     await flush();
-    assert.ok(!llm.calls.some((c) => c.kind === 'pre_speech'), '候選為空不應生產');
-    assert.equal(events.length, 0);
+    // 唯一候選不斷線：即使是上輪發言者也繼續生產（否則無人能推進白板，永久僵局；
+    // 實戰中此態極少見，且 decided 草稿播出後即 ready 離場，不會無限自言自語）
+    assert.ok(llm.calls.some((c) => c.kind === 'pre_speech'), '唯一候選應繼續生產');
+  } finally {
+    sch.stop();
+  }
+});
+
+test('已就緒者排除候選：ready 的 AI 不再寫草稿（降噪加速收斂）', async () => {
+  const s = discussionState(9);
+  const readyAI = s.players.filter((p) => p.alive && p.controlledBy === 'ai')[0].id;
+  transition(s, { type: 'AI_READY_VOTE', playerId: readyAI });
+  assert.ok(s.voteReady.includes(readyAI));
+  const llm = defaultMock();
+  const { ctx } = makeCtx(s, llm);
+  const sch = new SpeechScheduler(ctx, { cdMs: 60000 });
+  try {
+    sch.onPhaseEntered(s);
+    await flushN(3);
+    const pres = llm.calls.filter((c) => c.kind === 'pre_speech').map((c) => {
+      const m = c.prompt.match(/你是 P(\d+)/);
+      return m ? parseInt(m[1], 10) : -1;
+    });
+    assert.ok(!pres.includes(readyAI), '已 ready 的 AI 不應寫草稿');
+    assert.ok(pres.length > 0, '未 ready 者應繼續生產');
   } finally {
     sch.stop();
   }

@@ -2,7 +2,7 @@
  * ai-scheduler.ts — SpeechScheduler（白板更新驅動迴圈＋AI 決策 flag 收斂）
  *
  * 迴圈（用戶定案）：
- * - 白板更新 → 開工生產（除上輪發言者外全員草稿）＋ CD 重啟。
+ * - 白板更新 → 開工生產（未就緒 AI 除上輪發言者外全員草稿；已就緒者不再草稿）＋ CD 重啟。
  * - 生產完成 → 暫存，不直接播。
  * - CD 到有貨 → 播出（播出即白板更新，迴圈回去）。
  * - CD 到沒貨 → 等做好馬上播。
@@ -13,7 +13,7 @@
  * - quiet 整組拔除；跳過按鈕（HUMAN_SKIP／allAliveHumansSkipped）保留但 scheduler 不再依賴。
  *
  * 收斂（第 2 項）：
- * - 每輪除上輪發言者外全員寫草稿；候選為空不生產，等真人講話。
+ * - 每輪未就緒 AI 除上輪發言者外寫草稿；候選為空不生產，等真人講話；唯一候選不斷線。
  * - 草稿結尾 flag 兩層解析（正規＋寬鬆決策語境關鍵字，不用 LLM）；剝離統一在收草稿回傳前，
  *   broadcast 前再洗一次 expand 輸出；flag 永不進白板。
  * - 安全閥：單一 AI 連續 maxUncertainRounds（預設 50）次資訊不足 → 強制 decided:abstain。
@@ -32,7 +32,7 @@ export type AIDecision = {
 export declare const MAX_UNCERTAIN_ROUNDS = 50;
 /** 正規 flag：[決定:投P3]／[決定:殺P3]／[決定:棄票]／[決定:資訊不足]（方括號跳脫、全形/半形冒號、全域匹配） */
 export declare const DECISION_FLAG_RE: RegExp;
-/** 剝離 flag（全域，一律在收草稿回傳前＋broadcast 前各洗一次） */
+/** 剝離 flag（全域，一律在收草稿回傳前＋broadcast 前各洗一次；含無方括號裸 flag 整行） */
 export declare function stripDecisionFlags(text: string): string;
 /** 兩層解析：先正規，失敗走寬鬆關鍵字；都抓不到 → uncertain（計入安全閥） */
 export declare function parseDecisionFlag(text: string): AIDecision;
@@ -80,7 +80,9 @@ export declare class SpeechScheduler implements AIScheduler {
     private effectiveCdMs;
     private restartCd;
     private onCdFired;
-    /** 草稿候選：存活 AI 除上輪發言者外全員（狼模式僅存活狼 AI）；為空 → 不生產（等真人） */
+    /** 草稿候選：存活 AI 除上輪發言者外全員（狼模式僅存活狼 AI）；為空 → 不生產（等真人）。
+     *  已就緒（voteReady/wolfReady）者排除：已表態者不再草稿，降噪＋省算力＋加速收斂；
+     *  收回就緒（人類）會重回候選。唯一候選時不斷線（避免單人僵局）。 */
     private candidateIds;
     private startProduction;
     private runProduction;
