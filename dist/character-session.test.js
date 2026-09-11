@@ -242,6 +242,7 @@ test('防幻覺觀察：無任何討論材料時，狼/白天 prompt 帶現實�
     for (const prompt of [pre, expand]) {
         assert.ok(prompt.includes('現實材料狀態'), '狼 prompt 應含材料狀態聲明');
         assert.ok(prompt.includes('禁止聲稱任何此類觀察'), '應明確禁止假觀察');
+        assert.ok(prompt.includes('暗示你長期觀察過對方的詞'), '應禁止時間性觀察暗示詞');
         assert.ok(prompt.includes('沒有大小、遠近、邊緣或中央之分'), '應禁止編號位置聯想');
         assert.ok(prompt.includes('直覺、隨機嘗試'), '應許可直覺/隨機作為無材料理由');
     }
