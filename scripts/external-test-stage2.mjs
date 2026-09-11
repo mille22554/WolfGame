@@ -120,7 +120,7 @@ try {
     await sleep(100);
     engine.drain();
     const cur = engine.getState();
-    if (cur.phase !== 'NIGHT_DISCUSSION_OPEN') break;   // 收斂（或離開）
+    // 先檢查版本（末輪播出與收斂可能在同一次 drain 完成，phase-break 會跳過版本記錄）
     if (cur.boardVersion > lastBv) {
       lastBv = cur.boardVersion;
       roundSnapshots.push({ boardVersion: lastBv, wolfReady: [...cur.wolfReady], ts: Date.now() });
@@ -136,6 +136,7 @@ try {
         }, null, 1));
       } catch { /* 中間寫入失敗不影響主流程 */ }
     }
+    if (cur.phase !== 'NIGHT_DISCUSSION_OPEN') break;   // 收斂（或離開）
   }
   final = engine.getState();
   const rounds = lastBv - startBv;
