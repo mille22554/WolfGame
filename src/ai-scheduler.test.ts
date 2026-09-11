@@ -986,4 +986,38 @@ test('狼模式：expand 決策優先 — pre_speech 資訊不足但 expand 殺P
   }
 });
 
+test('狼模式：expand 旗標與草稿決策矛盾 → 沿用草稿決策（旗標失誤不採信）', async () => {
+  const s = createGameState(9);
+  for (let i = 0; i <9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
+  const wolves = s.players.filter((p) => p.alive && p.role === Role.WEREWOLF);
+  const ally = wolves[1];                                  // 旗標誤填的同盟（無效目標）
+  const draftTarget = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF)!.id;  // 草稿決策目標
+  const llm = new MockLLM((prompt) => {
+    if (prompt.includes('【裁判任務】')) return judgeBySlotDesc(prompt);
+    // expand：正文沿用草稿目標，旗標卻誤填同盟（模擬 v5 觀察到的旗標失誤）
+    if (prompt.includes('【你的預發言草稿】')) return `P0：「我覺得今晚殺P${draftTarget}比較順便。」\n[決定:殺P${ally.id}]`;
+    const m = prompt.match(/你是 P(\d+)/);
+    const id = m ? m[1] : '1';
+    return `P${id}：「直覺上P${draftTarget}，沒什麼特別依據。」\n[決定:殺P${draftTarget}]`;
+  });
+  const { ctx, events } = makeCtx(s, llm);
+  const sch = new SpeechScheduler(ctx, { cdMs: 60000 });
+  try {
+    sch.onPhaseEntered(s);
+    await flushN(3);
+    // 防護生效：expand 誤填旗標（同盟）不採信 → 沿用草稿 decided；若採信旗標會被 validateWolfTarget 轉棄票
+    assert.equal(sch.flagStats().abstain, 0, '矛盾回退草稿 → 不應產生棄票');
+    assert.equal(sch.flagStats().decided, wolves.length, '兩狼草稿決策皆應保留為 decided');
+    mock.timers.tick(60000);
+    await flush();
+    // 勝出者由 judge 決定（slot 降序），ready 事件應存在且屬於某匹存活狼
+    const wolfIds = new Set(wolves.map((w) => w.id));
+    assert.ok(events.some((e) => e.type === 'AI_WOLF_READY' && wolfIds.has(e.playerId)), '草稿 decided → 播出後應 ready');
+  } finally {
+    sch.stop();
+  }
+});
+
 void Role;

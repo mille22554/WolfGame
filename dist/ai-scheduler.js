@@ -303,9 +303,18 @@ export class SpeechScheduler {
                 })).trim();
                 const expandDecision = parseDecisionFlag(rawExpand);
                 full = stripSpeechPrefix(stripDecisionFlags(rawExpand));
-                // 狼模式：expand 是對外最終承諾，其決策優先（無效目標→棄票）；expand 未決定→沿用草稿決策
-                if (isWolfMode && expandDecision.status === 'decided') {
-                    decision = this.updateDecision(winner.playerId, this.validateWolfTarget(cur2, winner.playerId, expandDecision));
+                // 狼模式：expand 是對外最終承諾，其決策優先（無效目標→棄票）；expand 未決定→沿用草稿決策。
+                // 矛盾防護：expand 旗標目標與草稿決策目標不一致（模型旗標填寫失誤，如正文說殺P5旗標卻寫P15）
+                // → 不採信 expand 旗標，沿用草稿決策（草稿已通過 validateWolfTarget）
+                if (isWolfMode && expandDecision.status === 'decided' && expandDecision.target !== 'abstain') {
+                    const draftDecided = winner.decision.status === 'decided' && winner.decision.target !== 'abstain';
+                    const consistent = !draftDecided || expandDecision.target === winner.decision.target;
+                    if (consistent) {
+                        decision = this.updateDecision(winner.playerId, this.validateWolfTarget(cur2, winner.playerId, expandDecision));
+                    }
+                    else {
+                        decision = this.updateDecision(winner.playerId, winner.decision);
+                    }
                 }
             }
             catch {
