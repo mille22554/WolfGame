@@ -32,6 +32,7 @@ export type AIDecision = {
 export declare const MAX_UNCERTAIN_ROUNDS = 50;
 /** 正規 flag：[決定:投P3]／[決定:殺P3]／[決定:棄票]／[決定:資訊不足]（方括號跳脫、全形/半形冒號、全域匹配） */
 export declare const DECISION_FLAG_RE: RegExp;
+export declare function normalizeTraditional(text: string): string;
 /** 剝離 flag（全域，一律在收草稿回傳前＋broadcast 前各洗一次；含無方括號裸 flag 整行） */
 export declare function stripDecisionFlags(text: string): string;
 /** 兩層解析：先正規，失敗走寬鬆關鍵字；都抓不到 → uncertain（計入安全閥） */
@@ -53,6 +54,16 @@ interface Stash {
     boardVersion: number;
     decision: AIDecision;
 }
+interface Draft {
+    slot: number;
+    playerId: number;
+    text: string;
+    decision: AIDecision;
+}
+/** 草稿價值加分：decided＋具體數字目標 +3；內文含 P編號指名 +1（可疊加）；棄票／資訊不足 +0 */
+export declare function draftValueBonus(draft: Draft): number;
+/** 連播懲罰：當天白板近 N 則內該玩家每播出一次 −1（狼模式餵 wolfDiscussionLog 切片） */
+export declare function repeatPenalty(playerId: number, recentSpeakerIds: number[]): number;
 export declare class SpeechScheduler implements AIScheduler {
     private readonly ctx;
     private readonly options;
@@ -86,6 +97,8 @@ export declare class SpeechScheduler implements AIScheduler {
     private candidateIds;
     private startProduction;
     private runProduction;
+    /** 價值制選子：final＝judge分－新穎性＋價值－連播；取最高分，同分取 playerId 最小（不抽籤） */
+    private selectWinner;
     /** 生產失敗 → N 秒後重試；重試前不播出（無暫存）、不推進掛機計數（transition 只在發言成功時計數） */
     private scheduleRetry;
     private collectPreSpeeches;

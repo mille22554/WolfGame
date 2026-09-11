@@ -212,6 +212,7 @@ test('flag 寬鬆解析：該殺／先殺亦認 decided（首夜常見說法）'
 test('簡轉繁正規化：遊戲高頻簡體字映射＋冪等', () => {
   assert.equal(normalizeTraditional('直覺說杀P5'), '直覺說殺P5');
   assert.equal(normalizeTraditional('P5不太对劲，先观察'), 'P5不太對勁，先觀察');
+  assert.equal(normalizeTraditional('但還不确定是不是真的'), '但還不確定是不是真的');
   assert.equal(normalizeTraditional('我懷疑他，有证据吗？派他去臥底保护我方'), '我懷疑他，有證據嗎？派他去臥底保護我方');
   assert.equal(normalizeTraditional('已經是繁體：殺P5、對話'), '已經是繁體：殺P5、對話');
   assert.equal(normalizeTraditional(''), '');
@@ -413,30 +414,21 @@ test('CD 到沒貨 → 等做好馬上播（無需再等一個 CD）', async () 
   }
 });
 
-test('top3：選取落在裁判 top3（新穎性無干擾時）', async () => {
+test('SELECT 價值制：有價值草稿勝出（decided+指名加分，不抽籤）', async () => {
   const s = discussionState(9);
-  // 彼此差異大的草稿 → 新穎性懲罰皆 ~0；裁判只給 slot 1/2/3 高分
-  const drafts = [
-    '春天的櫻花開滿了整條山道',
-    '量子電腦的錯誤率持續下降',
-    '深海魚類的發光機制很特別',
-    '古典音樂會的票房創新高',
-    '沙漠綠洲的生態系統脆弱',
-    '極地冰川融化速度加快',
-    '火山島嶼形成新的陸地',
-    '草原動物的遷徙路線改變',
-    '雨林冠層的生物多樣性',
-  ];
-  let di = 0;
+  const aliveAI = s.players.filter((p) => p.alive && p.controlledBy === 'ai').map((p) => p.id);
+  const star = Math.max(...aliveAI);   // 刻意取最大 id：證明靠價值勝出而非 id 排序
   const llm = new MockLLM((prompt) => {
     if (prompt.includes('【裁判任務】')) {
       const slots: number[] = [];
       for (const m of prompt.matchAll(/^(\d+)\.\s/gm)) slots.push(parseInt(m[1], 10));
-      // 前三個 slot 高分，其餘低分
-      return slots.map((sl, i) => `${sl}: ${i < 3 ? 9 - i : 1}`).join('\n');
+      return slots.map((sl) => `${sl}: 5`).join('\n');   // 全同分 → 由價值制決勝
     }
     if (prompt.includes('【你的預發言草稿】')) return '展開文本';
-    return `P0：「${drafts[di++ % drafts.length]}」`;
+    const m = prompt.match(/你是 P(\d+)/);
+    const id = m ? parseInt(m[1], 10) : 1;
+    if (id === star) return `P${id}：「我覺得 P5 很可疑，投他。」\n[決定:投P5]`;
+    return `P${id}：「資訊還不足，想再聽聽大家的說法。」\n[決定:資訊不足]`;
   });
   const { ctx, events } = makeCtx(s, llm);
   const sch = new SpeechScheduler(ctx, { cdMs: 1000 });
@@ -445,14 +437,51 @@ test('top3：選取落在裁判 top3（新穎性無干擾時）', async () => {
     await flushN(3);
     mock.timers.tick(1000);   // CD 到有貨播出
     await flush();
-    assert.equal(events.length, 1);
+    assert.equal(events.length, 2, 'decided 勝出 → 播出＋ready 共兩事件');
     assert.equal(events[0].type, 'AI_SPEECH_DONE');
+    if (events[0].type === 'AI_SPEECH_DONE') {
+      assert.equal(events[0].playerId, star, 'decided+指名草稿應以價值勝出');
+    }
+    assert.equal(events[1].type, 'AI_READY_VOTE');
+    if (events[1].type === 'AI_READY_VOTE') {
+      assert.equal(events[1].playerId, star);
+    }
   } finally {
     sch.stop();
   }
 });
 
-test('新穎性懲罰：重複內容被降分（4 人局，墊底者不在 top3）', async () => {
+test('SELECT 同分取 playerId 最小（全同分無價值差時確定性決勝）', async () => {
+  const s = discussionState(9);
+  const aliveAI = s.players.filter((p) => p.alive && p.controlledBy === 'ai').map((p) => p.id);
+  const expect = Math.min(...aliveAI);
+  const llm = new MockLLM((prompt) => {
+    if (prompt.includes('【裁判任務】')) {
+      const slots: number[] = [];
+      for (const m of prompt.matchAll(/^(\d+)\.\s/gm)) slots.push(parseInt(m[1], 10));
+      return slots.map((sl) => `${sl}: 5`).join('\n');   // 全同分＋皆無價值 → 取 playerId 最小
+    }
+    if (prompt.includes('【你的預發言草稿】')) return '展開文本';
+    const m = prompt.match(/你是 P(\d+)/);
+    return `P${m ? m[1] : '1'}：「資訊還不足，想再聽聽大家的說法。」\n[決定:資訊不足]`;
+  });
+  const { ctx, events } = makeCtx(s, llm);
+  const sch = new SpeechScheduler(ctx, { cdMs: 1000 });
+  try {
+    sch.onPhaseEntered(s);
+    await flushN(3);
+    mock.timers.tick(1000);
+    await flush();
+    assert.equal(events[0].type, 'AI_SPEECH_DONE');
+    if (events[0].type === 'AI_SPEECH_DONE') {
+      assert.equal(events[0].playerId, expect, '全同分時 playerId 最小者勝出');
+    }
+  } finally {
+    sch.stop();
+  }
+});
+
+test('新穎性懲罰：重複內容被降分（墊底者不被選中）', async () => {
   const s = discussionState(6);
   // 當天討論先放一則與 A 相同的訊息
   const repeated = 'P3就是人狼大家快把票投給P3';
@@ -477,13 +506,13 @@ test('新穎性懲罰：重複內容被降分（4 人局，墊底者不在 top3�
     await flushN(3);
     mock.timers.tick(1000);
     await flush();
-    // 6 存活 AI → top3；重複者被懲罰墊底 → 不應被選中（人數無關，一律完整管線）
+    // 重複者被懲罰墊底 → 價值制下不應被選中（一律完整管線）
     const aliveAI = s.players.filter((p) => p.alive && p.controlledBy === 'ai').length;
     assert.ok(aliveAI > 2, '本案例需多候選人管線');
     assert.equal(events.length, 1);
     assert.equal(events[0].type, 'AI_SPEECH_DONE');
     if (events[0].type === 'AI_SPEECH_DONE') {
-      assert.notEqual(events[0].playerId, 1, '重複發言者應被新穎性懲罰排除出 top3');
+      assert.notEqual(events[0].playerId, 1, '重複發言者應被新穎性懲罰壓到墊底而不被選中');
     }
   } finally {
     sch.stop();
@@ -809,7 +838,7 @@ test('安全閥：連續資訊不足達上限 → 強制 decided，發言成功�
     for (const id of round1AI) assert.equal(sch.uncertainCountForTest(id), 1);
     assert.ok(!events.some((e) => e.type === 'AI_READY_VOTE'), '未達安全閥不 enqueue ready');
     // 後續輪（每輪播出即版本推進）：草稿達 3 次上限 → 強制 decided → 播出後 enqueue ready
-    // （winner 為 top3 隨機，計數落後的 AI 可能連莊，輪數有隨機性；收斂本身有界）
+    // （同分取 playerId 最小＋連播懲罰輪轉，收斂本身有界）
     let readyPid = -1;
     for (let r = 0; r < 12 && readyPid < 0; r++) {
       sch.onBoardUpdated(s);

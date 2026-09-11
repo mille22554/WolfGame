@@ -84,7 +84,7 @@ const SIMP_TO_TRAD: Record<string, string> = {
   问: '問', 门: '門', 开: '開', 关: '關', 会: '會', 万: '萬',
   与: '與', 为: '為', 么: '麼', 来: '來', 点: '點', 边: '邊',
   还: '還', 选: '選', 惊: '驚', 险: '險', 队: '隊', 后: '後',
-  劲: '勁', 怀: '懷', 证: '證', 据: '據', 辩: '辯', 护: '護',
+  劲: '勁', 怀: '懷', 证: '證', 确: '確', 据: '據', 辩: '辯', 护: '護',
   态: '態', 伪: '偽', 装: '裝', 潜: '潛', 吗: '嗎',
 };
 const SIMP_RE = new RegExp(`[${Object.keys(SIMP_TO_TRAD).join('')}]`, 'g');
@@ -139,7 +139,7 @@ export interface SpeechSchedulerOptions {
   preSpeechTemp?: number;      // 預設 0.7
   judgeTemp?: number;          // 預設 0.3
   expandTemp?: number;         // 預設 0.8
-  topK?: number;               // 預設 3
+  topK?: number;               // 已廢棄：SELECT 改價值制確定性取最高，不再抽籤（保留欄位免壞外部呼叫，實際未用）
   recentCompareCount?: number; // 預設 3（新穎性比較的最近訊息數）
   maxUncertainRounds?: number; // 安全閥，預設 50（測試可調小加速收斂）
 }
@@ -161,6 +161,28 @@ interface Draft {
 function envInt(name: string, fallback: number): number {
   const v = Number(process.env[name]);
   return Number.isFinite(v) ? v : fallback;
+}
+
+// ============================================
+// SELECT 價值制（確定性，不抽籤）
+// ============================================
+
+/** 指名正規式：內文含 P編號即算指名（發言人前綴已先剝離，不計入） */
+const MENTION_RE = /P\d+/;
+
+/** 草稿價值加分：decided＋具體數字目標 +3；內文含 P編號指名 +1（可疊加）；棄票／資訊不足 +0 */
+export function draftValueBonus(draft: Draft): number {
+  let bonus = 0;
+  if (draft.decision.status === 'decided' && typeof draft.decision.target === 'number') bonus += 3;
+  if (MENTION_RE.test(stripSpeechPrefix(draft.text))) bonus += 1;
+  return bonus;
+}
+
+/** 連播懲罰：當天白板近 N 則內該玩家每播出一次 −1（狼模式餵 wolfDiscussionLog 切片） */
+export function repeatPenalty(playerId: number, recentSpeakerIds: number[]): number {
+  let n = 0;
+  for (const id of recentSpeakerIds) if (id === playerId) n++;
+  return n;
 }
 
 export class SpeechScheduler implements AIScheduler {
@@ -187,7 +209,7 @@ export class SpeechScheduler implements AIScheduler {
       preSpeechTemp: options?.preSpeechTemp ?? 0.7,
       judgeTemp: options?.judgeTemp ?? 0.3,
       expandTemp: options?.expandTemp ?? 0.8,
-      topK: options?.topK ?? 3,
+      topK: options?.topK ?? 3,   // 未用（SELECT 價值制已取消隨機；保留讀取免壞外部呼叫）
       recentCompareCount: options?.recentCompareCount ?? 3,
       maxUncertainRounds: options?.maxUncertainRounds ?? MAX_UNCERTAIN_ROUNDS,
     };
@@ -337,7 +359,7 @@ export class SpeechScheduler implements AIScheduler {
         return;
       }
 
-      // ---- JUDGE：全盲裁判（草稿 ≤3 直接跳過，全部同分純隨機挑，新穎性不生效） ----
+      // ---- JUDGE：全盲裁判（草稿 ≤3 直接跳過給同分，改由 SELECT 價值制決勝） ----
       const scores = drafts.length <= 3
         ? new Map(drafts.map((d) => [d.slot, 5]))
         : await this.judge(token, cur1, drafts);
@@ -346,19 +368,9 @@ export class SpeechScheduler implements AIScheduler {
       if (cur2.phase !== 'DAY_DISCUSSION_OPEN' && cur2.phase !== 'NIGHT_DISCUSSION_OPEN') return;
       if (cur2.boardVersion !== startVersion) return;   // 作廢
 
-      // ---- SELECT：新穎性懲罰 + top3 隨機 ----
+      // ---- SELECT：價值制確定性（final＝judge分－新穎性＋價值－連播；取最高，同分取 playerId 最小；不抽籤） ----
       const isWolfMode = cur2.phase === 'NIGHT_DISCUSSION_OPEN';
-      const discussLog = isWolfMode ? cur2.wolfDiscussionLog : cur2.discussionLog;
-      const recent = discussLog
-        .filter((d) => d.day === cur2.day)
-        .slice(-this.options.recentCompareCount)
-        .map((d) => d.text);
-      const ranked = drafts.map((d) => ({
-        ...d,
-        final: (scores.get(d.slot) ?? 5) - noveltyPenalty(d.text, recent),
-      })).sort((a, b) => b.final - a.final);
-      const top = ranked.slice(0, Math.max(1, Math.min(this.options.topK, ranked.length)));
-      const winner = top[Math.floor(Math.random() * top.length)];
+      const winner = this.selectWinner(cur2, drafts, scores);
       const commitVersion = this.ctx.getState().boardVersion;
 
       // ---- EXPAND：產出後清洗 flag（廉價保險），再暫存 ----
@@ -408,6 +420,20 @@ export class SpeechScheduler implements AIScheduler {
     } finally {
       if (token === this.prodToken) this.producing = false;
     }
+  }
+
+  /** 價值制選子：final＝judge分－新穎性＋價值－連播；取最高分，同分取 playerId 最小（不抽籤） */
+  private selectWinner(state: GameState, drafts: Draft[], scores: Map<number, number>): Draft {
+    const log = state.phase === 'NIGHT_DISCUSSION_OPEN' ? state.wolfDiscussionLog : state.discussionLog;
+    const window = log.filter((d) => d.day === state.day).slice(-this.options.recentCompareCount);
+    const recentTexts = window.map((d) => d.text);
+    const recentIds = window.map((d) => d.playerId);
+    const ranked = drafts.map((d) => ({
+      ...d,
+      final: (scores.get(d.slot) ?? 5) - noveltyPenalty(d.text, recentTexts)
+        + draftValueBonus(d) - repeatPenalty(d.playerId, recentIds),
+    })).sort((a, b) => b.final - a.final || a.playerId - b.playerId);
+    return ranked[0];
   }
 
   /** 生產失敗 → N 秒後重試；重試前不播出（無暫存）、不推進掛機計數（transition 只在發言成功時計數） */
@@ -532,7 +558,7 @@ export class SpeechScheduler implements AIScheduler {
     }
     const parsed = drafts.filter((d) => scores.has(d.slot)).length;
     if (parsed / drafts.length < 0.5) {
-      // 解析率 < 50% → 放棄評分，全部同分（回歸 top3 隨機）
+      // 解析率 < 50% → 放棄評分，全部同分（改由 SELECT 價值制決勝）
       return new Map(drafts.map((d) => [d.slot, 5]));
     }
     for (const d of drafts) {

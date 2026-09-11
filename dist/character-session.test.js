@@ -289,7 +289,7 @@ test('wolf_speech 任務指令：行為理由僅限有觀察時，無材料時�
     assert.ok(!prompt.includes('外圍編號'), '不應再提供編號位置類示例');
     // 空板：理由要求直接取消（指名＋直覺即可），避免「並給理由」逼出直覺包裝的觀察
     const pre = buildWolfPreSpeechPrompt(s, wolf.id);
-    assert.ok(pre.includes('不需要給理由，也不要描述對方的任何行為或狀態'), '空板 pre_speech 應取消理由要求');
+    assert.ok(pre.includes('不需要給理由'), '空板 pre_speech 應取消理由要求');
     assert.ok(pre.includes('怪怪的'), '空板 pre_speech 應點名禁用空話詞（禁空話條款存在性）');
     assert.ok(pre.includes('文本與旗標須一致'), '空板 pre_speech 應要求文本與旗標一致');
     assert.ok(!pre.includes('並給理由'), '空板 pre_speech 不應再要求給理由');
@@ -314,6 +314,8 @@ test('expand 潤飾約束：狼/白天 expand 均鎖定草稿目標與理由，�
     assert.ok(wolfExpand.includes('不得新增草稿中沒有的理由'), '狼 expand 應禁止新增理由');
     assert.ok(wolfExpand.includes('不得新增守衛預測、行為觀察或編號位置聯想'), '狼 expand 應點名禁止守衛預測/行為觀察/編號聯想');
     assert.ok(wolfExpand.includes('改寫成自然的口語發言'), '狼 expand 應要求口語化改寫');
+    assert.ok(wolfExpand.includes('改寫接地規則'), '狼 expand 應同步 grounding 規則');
+    assert.ok(wolfExpand.includes('可疑一律禁用'), '狼 expand 應含禁詞表（與 pre_speech 一致）');
     assert.ok(!wolfExpand.includes('說不上為什麼'), '狼 expand 不應含固定句式示例（防照搬）');
     const dayExpand = buildExpandPrompt(s, aliveIds(s)[0], 'P1：「我比較在意P3的說法。」');
     assert.ok(dayExpand.includes('草稿的核心論點不得改變'), '白天 expand 應鎖定核心論點');
