@@ -78,6 +78,10 @@ async function runMockJob(job: WorkerJob): Promise<void> {
 }
 
 async function runSlotJob(slot: ContextSlot, job: WorkerJob): Promise<void> {
+  // 無狀態架構：每個 prompt 自包含完整上下文，slot 的 chat history 必須每 job 重置。
+  // 否則 history 無限累積 → prefill 越來越長 → 弱 GPU 上單次 batch 超過 Windows TDR（~2s）
+  // → device lost（stage 2 長程會議連續崩潰，stage 1 因呼叫少未觸發）。
+  slot.session.resetChatHistory();
   const text = await slot.session.prompt(job.prompt, {
     temperature: job.temperature,
     maxTokens: job.maxTokens,
