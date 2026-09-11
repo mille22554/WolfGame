@@ -313,6 +313,18 @@ function wolfValidTargets(state, playerId) {
 function emptyBoardDeclaration() {
     return `【現實材料狀態】目前尚無任何公開發言或行為紀錄，你不可能觀察到任何人的活動、發言量或在場時間，禁止聲稱任何此類觀察（如「他活動頻繁」「他在場時間長」「他有異常的活動模式」「他不太對勁」）。也不要用「一直」「總是」「經常」「近期」「最近」這類暗示你長期觀察過對方的詞。P編號只是代號，沒有大小、遠近、邊緣或中央之分，禁止以編號本身作為理由（如「他位於邊緣」「外圍編號」）。沒有材料時可用的依據只有直覺、隨機嘗試或跟隨他人已提出的建議；直覺就說直覺，不得把直覺包裝成觀察。沒有依據時，直接說出直覺目標並標已決定——第一晚本來就沒有依據，這不算不誠實；只有整句完全沒提到任何目標時，才標資訊不足。`;
 }
+/**
+ * 非空板討論紀錄使用規則（第 2 輪起；空板聲明的延續）：
+ * 空板聲明只在全局無紀錄時出現，有紀錄後 AI 反而開始引用白板——此時需要：
+ * 1. 理由只能基於白板上確實存在的發言（防「活動頻繁」「動向異常」等無源觀察）
+ * 2. 只能引用確實發過言的人；點名某人當目標，不代表他說過話
+ *    （防 phantom speaker，如對沒發言的 P12 說「P12說得對」）
+ * 3. P編號無空間意義（空板禁令的延續）
+ * 4. 講完判斷就停筆：同意用短句，不要「但還需要確認」類收尾（防散文式自言自語）
+ */
+function nonEmptyBoardDeclaration() {
+    return `【討論紀錄使用規則】理由只能基於白板上確實存在的發言，禁止聲稱任何白板上沒有的觀察（如活動頻繁、在場時間、動向異常、不對勁）。只能引用白板上確實發過言的人；點名某人當襲擊目標，不代表他說過話，不要寫「XXX說得對」除非他真的在白板上說過。P編號只是代號，沒有大小遠近邊緣之分。講完你的判斷就停筆：同意同伴用短句即可，不要加「但還需要確認」「再觀察」這類收尾。`;
+}
 /** 是否尚無任何公開行為材料：白天討論與狼討論紀錄全空（含歷史天數） */
 function hasNoPublicBehaviorRecord(state) {
     return state.discussionLog.length === 0 && state.wolfDiscussionLog.length === 0;
@@ -347,7 +359,7 @@ export function buildWolfPreSpeechPrompt(state, playerId) {
         personaPrompt ? `【人格設定】\n${personaPrompt}` : '',
         `【你的角色資訊】\n${privateLines.join('\n')}`,
         `【今晚狼討論】\n${recent.length > 0 ? recent.join('\n') : '（尚無發言）'}`,
-        hasNoPublicBehaviorRecord(state) ? emptyBoardDeclaration() : '',
+        hasNoPublicBehaviorRecord(state) ? emptyBoardDeclaration() : nonEmptyBoardDeclaration(),
         `【任務】你是 P${playerId}，請寫一句 10-40 字的預發言草稿，與同伴討論今晚要襲擊誰、協調目標（不超過 40 字；短一點沒關係，誠實優先於湊字數）。用一般人的自然語氣寫，不要刻意扮演角色口吻、不要浮誇；人格設定只作為你的思考傾向參考（懷疑誰、敢不敢果斷），不要求模仿其說話風格。全篇只能使用繁體中文，嚴禁任何簡體字（如杀/发/对/说）。${reasonReq}今晚可襲擊的存活玩家只有：${wolfValidTargets(state, playerId)}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮）。守衛保護誰、誰是甚麼職業都是秘密，無從得知：不得聲稱知道，也不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由。\n格式：P${playerId}：「你的草稿」`,
         `【決策旗標】草稿結尾另起一行附加你的襲擊決策狀態（中控內部判讀用，不會公開）：已決定襲擊某人（說出具體目標即算已決定，即使理由只是直覺）→[決定:殺P編號]；連提名誰都拿不定→[決定:資訊不足]。只可附加其一。`,
     ];
@@ -367,6 +379,7 @@ export function buildWolfPreSpeechPrompt(state, playerId) {
  */
 export function buildWolfExpandPrompt(state, playerId, preSpeech) {
     const base = buildPrompt(state, playerId, 'wolf_speech');
-    return `${base}\n\n${hasNoPublicBehaviorRecord(state) ? emptyBoardDeclaration() + '\n\n' : ''}【今晚可襲擊的存活玩家】${wolfValidTargets(state, playerId)}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮；守衛保護誰是秘密，不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由）\n\n【你的預發言草稿】${preSpeech}\n請把這則草稿改寫成自然的口語發言（20-60 字，像一般人在會議中講話；短一點沒關係，不要為了湊字數而新增內容），不必保留草稿的字句與句構，也不要套用任何固定句式。鐵則：草稿指名的目標（P編號）與理由不得改變，不得新增草稿中沒有的理由（尤其不得新增守衛預測、行為觀察或編號位置聯想）。`;
+    const boardDecl = hasNoPublicBehaviorRecord(state) ? emptyBoardDeclaration() : nonEmptyBoardDeclaration();
+    return `${base}\n\n${boardDecl}\n\n【今晚可襲擊的存活玩家】${wolfValidTargets(state, playerId)}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮；守衛保護誰是秘密，不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由）\n\n【你的預發言草稿】${preSpeech}\n請把這則草稿改寫成自然的口語發言（20-60 字，像一般人在會議中講話；短一點沒關係，不要為了湊字數而新增內容），不必保留草稿的字句與句構，也不要套用任何固定句式。鐵則：草稿指名的目標（P編號）與理由不得改變，不得新增草稿中沒有的理由（尤其不得新增守衛預測、行為觀察或編號位置聯想）。`;
 }
 //# sourceMappingURL=character-session.js.map

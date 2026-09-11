@@ -262,6 +262,22 @@ test('防幻覺觀察：有討論材料後，prompt 不帶材料狀態聲明', (
     const dayPre = buildPreSpeechPrompt(s, aliveIds(s)[0]);
     assert.ok(!dayPre.includes('現實材料狀態'), '白天 pre_speech 有材料時不應帶空板聲明');
 });
+test('非空板討論紀錄使用規則：狼 prompt 有材料時帶延續版禁令（防第2輪起幻覺回歸）', () => {
+    const s = createGameState(9);
+    joinAll(s, 9);
+    transition(s, { type: 'START_GAME' });
+    const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive);
+    // 第1輪後白板非空：第2輪 prompt 仍須有禁令（不能只靠空板聲明）
+    s.wolfDiscussionLog.push({ playerId: wolf.id, text: '先殺P5，直覺', day: s.day });
+    const pre = buildWolfPreSpeechPrompt(s, wolf.id);
+    assert.ok(!pre.includes('現實材料狀態'), '非空板不應帶空板聲明');
+    assert.ok(pre.includes('【討論紀錄使用規則】'), '非空板應帶延續版規則');
+    assert.ok(pre.includes('理由只能基於白板上確實存在的發言'), '應要求理由基於實際發言');
+    assert.ok(pre.includes('不要寫「XXX說得對」除非他真的在白板上說過'), '應禁 phantom speaker（引用沒發言的人）');
+    assert.ok(pre.includes('講完你的判斷就停筆'), '應要求短句收尾、禁散文式自言自語');
+    const expand = buildWolfExpandPrompt(s, wolf.id, 'P1：「先殺P5，直覺。」');
+    assert.ok(expand.includes('【討論紀錄使用規則】'), 'expand 非空板亦應帶延續版規則');
+});
 test('wolf_speech 任務指令：行為理由僅限有觀察時，無材料時取消理由要求', () => {
     const s = createGameState(9);
     joinAll(s, 9);
