@@ -5,7 +5,7 @@
 import { test, mock, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  SpeechScheduler, parseDecisionFlag, stripDecisionFlags, MAX_UNCERTAIN_ROUNDS,
+  SpeechScheduler, parseDecisionFlag, stripDecisionFlags, normalizeTraditional, MAX_UNCERTAIN_ROUNDS,
 } from './ai-scheduler.js';
 import { createGameState, transition, getNightActors, stripSpeechPrefix } from './game-state.js';
 import { noveltyPenalty, bigramJaccard, pNumberOverlap } from './novelty.js';
@@ -207,6 +207,16 @@ test('flag 剝離：全域匹配（中置殘留亦清）；解析取最後一個
 test('flag 寬鬆解析：該殺／先殺亦認 decided（首夜常見說法）', () => {
   assert.deepEqual(parseDecisionFlag('我覺得今晚該殺P12'), { status: 'decided', target: 12 });
   assert.deepEqual(parseDecisionFlag('今晚先殺P5吧'), { status: 'decided', target: 5 });
+});
+
+test('簡轉繁正規化：遊戲高頻簡體字映射＋冪等', () => {
+  assert.equal(normalizeTraditional('直覺說杀P5'), '直覺說殺P5');
+  assert.equal(normalizeTraditional('P5不太对劲，先观察'), 'P5不太對勁，先觀察');
+  assert.equal(normalizeTraditional('我懷疑他，有证据吗？派他去臥底保护我方'), '我懷疑他，有證據嗎？派他去臥底保護我方');
+  assert.equal(normalizeTraditional('已經是繁體：殺P5、對話'), '已經是繁體：殺P5、對話');
+  assert.equal(normalizeTraditional(''), '');
+  // 只收無歧義字：只/面/里等多音多義字不動
+  assert.equal(normalizeTraditional('只有裡面有只貓'), '只有裡面有只貓');
 });
 
 test('安全閥常數：MAX_UNCERTAIN_ROUNDS = 50', () => {

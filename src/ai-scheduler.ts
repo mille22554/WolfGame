@@ -71,6 +71,28 @@ const LOOSE_UNCERTAIN_RE = /資訊不足|無法決定|還不能決定|不能決�
  *  僅整行完全匹配才剝離；句中提及（如「我決定投P3出去」）保留，避免誤傷正常發言。 */
 const BARE_FLAG_LINE_RE = /^\s*決定\s*[:：]\s*(投P\s*\d+|殺P\s*\d+|棄票|資訊不足)\s*$/;
 
+/**
+ * 簡轉繁正規化：Qwen 訓練語料簡體主導，遊戲討論高頻詞（杀/说/对…）易混入簡體。
+ * prompt 禁令只能降低頻率，殘留以確定性映射清洗（冪等，對繁體無操作）。
+ * 映射表僅收遊戲語境無歧義字（如 只/面/里 在繁體有多種寫法，不收）。
+ */
+const SIMP_TO_TRAD: Record<string, string> = {
+  杀: '殺', 发: '發', 对: '對', 个: '個', 说: '說', 话: '話',
+  认: '認', 让: '讓', 过: '過', 这: '這', 进: '進', 远: '遠',
+  运: '運', 时: '時', 实: '實', 现: '現', 务: '務', 汉: '漢',
+  买: '買', 读: '讀', 听: '聽', 观: '觀', 觉: '覺', 见: '見',
+  问: '問', 门: '門', 开: '開', 关: '關', 会: '會', 万: '萬',
+  与: '與', 为: '為', 么: '麼', 来: '來', 点: '點', 边: '邊',
+  还: '還', 选: '選', 惊: '驚', 险: '險', 队: '隊', 后: '後',
+  劲: '勁', 怀: '懷', 证: '證', 据: '據', 辩: '辯', 护: '護',
+  态: '態', 伪: '偽', 装: '裝', 潜: '潛', 吗: '嗎',
+};
+const SIMP_RE = new RegExp(`[${Object.keys(SIMP_TO_TRAD).join('')}]`, 'g');
+
+export function normalizeTraditional(text: string): string {
+  return text.replace(SIMP_RE, (ch) => SIMP_TO_TRAD[ch] ?? ch);
+}
+
 /** 剝離 flag（全域，一律在收草稿回傳前＋broadcast 前各洗一次；含無方括號裸 flag 整行） */
 export function stripDecisionFlags(text: string): string {
   return text
@@ -346,10 +368,10 @@ export class SpeechScheduler implements AIScheduler {
       let full: string;
       let decision: AIDecision = winner.decision;
       try {
-        const rawExpand = (await this.ctx.llm.generate(expandPrompt, {
+        const rawExpand = normalizeTraditional((await this.ctx.llm.generate(expandPrompt, {
           temperature: this.options.expandTemp,
           maxTokens: 100,
-        })).trim();
+        })).trim());
         const expandDecision = parseDecisionFlag(rawExpand);
         full = stripSpeechPrefix(stripDecisionFlags(rawExpand));
         // 狼模式：expand 是對外最終承諾，其決策優先（無效目標→棄票）；expand 未決定→沿用草稿決策。
@@ -414,10 +436,11 @@ export class SpeechScheduler implements AIScheduler {
           : buildPreSpeechPrompt(st, pid);
         for (let attempt = 0; attempt < 2; attempt++) {
           try {
-            const raw = (await this.ctx.llm.generate(prompt, {
+            // 簡轉繁正規化（模型偶發簡體，先正規化再解析/清洗，旗標解析亦受益）
+            const raw = normalizeTraditional((await this.ctx.llm.generate(prompt, {
               temperature: this.options.preSpeechTemp,
               maxTokens: 100,
-            })).trim();
+            })).trim());
             if (!raw) continue;
             const parsed = parseDecisionFlag(raw);
             const decision = this.updateDecision(pid, isWolf ? this.validateWolfTarget(st, pid, parsed) : parsed);
