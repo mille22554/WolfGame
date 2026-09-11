@@ -328,15 +328,42 @@ export function summarizeWolfDiscussion(state: GameState, day: number): string {
   return `第${day}天狼討論摘要：尚無明確目標`;
 }
 
+/** 狼合法目標編號：存活、非同盟（供顯示與範例抽樣共用） */
+function wolfLegalIds(state: GameState, playerId: number): number[] {
+  const allyIds = state.players.filter((p) => p.role === Role.WEREWOLF && p.alive).map((p) => p.id);
+  return getAlivePlayers(state.players).filter((p) => !allyIds.includes(p.id)).map((p) => p.id);
+}
+
 /**
  * 狼合法襲擊目標清單：存活、非自己、非同盟（列舉出來，讓模型只能從中挑選，從根本上避免想殺同盟）
  */
 function wolfValidTargets(state: GameState, playerId: number): string {
-  const allyIds = state.players.filter((p) => p.role === Role.WEREWOLF && p.alive).map((p) => p.id);
-  return getAlivePlayers(state.players)
-    .filter((p) => !allyIds.includes(p.id))
-    .map((p) => `P${p.id}`)
-    .join('、');
+  return wolfLegalIds(state, playerId).map((id) => `P${id}`).join('、');
+}
+
+/** 今晚已發言的同伴（取最近一位，供首夜跟票範例引用真實同伴） */
+function tonightCompanionId(state: GameState, playerId: number): number | undefined {
+  const tonight = state.wolfDiscussionLog.filter((d) => d.day === state.day && d.playerId !== playerId);
+  return tonight.length > 0 ? tonight[tonight.length - 1].playerId : undefined;
+}
+
+/** 首夜動態形狀範例：編號從合法目標隨機抽，跟票例只在有同伴發言時出現 */
+function firstNightExamples(state: GameState, playerId: number): string {
+  const ids = wolfLegalIds(state, playerId);
+  if (ids.length === 0) return '';
+  const pickA = ids[Math.floor(Math.random() * ids.length)];
+  const pickB = ids[Math.floor(Math.random() * ids.length)];
+  const companion = tonightCompanionId(state, playerId);
+  const ex1 = `如「第一晚沒資訊，我隨便指一個，P${pickA}吧。」→[決定:殺P${pickA}]`;
+  const ex2 = companion !== undefined ? `如「我沒想法，跟P${companion}，殺P${pickB}。」→[決定:殺P${pickB}]` : '';
+  const ex3 = `如「你們先定，我跟票。」→[決定:資訊不足]`;
+  const list = [ex1, ex2, ex3].filter((s) => s !== '').join('；');
+  return `形狀範例（編號僅示範形狀，不要照抄）：${list}。`;
+}
+
+/** 當天白天討論最近 5 則（只取文本，附說話人以便引用；供後夜威脅評估） */
+function todayDiscussionLines(state: GameState): string[] {
+  return state.discussionLog.filter((d) => d.day === state.day).slice(-PRE_SPEECH_RECENT).map((e) => `P${e.playerId}：${e.text}`);
 }
 
 /**
@@ -379,37 +406,40 @@ export function buildWolfPreSpeechPrompt(state: GameState, playerId: number): st
   const personaId = player.personality || `p${playerId}`;
   const personaPrompt = readTextIfExists(path.join(getResourceRoot(), 'character', personaId, 'agents.md'));
   const privateLines = privateKnowledgeLines(state, playerId);
+  const isFirstNight = hasNoPublicBehaviorRecord(state);
   let recentEntries = state.wolfDiscussionLog.slice(-PRE_SPEECH_RECENT);
   let recent = renderDiscussionLines(recentEntries);
-  // 根因修復：空板時「並給理由」會逼模型把直覺包裝成觀察（「直覺說P15有異動」），
-  // 無材料時直接取消理由要求（指名＋直覺即可）；有材料才要求基於實際發言的理由。
-  // 收斂校準：說出想殺誰本身就是決定（即使理由只是直覺）→ 標 decided；
-  // 只有連提名誰都拿不定主意時，才標資訊不足（否則會議因全員謙虛而永不收斂）。
-  // 對話感：白板非空時（第2輪起），要求點名回應一位同伴的既有發言，避免各說各話。
-  // 跟隨共識：其他同伴都已指名同一目標、而你沒有更想殺的人選時，直接跟進並標已決定
-  // （狼群需要一致行動才有效；v5 實測孤狼猶豫 6 輪才跟進，此規則把跟隨合法化為果斷）。
+  let dayEntries: string[] = isFirstNight ? [] : todayDiscussionLines(state);
+  // 首夜 grounding：理由材料須存在，無公開發言禁述他人、只談自己＋動態形狀範例；
+  // 後夜威脅評估：理由只准引用兩白板實發言，帶票強/主導/像神者優先，嚴禁自稱知職業；
+  // 跟隨共識＋點名回應保留；空話詞＋旗標一致延續（措辭精簡，預算見 PRE_SPEECH_BUDGET）。
   const hasTonightDiscussion = state.wolfDiscussionLog.some((d) => d.day === state.day);
-  const reasonReq = hasNoPublicBehaviorRecord(state)
-    ? '直接指名一個具體目標（P編號），並說這是你的直覺即可；不需要給理由，也不要描述對方的任何行為或狀態。注意：說出想殺誰本身就是決定，請標[決定:殺P編號]；只有當你連提名誰都拿不定主意時，才標[決定:資訊不足]。'
-    : '直接指名一個具體目標（P編號）並給理由（只能基於【今晚狼討論】中的實際發言內容）。'
-      + '若其他同伴都已指名同一目標、而你沒有更想殺的人選，直接跟進該目標並標已決定（跟隨共識本身就是決定，不需要額外把握）。'
-      + (hasTonightDiscussion
-        ? '先點名回應一位【今晚狼討論】中有發言的同伴（同意、補充或反對他的說法），再講你的判斷，讓討論像開會對話一樣接續下去。'
-        : '');
+  const firstReq = `理由的材料必須存在：只能引用【今晚狼討論】裡同伴實際說過的話；第一晚沒有任何公開發言，不得描述任何人的行為、狀態或感覺（不對勁／怪怪的／有異狀／有問題／可疑一律禁用），只准談你自己的狀態（如沒想法、隨便指、跟票）。${firstNightExamples(state, playerId)}直接指名一個具體目標（P編號），並說這是你的直覺即可；不需要給理由，也不要描述對方的任何行為或狀態。說出想殺誰本身就是決定，請標[決定:殺P編號]；只有連提名誰都拿不定時，才標[決定:資訊不足]。禁空話：禁用「對勁／不太對勁／怪怪的／有異狀／有問題」等空泛描述。文本與旗標須一致：寫不確定／再看看就不要提名並標[決定:資訊不足]，提名了就是已決定。`;
+  const laterReq = `直接指名一個具體目標（P編號）並給理由（只能引用【白天討論】或【今晚狼討論】實際出現的發言做威脅評估：帶票強、主導發言、行為像神者優先；嚴禁聲稱知道任何人職業）。`
+    + `若其他同伴都已指名同一目標、而你沒有更想殺的人選，直接跟進該目標並標已決定（跟隨共識本身就是決定）。`
+    + (hasTonightDiscussion ? `先點名回應一位【今晚狼討論】中有發言的同伴（同意、補充或反對他的說法），再講你的判斷，讓討論像開會對話一樣接續下去。` : '');
+  const reasonReq = isFirstNight ? firstReq : laterReq;
+  const dayBlock = isFirstNight ? '' : `【白天討論】\n${dayEntries.length > 0 ? dayEntries.join('\n') : '（今日尚無白天發言）'}`;
   const parts: string[] = [
     personaPrompt ? `【人格設定】\n${personaPrompt}` : '',
     `【你的角色資訊】\n${privateLines.join('\n')}`,
     `【今晚狼討論】\n${recent.length > 0 ? recent.join('\n') : '（尚無發言）'}`,
-    hasNoPublicBehaviorRecord(state) ? emptyBoardDeclaration() : nonEmptyBoardDeclaration(),
+    dayBlock,
+    isFirstNight ? emptyBoardDeclaration() : nonEmptyBoardDeclaration(),
     `【任務】你是 P${playerId}，請寫一句 10-40 字的預發言草稿，與同伴討論今晚要襲擊誰、協調目標（不超過 40 字；短一點沒關係，誠實優先於湊字數）。用一般人的自然語氣寫，不要刻意扮演角色口吻、不要浮誇；人格設定只作為你的思考傾向參考（懷疑誰、敢不敢果斷），不要求模仿其說話風格。全篇只能使用繁體中文，嚴禁任何簡體字（如杀/发/对/说）。${reasonReq}今晚可襲擊的存活玩家只有：${wolfValidTargets(state, playerId)}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮）。守衛保護誰、誰是甚麼職業都是秘密，無從得知：不得聲稱知道，也不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由。\n格式：P${playerId}：「你的草稿」`,
     `【決策旗標】草稿結尾另起一行附加你的襲擊決策狀態（中控內部判讀用，不會公開）：已決定襲擊某人（說出具體目標即算已決定，即使理由只是直覺）→[決定:殺P編號]；連提名誰都拿不定→[決定:資訊不足]。只可附加其一。`,
   ];
   let prompt = parts.filter((s) => s !== '').join('\n\n');
-  // 超預算：先丟最近討論最舊條目（固定部分保留）
-  while (prompt.length > PRE_SPEECH_BUDGET && recentEntries.length > 1) {
-    recentEntries.shift();
-    recent = renderDiscussionLines(recentEntries);
-    parts[2] = `【今晚狼討論】\n${recent.join('\n')}`;
+  // 超預算：先丟白天最舊，再丟今晚最舊（固定部分保留）
+  while (prompt.length > PRE_SPEECH_BUDGET && (recentEntries.length > 1 || dayEntries.length > 1)) {
+    if (dayEntries.length > 1) {
+      dayEntries = dayEntries.slice(1);
+      parts[3] = `【白天討論】\n${dayEntries.join('\n')}`;
+    } else {
+      recentEntries = recentEntries.slice(1);
+      recent = renderDiscussionLines(recentEntries);
+      parts[2] = `【今晚狼討論】\n${recent.join('\n')}`;
+    }
     prompt = parts.filter((s) => s !== '').join('\n\n');
   }
   return prompt;
