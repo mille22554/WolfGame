@@ -447,8 +447,9 @@ async function waitForCond(cond, timeoutMs, what) {
     }
 }
 // 決策型 mock：預發言帶 decided flag 快速收斂；投票/夜間選最低存活（解析 prompt 公開知識）
+// 狼 pre 極簡 prompt 無「存活玩家：」，改讀「今晚可襲擊：」合法目標列
 function parseAliveIds(prompt) {
-    const m = prompt.match(/存活玩家：([^；。\n]+)/);
+    const m = prompt.match(/今晚可襲擊：([^。\n]+)/) ?? prompt.match(/存活玩家：([^；。\n]+)/);
     if (!m)
         return [];
     return [...m[1].matchAll(/P(\d+)/g)].map((x) => parseInt(x[1], 10));

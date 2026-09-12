@@ -33,10 +33,71 @@ export declare const MAX_UNCERTAIN_ROUNDS = 50;
 /** 正規 flag：[決定:投P3]／[決定:殺P3]／[決定:棄票]／[決定:資訊不足]（方括號跳脫、全形/半形冒號、全域匹配） */
 export declare const DECISION_FLAG_RE: RegExp;
 export declare function normalizeTraditional(text: string): string;
-/** 剝離 flag（全域，一律在收草稿回傳前＋broadcast 前各洗一次；含無方括號裸 flag 整行） */
+/** 剝離 flag（全域，一律在收草稿回傳前＋broadcast 前各洗一次；含無方括號裸 flag 行尾） */
 export declare function stripDecisionFlags(text: string): string;
 /** 兩層解析：先正規，失敗走寬鬆關鍵字；都抓不到 → uncertain（計入安全閥） */
 export declare function parseDecisionFlag(text: string): AIDecision;
+/** grounding 黑名單種子：命中草稿文本即判違規（拒收＋重試；重試上限沿用既有；哲學：首夜保護優先，後夜誤傷接受） */
+export declare const GROUNDING_VIOLATION_SEEDS: string[];
+/** 黑名單命中：回傳命中的種子，未命中回傳空字串（比對已正規化文本） */
+export declare function findGroundingViolation(text: string): string;
+/** 前科回寫：違規版（只帶最近一次被退；禁換皮重述） */
+export declare function buildViolationRetryNote(prevDraft: string, hitSeed: string, isFirstNight: boolean): string;
+/** 前科回寫：格式版（旗標解析 miss／缺旗標的重試；附正確範例） */
+export declare function buildFormatRetryNote(prevDraft: string): string;
+/** 狼草稿拒收檢查結果 */
+export interface WolfRejection {
+    kind: 'grounding' | 'format' | 'lang' | 'target';
+    hit: string;
+    note: string;
+}
+/** 英文超標：ASCII 字母占比過半即拒（全英文拒、中英夾雜不過半放行） */
+export declare function isEnglishHeavy(text: string): boolean;
+/** 前科回寫：英文版（英文超標／簡體混入共用；附格式提醒；pre 加自狀態指引，expand 不帶） */
+export declare function buildLangRetryNote(prevDraft: string, selfState?: boolean): string;
+/** 前科回寫：自指版（附格式提醒） */
+export declare function buildTargetRetryNote(prevDraft: string, playerId: number): string;
+/** 非法狼目標：自己／同盟／不存在或死亡 → 回傳 hit 說明，通過回傳空字串 */
+export declare function illegalWolfTarget(st: GameState, playerId: number, targetId: number): string;
+/** 首夜捏造檢查：首夜出現昨晚的行動／行為／表現／發言、或白天持續行為描述即判虛構（後夜有公開紀錄不攔） */
+export declare function findFirstNightFabrication(text: string): string;
+/** 簡體攔截：原文與正規化後不同即拒（回傳前科 note，空字串表通過） */
+export declare function simplifiedRejection(rawRaw: string): string;
+/** 英文短詞檢查：整詞命中回傳該詞，未命中回傳空字串 */
+export declare function findEnglishWord(text: string): string;
+/** 狼草稿拒收檢查：回傳前科回寫（含 kind/hit 供賬本），null 表通過 */
+export declare function checkWolfDraft(raw: string, st: GameState, pid: number): WolfRejection | null;
+/** expand 違規檢查：seed→fab（僅首夜）→eng 三層；回傳 kind/hit，null 表通過 */
+export declare function checkExpandViolation(raw: string, firstNight: boolean): {
+    kind: 'grounding' | 'lang';
+    hit: string;
+} | null;
+/** 賬本一行：拒收確定後記一筆；fixed 表重試是否改過自新 */
+export interface PrecedentEntry {
+    t: number;
+    game: string;
+    meeting: string;
+    phase: string;
+    kind: string;
+    hit: string;
+    who: string;
+    text: string;
+    fixed: boolean;
+}
+/** 賬本上限行數（超了砍最舊） */
+export declare const PRECEDENTS_CAP = 500;
+/** 賬本檔名（<dataDir> 下；已 gitignore） */
+export declare const PRECEDENTS_FILE = "precedents.jsonl";
+/** 賬本路徑（可注入；預設 <dataDir>/precedents.jsonl） */
+export declare function precedentsFile(dataDir?: string): string;
+/** 賬本讀取（缺檔／壞行容錯） */
+export declare function readPrecedents(file?: string): PrecedentEntry[];
+/** 賬本寫入（append-only 語義；超上限砍最舊） */
+export declare function appendPrecedents(entries: PrecedentEntry[], file?: string): void;
+/** 跨局 top-1：同 meeting＋同 phase 按 t 降冪（寫入序，不依賴文件序），own 優先、否則取最新 */
+export declare function findCrossGamePrecedent(meeting: string, phase: string, persona: string, file?: string): PrecedentEntry | null;
+/** 跨局句（改版：不再引前句全文，防模板抄襲；target 分支抽象化） */
+export declare function buildCrossGameNote(entry: PrecedentEntry): string;
 export interface SpeechSchedulerOptions {
     cdMs?: number;
     retryMs?: number;
@@ -47,6 +108,7 @@ export interface SpeechSchedulerOptions {
     topK?: number;
     recentCompareCount?: number;
     maxUncertainRounds?: number;
+    ledgerFile?: string;
 }
 interface Stash {
     playerId: number;
@@ -78,6 +140,8 @@ export declare class SpeechScheduler implements AIScheduler {
     private retryTimer;
     private uncertainCounts;
     private decisions;
+    private readonly gameId;
+    private groundingStreak;
     constructor(ctx: SchedulerContext, options?: SpeechSchedulerOptions);
     onPhaseEntered(state: GameState): void;
     onBoardUpdated(state: GameState): void;
@@ -87,6 +151,8 @@ export declare class SpeechScheduler implements AIScheduler {
     stashForTest(): Stash | null;
     /** 供測試：單一 AI 連續資訊不足次數 */
     uncertainCountForTest(playerId: number): number;
+    /** 供測試：熔斷軌 grounding 連計 */
+    groundingStreakForTest(): number;
     private resetCycle;
     private effectiveCdMs;
     private restartCd;
@@ -102,6 +168,12 @@ export declare class SpeechScheduler implements AIScheduler {
     /** 生產失敗 → N 秒後重試；重試前不播出（無暫存）、不推進掛機計數（transition 只在發言成功時計數） */
     private scheduleRetry;
     private collectPreSpeeches;
+    /** 單候選 pre_speech（含狼拒收重試＋賬本＋兜底棄權；白天沿用舊流程） */
+    private runPreSpeechCandidate;
+    /** 賬本寫入（IO 失敗吞掉，不影響生產） */
+    private recordPrecedents;
+    /** expand 取文（狼黑名單重試：簡體源頭攔／seed/fab/eng 命中→前科再取，上限另計 2 次；日間單發舊流程） */
+    private fetchExpandText;
     /** 驗證狼襲擊目標合法性：存活、非自己、非狼同盟；不合法 → 視為棄票（狼放棄這票，不擋會議；夜晚結算另有過濾） */
     private validateWolfTarget;
     /** 決策更新：decided 覆蓋標的＋清空計數；資訊不足累計，達安全閥強制 decided:abstain */

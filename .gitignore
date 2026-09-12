@@ -24,3 +24,6 @@ dist-pkg/
 Thumbs.db
 # deepwork state
 .slim/deepwork/
+
+# 外部積累賬本（跨局前科數據，不進 git）
+precedents.jsonl

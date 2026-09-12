@@ -41,8 +41,13 @@ class ScriptedDispatcher implements LLMDispatcher {
     this.prespeechCalls++;
     const m = prompt.match(/你是 P(\d+)/);
     const id = m ? parseInt(m[1], 10) : 1;
-    const s = this.getState();
-    const target = lowestAliveExcept(s, id);
+    // 狼夜極簡 prompt 無存活名單，改讀「今晚可襲擊：」合法目標列（避開同盟/自己，免觸拒收）
+    const wolfTargets = prompt.match(/今晚可襲擊：([^。\n]+)/);
+    const pool = wolfTargets
+      ? [...wolfTargets[1].matchAll(/P(\d+)/g)].map((x) => parseInt(x[1], 10))
+      : aliveIds(this.getState()).filter((x) => x !== id);
+    const sorted = pool.filter((x) => x !== id).sort((a, b) => a - b);
+    const target = sorted[0] ?? id;
     // 草稿帶正規 decided flag → 收斂直進投票（flag 由 scheduler 剝離，不進白板）
     return `P${id}：「我比較在意 P${target} 的發言，想多聽聽他的說法。」\n[決定:投P${target}]`;
   }

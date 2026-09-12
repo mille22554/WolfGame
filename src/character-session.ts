@@ -371,82 +371,66 @@ function hasNoPublicBehaviorRecord(state: GameState): boolean {
   return state.discussionLog.length === 0 && state.wolfDiscussionLog.length === 0;
 }
 
-/** 濾掉人格壓力台詞區塊（僅狼 pre_speech；保留策略傾向等差異欄位） */
-function stripPressureBlock(personaPrompt: string): string {
-  if (!personaPrompt.includes('壓力台詞')) return personaPrompt;
-  const kept: string[] = [];
-  let skipping = false;
-  for (const line of personaPrompt.split('\n')) {
-    if (line.startsWith('## 壓力台詞')) {
-      skipping = true;
-      continue;
-    }
-    if (skipping && line.startsWith('## ')) skipping = false;
-    if (!skipping) kept.push(line);
-  }
-  return kept.join('\n');
+/** 狼規則塊（極簡五段之首；全文固定，合法目標動態列入） */
+function buildWolfRulesBlock(legalTargets: string): string {
+  return `15 人狼人殺。狼隊在夜晚討論，投票決定襲擊一名存活玩家；同盟不能被襲擊。\n今晚可襲擊：${legalTargets}。\n流程：每晚狼隊先行動 → 清晨公布死者（不公開身分）→ 白天討論 → 全員投票，最高票出局（不公開身分；平票無人出局）。\n勝利：人狼陣營在存活人狼數 ≥ 其餘存活玩家數時獲勝；村陣營需讓所有人狼出局。狂人查驗顯示為村人，人狼勝利時一併獲勝。\n職業：占卜師每夜查驗一人（村人／人狼）；靈能者只知道被投票出局者的身分；獵人每夜守護一人免於襲擊（第一天不可行動，不可守護自己），守了誰無從得知；共有者兩人互知身分；人狼互知同盟，以多數決決定襲擊目標（平手以先提交者為準）。\n鐵則：襲擊目標必須是存活且非人狼的玩家，禁止指定自己或同盟；所有死亡都不公開身分。\n發言：沒有公開資訊時，只能談你自己的狀態，不得描述其他玩家的行為、狀態或感覺。沒想法時可以隨便指一個目標，或等同伴先定再跟。`;
 }
 
-/** 從合法目標隨機取範例編號（每次重抽，不得寫死） */
-function pickWolfExampleId(legalIds: number[]): number {
-  if (legalIds.length === 0) return 1;
-  return legalIds[Math.floor(Math.random() * legalIds.length)];
+/** 狼身份行：編號＋存活同盟（無同盟時直說） */
+function buildWolfIdentityLine(state: GameState, playerId: number): string {
+  const allies = state.players
+    .filter((p) => p.role === Role.WEREWOLF && p.alive && p.id !== playerId)
+    .map((p) => `P${p.id}`);
+  if (allies.length === 0) return `你是 P${playerId}，人狼。今晚沒有存活同盟。`;
+  return `你是 P${playerId}，人狼。你的同盟是 ${allies.join('、')}。`;
 }
 
-/** 首夜正向選單任務段（版本A措辭照抄；旗標另立獨立段） */
-function buildWolfFirstNightTask(playerId: number, exampleId: number, legalTargets: string): string {
-  return `【任務】你是 P${playerId}，請寫一句 5-30 字的預發言草稿（越短越好，誠實優先）。第一晚沒有資訊，你的發言只能從以下三種形狀選一種：\n1. 隨機指名：「第一晚沒資訊，我隨便指一個，P${exampleId}吧。」\n2. 交棒：「你們先定，我跟票。」\n3. 跟票：「我沒想法，跟P${exampleId}，殺P${exampleId}。」（僅當同伴已指名目標時）\n指名不需要理由——你沒有觀察過任何人，無從給理由。禁止描述任何人的行為、狀態或感覺（如「有問題」「可疑」「不對勁」——你沒有依據，說了就是謊言）。全篇只能使用繁體中文，嚴禁任何簡體字（如杀/发/对/说）。今晚可襲擊的存活玩家只有：${legalTargets}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮）。守衛保護誰、誰是甚麼職業都是秘密，無從得知：不得聲稱知道，也不得以任何守衛相關猜測作為選擇或排除目標的理由。\n格式：P${playerId}：「你的草稿」＋旗標行（另起一行）`;
-}
-
-/** 首夜獨立旗標段（版本A2：與任務段分離、放 prompt 最後） */
-function buildWolfFirstNightFlag(): string {
-  return `【決策旗標】請在草稿結尾另起一行附加你的襲擊決策狀態（中控內部判讀用，不會公開）：指名目標（含隨機指名與跟票）→[決定:殺P編號]；交棒（你們先定）→[決定:資訊不足]。只可附加其一。`;
+/** 個性一句話：只取懷疑度／決策速度／投票模式三欄（其餘不載入） */
+function buildWolfPersonalityLine(personaPrompt: string): string {
+  const doubtHit = personaPrompt.match(/懷疑度：(\d+)\/10/);
+  const paceHit = personaPrompt.match(/決策速度：(\S+)/);
+  const voteHit = personaPrompt.match(/投票模式：(\S+)/);
+  const doubtNum = doubtHit ? Number(doubtHit[1]) : 5;
+  const doubtLevel = doubtNum >= 7 ? '高' : doubtNum <= 3 ? '低' : '中等';
+  const paceRaw = paceHit?.[1]?.trim() ?? '';
+  const pace = paceRaw === '快速' ? '快' : paceRaw === '緩慢' ? '慢' : '不急';
+  const voteMode = voteHit?.[1]?.trim() || '理性';
+  return `${voteMode}，懷疑度${doubtLevel}，拿主意${pace}。`;
 }
 
 /**
- * buildWolfPreSpeechPrompt（狼預發言，輕量）：
- * 私有知識 → 當晚狼討論最近 5 則 → 任務指令（含殺人決策旗標）
+ * buildWolfPreSpeechPrompt（狼預發言，極簡五段）：
+ * 規則 → 身份 → 個性 → 討論（＋後夜白天 feed）→ 輸出；首夜後夜共用骨架
  */
 export function buildWolfPreSpeechPrompt(state: GameState, playerId: number): string {
   const player = state.players.find((p) => p.id === playerId);
   if (!player) throw new Error(`找不到玩家 P${playerId}`);
-  // 草稿帶人格但濾掉壓力台詞：保留策略傾向等差異欄位
+  // 個性只取三欄：人格檔全文僅作解析源，不載入原文
   const personaId = player.personality || `p${playerId}`;
-  const rawPersona = readTextIfExists(path.join(getResourceRoot(), 'character', personaId, 'agents.md'));
-  const personaPrompt = stripPressureBlock(rawPersona);
-  const privateLines = privateKnowledgeLines(state, playerId);
+  const personaPrompt = readTextIfExists(path.join(getResourceRoot(), 'character', personaId, 'agents.md'));
   const isFirstNight = hasNoPublicBehaviorRecord(state);
   let recentEntries = state.wolfDiscussionLog.slice(-PRE_SPEECH_RECENT);
   let recent = renderDiscussionLines(recentEntries);
   let dayEntries: string[] = isFirstNight ? [] : todayDiscussionLines(state);
-  const legalTargets = wolfValidTargets(state, playerId);
-  // 首夜正向選單：範例編號每次從合法目標隨機取一個
-  const exampleId = pickWolfExampleId(wolfLegalIds(state, playerId));
-  const firstTask = buildWolfFirstNightTask(playerId, exampleId, legalTargets);
-  const laterReq = `直接指名一個具體目標（P編號）。理由只能引用【白天討論】或【今晚狼討論】裡實際出現的發言。`
-    + `若其他同伴都已指名同一目標、而你沒有更想殺的人選，直接跟進該目標並標已決定（跟隨共識本身就是決定）。`;
   const dayBlock = isFirstNight ? '' : `【白天討論】\n${dayEntries.length > 0 ? dayEntries.join('\n') : '（今日尚無白天發言）'}`;
-  const laterTask = `【任務】你是 P${playerId}，請寫一句 10-40 字的預發言草稿，與同伴討論今晚要襲擊誰、協調目標（不超過 40 字；短一點沒關係，誠實優先於湊字數）。用一般人的自然語氣寫，不要刻意扮演角色口吻、不要浮誇；人格設定只作為你的思考傾向參考（懷疑誰、敢不敢果斷），不要求模仿其說話風格。全篇只能使用繁體中文，嚴禁任何簡體字（如杀/发/对/说）。${laterReq}今晚可襲擊的存活玩家只有：${legalTargets}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮）。守衛保護誰、誰是甚麼職業都是秘密，無從得知：不得聲稱知道，也不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由。\n格式：P${playerId}：「你的草稿」`;
-  const laterFlag = `【決策旗標】草稿結尾另起一行附加你的襲擊決策狀態（中控內部判讀用，不會公開）：已決定襲擊某人（說出具體目標即算已決定，即使理由只是直覺）→[決定:殺P編號]；連提名誰都拿不定→[決定:資訊不足]。只可附加其一。`;
   const parts: string[] = [
-    personaPrompt ? `【人格設定】\n${personaPrompt}` : '',
-    `【你的角色資訊】\n${privateLines.join('\n')}`,
-    `【今晚狼討論】\n${recent.length > 0 ? recent.join('\n') : '（尚無發言）'}`,
+    `【遊戲規則】\n${buildWolfRulesBlock(wolfValidTargets(state, playerId))}`,
+    `【你的身份】\n${buildWolfIdentityLine(state, playerId)}`,
+    `【你的個性】\n${buildWolfPersonalityLine(personaPrompt)}`,
+    `【今晚的討論】\n${recent.length > 0 ? recent.join('\n') : '（尚無發言）'}`,
     dayBlock,
-    isFirstNight ? emptyBoardDeclaration() : nonEmptyBoardDeclaration(),
-    isFirstNight ? firstTask : laterTask,
-    isFirstNight ? buildWolfFirstNightFlag() : laterFlag,
+    `【輸出】一句 5-30 字的發言草稿；另起一行寫你的決定：[決定:殺P編號] 或 [決定:資訊不足]。`,
   ];
   let prompt = parts.filter((s) => s !== '').join('\n\n');
   // 超預算：先丟白天最舊，再丟今晚最舊（固定部分保留）
   while (prompt.length > PRE_SPEECH_BUDGET && (recentEntries.length > 1 || dayEntries.length > 1)) {
     if (dayEntries.length > 1) {
       dayEntries = dayEntries.slice(1);
-      parts[3] = `【白天討論】\n${dayEntries.join('\n')}`;
+      parts[4] = `【白天討論】\n${dayEntries.join('\n')}`;
     } else {
       recentEntries = recentEntries.slice(1);
       recent = renderDiscussionLines(recentEntries);
-      parts[2] = `【今晚狼討論】\n${recent.join('\n')}`;
+      parts[3] = `【今晚的討論】\n${recent.join('\n')}`;
     }
     prompt = parts.filter((s) => s !== '').join('\n\n');
   }

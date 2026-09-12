@@ -41,8 +41,8 @@ export declare function buildExpandPrompt(state: GameState, playerId: number, pr
  */
 export declare function summarizeWolfDiscussion(state: GameState, day: number): string;
 /**
- * buildWolfPreSpeechPrompt（狼預發言，輕量）：
- * 私有知識 → 當晚狼討論最近 5 則 → 任務指令（含殺人決策旗標）
+ * buildWolfPreSpeechPrompt（狼預發言，極簡五段）：
+ * 規則 → 身份 → 個性 → 討論（＋後夜白天 feed）→ 輸出；首夜後夜共用骨架
  */
 export declare function buildWolfPreSpeechPrompt(state: GameState, playerId: number): string;
 /**

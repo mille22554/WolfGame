@@ -169,11 +169,18 @@ try {
     if (c.kind === 'pre_speech' || c.kind === 'expand') perPlayer.set(c.playerId, c);
   }
   const decidedCalls = [...perPlayer.values()].filter((c) => c.decision.status === 'decided' && c.decision.target !== 'abstain');
+  // 中控側 decided 播出＋ready（raw 無旗標時救回／沿草稿所致，raw 口徑漏計；併入判斷防「未收斂」誤報）
+  const readyIds = final.wolfReady ?? [];
   if (final.phase === 'NIGHT_DISCUSSION_OPEN') {
-    if (decidedCalls.length === 0) {
+    const rawIds = decidedCalls.map((c) => c.kind === 'expand'
+      ? `P${c.playerId}→殺P${c.decision.target}（expand 原文，或已被拒，實際以播出為準）`
+      : `P${c.playerId}→殺P${c.decision.target}`);
+    const silentReady = readyIds.filter((id) => !decidedCalls.some((c) => c.playerId === id)).map((id) => `P${id}（中控 decided＋ready，raw 無旗標）`);
+    const all = [...rawIds, ...silentReady];
+    if (all.length === 0) {
       push(`- ⚠ 未收斂：${MAX_ROUNDS} 回合內三狼皆未決定目標（全回「資訊不足」），會議無法自動結束。`);
     } else {
-      push(`- 部分收斂：${decidedCalls.length} 匹狼已指名目標（${decidedCalls.map((c) => `P${c.playerId}→殺P${c.decision.target}`).join('、')}），但未全員一致，會議尚未結束。`);
+      push(`- 部分收斂：${all.length} 匹狼已指名目標（${all.join('、')}），但未全員一致，會議尚未結束。`);
     }
   }
   const leaked = calls.filter((c) => c.kind === 'expand' && c.prompt.includes('決定:資訊不足') && !c.prompt.includes('[決定:資訊不足]'));

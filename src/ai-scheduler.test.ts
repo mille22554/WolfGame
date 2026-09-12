@@ -4,8 +4,16 @@
  */
 import { test, mock, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import {
   SpeechScheduler, parseDecisionFlag, stripDecisionFlags, normalizeTraditional, MAX_UNCERTAIN_ROUNDS,
+  GROUNDING_VIOLATION_SEEDS, findGroundingViolation, buildViolationRetryNote, buildFormatRetryNote,
+  isEnglishHeavy, illegalWolfTarget, checkWolfDraft, buildLangRetryNote, buildTargetRetryNote,
+  findFirstNightFabrication, simplifiedRejection, findEnglishWord, checkExpandViolation,
+  readPrecedents, appendPrecedents, findCrossGamePrecedent, buildCrossGameNote,
+  PRECEDENTS_CAP, type PrecedentEntry,
 } from './ai-scheduler.js';
 import { createGameState, transition, getNightActors, stripSpeechPrefix } from './game-state.js';
 import { noveltyPenalty, bigramJaccard, pNumberOverlap } from './novelty.js';
@@ -198,15 +206,580 @@ test('flag 剝離：全域匹配（中置殘留亦清）；解析取最後一個
   assert.equal(stripDecisionFlags('A[決定:投P3]B\n[決定:棄票]C'), 'AB\nC');
   assert.deepEqual(parseDecisionFlag('前言[決定:投P3]結論[決定:棄票]'), { status: 'decided', target: 'abstain' });
   assert.ok(!stripDecisionFlags('發言\n[決定:投P3]').includes('[決定'));
-  // 無方括號裸 flag 整行亦剝離（模型漏寫括號時防白板污染）；句中提及保留
-  assert.equal(stripDecisionFlags('發言\n決定:資訊不足\n下一句'), '發言\n下一句');
-  assert.equal(stripDecisionFlags('發言\n決定：殺P5  \n下一句'), '發言\n下一句');
+  // 無方括號裸旗標行尾亦剝離（模型漏寫括號時防白板污染；行尾旗標前段文本保留）
+  assert.equal(stripDecisionFlags('發言\n決定:資訊不足\n下一句'), '發言\n\n下一句');
+  assert.equal(stripDecisionFlags('發言\n決定：殺P5  \n下一句'), '發言\n\n下一句');
+  assert.equal(stripDecisionFlags('草稿文本。決定:殺P5'), '草稿文本。');
   assert.equal(stripDecisionFlags('我決定投P3出去'), '我決定投P3出去');
 });
 
 test('flag 寬鬆解析：該殺／先殺亦認 decided（首夜常見說法）', () => {
   assert.deepEqual(parseDecisionFlag('我覺得今晚該殺P12'), { status: 'decided', target: 12 });
   assert.deepEqual(parseDecisionFlag('今晚先殺P5吧'), { status: 'decided', target: 5 });
+  // 冒號版缺口：決定:殺P（句中、非行尾）走寬鬆層亦認
+  assert.deepEqual(parseDecisionFlag('決定:殺P5，然後再看看'), { status: 'decided', target: 5 });
+});
+
+test('parser 行尾旗標：同行亦接受；白卷靠空文本下遊重試', () => {
+  assert.deepEqual(parseDecisionFlag('我隨便指一個，P5吧。\n決定:殺P5'), { status: 'decided', target: 5 });
+  assert.deepEqual(parseDecisionFlag('你們先定，我跟票。\n決定：資訊不足'), { status: 'uncertain' });
+  // 同行裸旗標（行尾版）：前段即文本，直接採信
+  assert.deepEqual(parseDecisionFlag('我認為P3可疑。決定:殺P3'), { status: 'decided', target: 3 });
+  assert.deepEqual(parseDecisionFlag('決定:殺P5，然後再看看'), { status: 'decided', target: 5 });
+  // 白卷（僅裸旗標）：解析或可命中，但剝離後空文本，下遊照舊重試
+  assert.equal(stripDecisionFlags('決定:殺P5'), '');
+  assert.deepEqual(parseDecisionFlag('決定:資訊不足'), { status: 'uncertain' });
+});
+
+test('黑名單：命中回傳種子、未命中回空字串', () => {
+  for (const seed of GROUNDING_VIOLATION_SEEDS) {
+    assert.equal(findGroundingViolation(`我覺得P3${seed}，先殺他`), seed);
+  }
+  assert.equal(findGroundingViolation('我沒想法，跟票。'), '');
+  assert.equal(findGroundingViolation('第一晚沒資訊，我隨便指一個，P5吧。'), '');
+  // 正規化後命中：说谎 → 說謊（谎→謊已補表）
+  assert.equal(findGroundingViolation(normalizeTraditional('我認為P3可能在说谎')), '說謊');
+});
+
+test('黑名單擴詞至 34：嫌疑／疑慮／異常／懷疑／觀察其行為／特別的表現／藏了一些事情／暗中觀察／沉默／舉動／不像村人／可能是村人／不太像村人／關鍵人物／行動比較獨立／都不說話／單薄／有點孤獨／藏有疑點／異動／孤僻命中', () => {
+  assert.equal(findGroundingViolation('P5和P12可能有嫌疑'), '嫌疑');
+  assert.equal(findGroundingViolation('他的行動引起我的疑慮'), '疑慮');
+  assert.equal(findGroundingViolation('他昨晚的行動好像有點異常'), '異常');
+  assert.equal(findGroundingViolation('我懷疑P3在藏陰謀'), '藏陰謀');
+  assert.equal(findGroundingViolation('我懷疑他是狼'), '懷疑');
+  assert.equal(findGroundingViolation('需進一步觀察其行為'), '觀察其行為');
+  assert.equal(findGroundingViolation('這個人沒有什麼特別的表現'), '特別的表現');
+  assert.equal(findGroundingViolation('他可能藏了一些事情'), '藏了一些事情');
+  assert.equal(findGroundingViolation('可能有人在暗中觀察'), '暗中觀察');
+  assert.equal(findGroundingViolation('他可能藏了一些什麼'), '藏了一些什麼');
+  assert.equal(findGroundingViolation('這個人一直表現得不太穩定'), '不太穩定');
+  assert.equal(findGroundingViolation('他有些奇怪'), '奇怪');
+  assert.equal(findGroundingViolation('我會觀察其他人的動向'), '動向');
+  assert.equal(findGroundingViolation('這個人在白天總是比較沉默'), '沉默');
+  assert.equal(findGroundingViolation('行動也沒有太大舉動'), '舉動');
+  assert.equal(findGroundingViolation('他看起來不像村人'), '不像村人');
+  assert.equal(findGroundingViolation('看看誰比較有可能是村人'), '可能是村人');
+  assert.equal(findGroundingViolation('他看起來不太像村人'), '不太像村人');
+  assert.equal(findGroundingViolation('他可能是關鍵人物'), '關鍵人物');
+  assert.equal(findGroundingViolation('他最近行動比較獨立'), '行動比較獨立');
+  assert.equal(findGroundingViolation('今天大家都不說話'), '都不說話');
+  assert.equal(findGroundingViolation('他看起來比較單薄'), '單薄');
+  assert.equal(findGroundingViolation('這個人看起來有點孤獨'), '有點孤獨');
+  assert.equal(findGroundingViolation('我很孤獨'), '');
+  assert.equal(findGroundingViolation('可能藏有疑點'), '藏有疑點');
+  assert.equal(findGroundingViolation('稍有異動'), '異動');
+  assert.equal(findGroundingViolation('這個人看起來比較孤僻'), '孤僻');
+  assert.equal(GROUNDING_VIOLATION_SEEDS.length, 34);
+});
+
+test('首夜捏造檢查：首夜攔、後夜放', () => {
+  assert.equal(findFirstNightFabrication('他昨晚的行動引起我的注意'), '昨晚的行動');
+  assert.equal(findFirstNightFabrication('他昨晚的行為很奇怪'), '昨晚的行為');
+  assert.equal(findFirstNightFabrication('沒見過他昨晚的發言'), '昨晚的發言');
+  assert.equal(findFirstNightFabrication('這個人在白天總是比較沉默'), '白天總是');
+  assert.equal(findFirstNightFabrication('他白天一直很安靜'), '白天一直');
+  assert.equal(findFirstNightFabrication('白天從來不發言'), '白天從來');
+  assert.equal(findFirstNightFabrication('明天白天投票再說'), '');
+  assert.equal(findFirstNightFabrication('我會在白天跟票'), '');
+  assert.equal(findFirstNightFabrication('我沒想法，跟票。'), '');
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  const wolf = s.players.find((p) => p.alive && p.role === Role.WEREWOLF)!;
+  const first = checkWolfDraft('他昨晚的行動值得注意。\n[決定:資訊不足]', s, wolf.id)!;
+  assert.equal(first.kind, 'grounding');
+  assert.equal(first.hit, '昨晚的行動');
+  s.wolfDiscussionLog.push({ playerId: wolf.id, text: '先殺P5，直覺', day: s.day });
+  assert.equal(checkWolfDraft('他昨晚的行動值得注意。\n[決定:資訊不足]', s, wolf.id), null);
+});
+
+test('簡體攔截：原文含簡體即拒（映射＋前科句）', () => {
+  assert.equal(normalizeTraditional('选择P5'), '選擇P5');
+  assert.equal(normalizeTraditional('我需要谨慎一点'), '我需要謹慎一點');
+  assert.ok(simplifiedRejection('我需要谨慎一点').includes('簡體字'));
+  assert.equal(simplifiedRejection('我需要謹慎一點'), '');
+  assert.equal(simplifiedRejection(''), '');
+});
+
+test('簡體映射補字：决动无体击优处围变', () => {
+  assert.equal(normalizeTraditional('决定'), '決定');
+  assert.equal(normalizeTraditional('行动'), '行動');
+  assert.equal(normalizeTraditional('无法'), '無法');
+  assert.equal(normalizeTraditional('具体'), '具體');
+  assert.equal(normalizeTraditional('出击'), '出擊');
+  assert.equal(normalizeTraditional('优先'), '優先');
+  assert.equal(normalizeTraditional('处理'), '處理');
+  assert.equal(normalizeTraditional('周围'), '周圍');
+  assert.equal(normalizeTraditional('变化'), '變化');
+});
+
+test('文本目標掃描：同盟／自指拒收、合法放行', () => {
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  const wolves = s.players.filter((p) => p.alive && p.role === Role.WEREWOLF);
+  const wolf = wolves[0];
+  const ally = wolves[1] ?? wolves[0];
+  const legal = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF)!.id;
+  const allyRej = checkWolfDraft(`今晚目標是P${ally.id}。\n[決定:資訊不足]`, s, wolf.id)!;
+  assert.equal(allyRej.kind, 'target');
+  assert.ok(allyRej.note.includes('也不可是同盟'));
+  const selfRej = checkWolfDraft(`襲擊P${wolf.id}吧。\n[決定:資訊不足]`, s, wolf.id)!;
+  assert.equal(selfRej.kind, 'target');
+  assert.ok(selfRej.hit.startsWith('自指P'));
+  assert.ok(selfRej.note.includes(`不能是你自己（P${wolf.id}）`));
+  assert.equal(checkWolfDraft(`今晚目標是P${legal}。\n[決定:資訊不足]`, s, wolf.id), null);
+});
+
+test('WOLF_TARGET_RE 新動詞三分支＋lastIndex 重置', () => {
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  const wolves = s.players.filter((p) => p.alive && p.role === Role.WEREWOLF);
+  const wolf = wolves[0];
+  const ally = wolves[1] ?? wolves[0];
+  const legal = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF)!.id;
+  const stalk = checkWolfDraft(`今晚盯住P${ally.id}吧。\n[決定:資訊不足]`, s, wolf.id)!;
+  assert.equal(stalk.kind, 'target');
+  const duel = checkWolfDraft(`對P${ally.id}下手吧。\n[決定:資訊不足]`, s, wolf.id)!;
+  assert.equal(duel.kind, 'target');
+  assert.equal(checkWolfDraft(`針對P${legal}吧。\n[決定:資訊不足]`, s, wolf.id), null);
+  const again = checkWolfDraft(`今晚盯住P${ally.id}吧。\n[決定:資訊不足]`, s, wolf.id)!;
+  assert.equal(again.kind, 'target');
+  assert.equal(again.hit, stalk.hit);
+  // 盯著族（盯著／盯上／盯緊）＋對P動手同走 group
+  const gaze = checkWolfDraft(`先盯著P${ally.id}吧。\n[決定:資訊不足]`, s, wolf.id)!;
+  assert.equal(gaze.kind, 'target');
+  const gazeUp = checkWolfDraft(`先盯上P${ally.id}吧。\n[決定:資訊不足]`, s, wolf.id)!;
+  assert.equal(gazeUp.kind, 'target');
+  const gazeTight = checkWolfDraft(`盯緊P${ally.id}。\n[決定:資訊不足]`, s, wolf.id)!;
+  assert.equal(gazeTight.kind, 'target');
+  const duel2 = checkWolfDraft(`對P${ally.id}動手吧。\n[決定:資訊不足]`, s, wolf.id)!;
+  assert.equal(duel2.kind, 'target');
+  // 殺掉分支（13 動詞；「殺掉P編號」同走 group1）
+  const killOff = checkWolfDraft(`今晚的目標是殺掉P${ally.id}。\n[決定:資訊不足]`, s, wolf.id)!;
+  assert.equal(killOff.kind, 'target');
+  assert.equal(checkWolfDraft(`今晚的目標是殺掉P${legal}。\n[決定:資訊不足]`, s, wolf.id), null);
+});
+
+test('跨局 t 排序：不依文件序，取 t 最新', () => {
+  const file = tmpLedger();
+  const row = (t: number, who: string, kind: string, hit: string, text: string): PrecedentEntry => ({
+    t, game: 'g', meeting: 'wolf', phase: 'first_pre', kind, hit, who, text, fixed: false,
+  });
+  appendPrecedents([
+    row(300, 'P9/yuko', 'format', '缺旗標', '新句'),
+    row(100, 'P1/rin', 'grounding', '有問題', '舊句rin'),
+    row(200, 'P2/ren', 'lang', '英文超標', '舊句ren'),
+  ], file);
+  assert.equal(findCrossGamePrecedent('wolf', 'first_pre', 'yuko', file)?.text, '新句');
+  assert.equal(findCrossGamePrecedent('wolf', 'first_pre', 'rin', file)?.text, '舊句rin');
+  assert.equal(findCrossGamePrecedent('wolf', 'first_pre', 'nobody', file)?.text, '新句');
+});
+
+test('expand 兜底：兩次違規→回傳空→退回草稿文本＋沿草稿決策', async () => {
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
+  const file = tmpLedger();
+  const llm = new MockLLM((prompt) => {
+    if (prompt.includes('【裁判任務】')) return judgeBySlotDesc(prompt);
+    if (prompt.includes('【你的預發言草稿】')) return '草稿沒問題，但P5有問題。';
+    const m = prompt.match(/今晚可襲擊：([^。\n]+)/);
+    const ids = m ? [...m[1].matchAll(/P(\d+)/g)].map((x) => parseInt(x[1], 10)) : [5];
+    return `先殺P${ids[0]}。\n[決定:殺P${ids[0]}]`;
+  });
+  const { ctx } = makeCtx(s, llm);
+  const sch = new SpeechScheduler(ctx, { cdMs: 60000, ledgerFile: file });
+  try {
+    sch.onPhaseEntered(s);
+    await flushN(5);
+    assert.equal(llm.calls.filter((c) => c.kind === 'expand').length, 2, 'expand 違規應重試一次');
+    const stash = sch.stashForTest();
+    assert.ok(stash, '兜底應有暫存（草稿退回）');
+    assert.ok(/^先殺P\d+。$/.test(stash!.text), `應退回草稿文本，實得：${stash!.text}`);
+    assert.equal(stash!.decision.status, 'decided');
+    const rows = readPrecedents(file);
+    assert.equal(rows.length, 2);
+    assert.ok(rows.every((r) => r.phase === 'expand' && r.fixed === false));
+    assert.ok(!rows.some((r) => r.text === stash!.text), '兜底退回的乾淨草稿不應再記逃逸');
+  } finally {
+    sch.stop();
+  }
+});
+
+test('簡體前科迴圈：原文簡體→lang 拒收重試→改過 fixed=true', async () => {
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
+  const file = tmpLedger();
+  let first = true;
+  const llm = new MockLLM((prompt) => {
+    if (prompt.includes('【裁判任務】')) return judgeBySlotDesc(prompt);
+    if (prompt.includes('【你的預發言草稿】')) return 'P0：「沿用。」';
+    if (first) { first = false; return '我需要谨慎一點。\n[決定:資訊不足]'; }
+    return '我沒想法。\n[決定:資訊不足]';
+  });
+  const { ctx } = makeCtx(s, llm);
+  const sch = new SpeechScheduler(ctx, { cdMs: 60000, ledgerFile: file });
+  try {
+    sch.onPhaseEntered(s);
+    await flushN(5);
+    const retries = llm.calls.filter((c) => c.kind === 'pre_speech' && c.prompt.includes('被退回的草稿'));
+    assert.equal(retries.length, 1);
+    assert.ok(retries[0].prompt.includes('不得使用英文或簡體字'), '簡體版前科照抄');
+    const rows = readPrecedents(file);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].kind, 'lang');
+    assert.equal(rows[0].hit, '簡體混入');
+    assert.equal(rows[0].fixed, true);
+  } finally {
+    sch.stop();
+  }
+});
+
+test('英文表命中：整詞才拒', () => {
+  assert.equal(findEnglishWord('隨便指一個 anyone 吧'), 'anyone');
+  assert.equal(findEnglishWord('Maybe 先殺P5'), 'maybe');
+  assert.equal(findEnglishWord('保護同盟 members'), 'members');
+  assert.equal(findEnglishWord('say no more'), 'no');
+  assert.equal(findEnglishWord('behaviour 有些奇怪'), 'behaviour');
+  assert.equal(findEnglishWord('behavior 有些奇怪'), 'behavior');
+  assert.equal(findEnglishWord('tonight 的目標'), 'tonight');
+  assert.equal(findEnglishWord('我覺得P5不錯'), '');
+  assert.equal(findEnglishWord('沒有英文'), '');
+  assert.equal(findEnglishWord('大家安靜點'), '');
+});
+
+test('expand 三層：seed／fab／eng 命中與放行', () => {
+  assert.deepEqual(checkExpandViolation('P5有問題，先殺他', true), { kind: 'grounding', hit: '有問題' });
+  assert.deepEqual(checkExpandViolation('他昨晚的行動值得注意', true), { kind: 'grounding', hit: '昨晚的行動' });
+  assert.deepEqual(checkExpandViolation('maybe 去殺P5', true), { kind: 'lang', hit: '英文短詞(maybe)' });
+  assert.equal(checkExpandViolation('我覺得今晚殺P5吧', true), null);
+  assert.equal(checkExpandViolation('他昨晚的行動值得注意', false), null);
+});
+
+test('熔斷 a 漂移：expand 文本異數→整份退回草稿', async () => {
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
+  const file = tmpLedger();
+  const legalIds = (prompt: string): number[] => {
+    const m = prompt.match(/今晚可襲擊：([^。\n]+)/) ?? prompt.match(/【今晚可襲擊的存活玩家】([^（\n]+)/);
+    return m ? [...m[1].matchAll(/P(\d+)/g)].map((x) => parseInt(x[1], 10)) : [];
+  };
+  const llm = new MockLLM((prompt) => {
+    if (prompt.includes('【裁判任務】')) return judgeBySlotDesc(prompt);
+    if (prompt.includes('【你的預發言草稿】')) {
+      const ids = legalIds(prompt);
+      return `我覺得今晚殺P${ids[1] ?? ids[0]}吧。`;
+    }
+    const ids = legalIds(prompt);
+    const t = ids[0] ?? 5;
+    return `先殺P${t}。\n[決定:殺P${t}]`;
+  });
+  const { ctx } = makeCtx(s, llm);
+  const sch = new SpeechScheduler(ctx, { cdMs: 60000, ledgerFile: file });
+  try {
+    sch.onPhaseEntered(s);
+    await flushN(5);
+    const stash = sch.stashForTest();
+    assert.ok(stash, '應有暫存');
+    assert.ok(/^先殺P\d+。$/.test(stash!.text), `漂移應退回草稿文本，實得：${stash!.text}`);
+    assert.equal(stash!.decision.status, 'decided');
+    assert.ok(sch.flagStats().decided > 0, '決策沿草稿保留 decided');
+  } finally {
+    sch.stop();
+  }
+});
+
+test('熔斷 a 一致：expand 文本旗標皆合草稿→採信 expand', async () => {
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
+  const file = tmpLedger();
+  const llm = new MockLLM((prompt) => {
+    if (prompt.includes('【裁判任務】')) return judgeBySlotDesc(prompt);
+    if (prompt.includes('【你的預發言草稿】')) {
+      const d = prompt.match(/殺P(\d+)/);
+      const t = d ? d[1] : '5';
+      return `我覺得今晚殺P${t}吧。\n[決定:殺P${t}]`;
+    }
+    const m = prompt.match(/今晚可襲擊：([^。\n]+)/);
+    const ids = m ? [...m[1].matchAll(/P(\d+)/g)].map((x) => parseInt(x[1], 10)) : [5];
+    return `先殺P${ids[0]}。\n[決定:殺P${ids[0]}]`;
+  });
+  const { ctx } = makeCtx(s, llm);
+  const sch = new SpeechScheduler(ctx, { cdMs: 60000, ledgerFile: file });
+  try {
+    sch.onPhaseEntered(s);
+    await flushN(5);
+    const stash = sch.stashForTest();
+    assert.ok(stash, '應有暫存');
+    assert.ok(stash!.text.includes('我覺得今晚'), `一致應採信 expand 文本，實得：${stash!.text}`);
+    assert.equal(stash!.decision.status, 'decided');
+  } finally {
+    sch.stop();
+  }
+});
+
+test('文旗救回：expand 無旗標但文本提名合法→轉 decided', async () => {
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
+  const file = tmpLedger();
+  const llm = new MockLLM((prompt) => {
+    if (prompt.includes('【裁判任務】')) return judgeBySlotDesc(prompt);
+    if (prompt.includes('【你的預發言草稿】')) {
+      const m = prompt.match(/【今晚可襲擊的存活玩家】([^（\n]+)/);
+      const ids = m ? [...m[1].matchAll(/P(\d+)/g)].map((x) => parseInt(x[1], 10)) : [5];
+      return `我覺得殺P${ids[0]}吧。`;
+    }
+    return '沒想法。\n[決定:資訊不足]';
+  });
+  const { ctx } = makeCtx(s, llm);
+  const sch = new SpeechScheduler(ctx, { cdMs: 60000, ledgerFile: file });
+  try {
+    sch.onPhaseEntered(s);
+    await flushN(5);
+    const stash = sch.stashForTest();
+    assert.ok(stash, '應有暫存');
+    const hit = /殺P(\d+)/.exec(stash!.text);
+    assert.ok(hit, `播出文本應含提名，實得：${stash!.text}`);
+    assert.deepEqual(stash!.decision, { status: 'decided', target: parseInt(hit![1], 10) });
+    assert.equal(readPrecedents(file).length, 0, '全程乾淨不應記賬');
+  } finally {
+    sch.stop();
+  }
+});
+
+test('文旗救回：文本提名同盟→validate 擋回 abstain', async () => {
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
+  const file = tmpLedger();
+  const llm = new MockLLM((prompt) => {
+    if (prompt.includes('【裁判任務】')) return judgeBySlotDesc(prompt);
+    if (prompt.includes('【你的預發言草稿】')) {
+      const m = prompt.match(/你的人狼同盟：(P\d+)/);
+      const ally = m ? m[1].slice(1) : '1';
+      return `我覺得殺P${ally}吧。`;
+    }
+    return '沒想法。\n[決定:資訊不足]';
+  });
+  const { ctx } = makeCtx(s, llm);
+  const sch = new SpeechScheduler(ctx, { cdMs: 60000, ledgerFile: file });
+  try {
+    sch.onPhaseEntered(s);
+    await flushN(5);
+    const stash = sch.stashForTest();
+    assert.ok(stash, '應有暫存（abstain 亦播出）');
+    assert.deepEqual(stash!.decision, { status: 'decided', target: 'abstain' });
+  } finally {
+    sch.stop();
+  }
+});
+
+test('expand 英文：eng 重試→改過 fixed=true（kind=lang）', async () => {
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
+  const file = tmpLedger();
+  let expandFirst = true;
+  const llm = new MockLLM((prompt) => {
+    if (prompt.includes('【裁判任務】')) return judgeBySlotDesc(prompt);
+    if (prompt.includes('【你的預發言草稿】')) {
+      if (expandFirst) { expandFirst = false; return '我覺得maybe今晚殺P5。'; }
+      return '我覺得今晚殺P5。';
+    }
+    const m = prompt.match(/今晚可襲擊：([^。\n]+)/);
+    const ids = m ? [...m[1].matchAll(/P(\d+)/g)].map((x) => parseInt(x[1], 10)) : [5];
+    return `指一個，P${ids[0]}吧。\n[決定:殺P${ids[0]}]`;
+  });
+  const { ctx } = makeCtx(s, llm);
+  const sch = new SpeechScheduler(ctx, { cdMs: 60000, ledgerFile: file });
+  try {
+    sch.onPhaseEntered(s);
+    await flushN(5);
+    assert.equal(llm.calls.filter((c) => c.kind === 'expand').length, 2, 'eng 應觸發 expand 重試');
+    const rows = readPrecedents(file);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].phase, 'expand');
+    assert.equal(rows[0].kind, 'lang');
+    assert.equal(rows[0].hit, '英文短詞(maybe)');
+    assert.equal(rows[0].fixed, true);
+  } finally {
+    sch.stop();
+  }
+});
+
+test('expand 簡體：源頭攔截重試→改過 fixed=true（kind=lang）', async () => {
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
+  const file = tmpLedger();
+  let expandFirst = true;
+  const pickTarget = (prompt: string): number => {
+    const m = prompt.match(/今晚可襲擊：([^。\n]+)/);
+    const ids = m ? [...m[1].matchAll(/P(\d+)/g)].map((x) => parseInt(x[1], 10)) : [5];
+    return ids[0];
+  };
+  const llm = new MockLLM((prompt) => {
+    if (prompt.includes('【裁判任務】')) return judgeBySlotDesc(prompt);
+    if (prompt.includes('【你的預發言草稿】')) {
+      const t = pickTarget(prompt);
+      if (expandFirst) { expandFirst = false; return `我觉得今晚杀P${t}。`; }
+      return `我覺得今晚殺P${t}。`;
+    }
+    const t = pickTarget(prompt);
+    return `先殺P${t}。\n[決定:殺P${t}]`;
+  });
+  const { ctx } = makeCtx(s, llm);
+  const sch = new SpeechScheduler(ctx, { cdMs: 60000, ledgerFile: file });
+  try {
+    sch.onPhaseEntered(s);
+    await flushN(5);
+    const expands = llm.calls.filter((c) => c.kind === 'expand');
+    assert.equal(expands.length, 2, '簡體應觸發 expand 源頭重試');
+    assert.ok(expands[1].prompt.includes('不得使用英文或簡體字'), '簡體版前科照抄');
+    const stash = sch.stashForTest();
+    assert.ok(stash, '改過後應有暫存');
+    assert.equal(simplifiedRejection(stash!.text), '', '播出文本不應殘留簡體');
+    const rows = readPrecedents(file);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].phase, 'expand');
+    assert.equal(rows[0].kind, 'lang');
+    assert.equal(rows[0].hit, '簡體混入');
+    assert.equal(rows[0].fixed, true);
+  } finally {
+    sch.stop();
+  }
+});
+
+test('loop2 門檻：賬本含乾淨 6 筆 loop1 真實＋回填（按 game 過濾，容測試污染）', () => {
+  const rows = readPrecedents().filter((r) => r.game === 'gmtxnnias');
+  assert.equal(rows.length, 6);
+  assert.ok(rows.every((r) => r.fixed === false), '回填修正後全為 false');
+  const hits = rows.map((r) => r.hit);
+  for (const h of ['缺旗標', '可疑', '嫌疑', '疑慮', '異常']) assert.ok(hits.includes(h));
+  assert.ok(rows.some((r) => r.phase === 'expand'), '應含 expand 筆');
+  assert.ok(rows.some((r) => r.who === 'P7/tatuya'), '應含 P7 回填筆');
+});
+
+test('前科回寫兩版：違規版（首夜／後夜情境）＋格式版存在性', () => {
+  const first = buildViolationRetryNote('我覺得P3有問題', '有問題', true);
+  assert.ok(first.includes('被退回的草稿：「我覺得P3有問題」'), '應帶被退原文');
+  assert.ok(first.includes('含「有問題」'), '應帶命中詞');
+  assert.ok(first.includes('今晚沒有任何公開發言，你不可能知道任何人的事'), '首夜情境說明照抄');
+  assert.ok(first.includes('不得重複被退句中的任何指控，也不得以換皮說法（如疑慮、嫌疑、異常、昨晚的行動等）重述同一指控。只談你自己的狀態：沒想法、隨便指一個目標、跟票、或交棒。'), '違規版強化指令照抄');
+  const later = buildViolationRetryNote('P3沒表達觀點', '沒表達', false);
+  assert.ok(later.includes('只能引用討論中實際出現的發言'), '後夜情境說明照抄');
+  const format = buildFormatRetryNote('隨便指一個，P5吧。');
+  assert.ok(format.includes('被退回的草稿：「隨便指一個，P5吧。」'), '格式版應帶被退原文');
+  assert.ok(format.includes('[決定:殺P編號]') && format.includes('[決定:資訊不足]'), '格式版旗標二選一照抄');
+  assert.ok(format.includes('方括號不可少'), '格式版括號要求照抄');
+  assert.ok(format.includes('正確範例：我支持攻擊P3。\n[決定:殺P3]'), '格式版正例照抄');
+  assert.ok(format.includes('文本與旗標一起重寫。'), '格式版重寫指令照抄');
+  assert.ok(!format.includes('另：決定旗標'), '格式版已有正例，不另加提醒');
+  assert.ok(buildLangRetryNote('vote P5').includes('另：決定旗標必須另起一行'), '英文版附格式提醒');
+  assert.ok(!buildLangRetryNote('vote P5').includes('只談你自己的狀態'), '預設不帶自狀態指引（expand 用）');
+  assert.ok(buildLangRetryNote('vote P5', true).includes('只談你自己的狀態：沒想法、隨便指一個目標、跟票、或交棒。'), 'pre 版帶自狀態指引');
+  assert.ok(buildTargetRetryNote('殺P1', 1).includes('另：決定旗標必須另起一行'), '自指版附格式提醒');
+  assert.ok(!first.includes('另：決定旗標'), '違規版不動（觀察對照）');
+  for (const note of [first, later, format]) {
+    assert.ok(!note.includes('上一句'), '不得用相對指代');
+  }
+});
+
+// ---------- 外部積累賬本 ----------
+
+/** 測試用賬本檔（系統暫存下獨立目錄，不污染 repo） */
+function tmpLedger(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-ledger-'));
+  return path.join(dir, 'precedents.jsonl');
+}
+
+test('賬本：寫讀往返＋上限 500 砍最舊＋壞行容錯', () => {
+  const file = tmpLedger();
+  assert.deepEqual(readPrecedents(file), []);
+  const mk = (i: number): PrecedentEntry => ({
+    t: i, game: 'g1', meeting: 'wolf', phase: 'first_pre', kind: 'grounding',
+    hit: '有問題', who: `P${i}/rin`, text: `第${i}句`, fixed: i % 2 === 0,
+  });
+  appendPrecedents([mk(1), mk(2)], file);
+  const two = readPrecedents(file);
+  assert.equal(two.length, 2);
+  assert.equal(two[0].text, '第1句');
+  assert.equal(two[1].fixed, true);
+  const many = Array.from({ length: PRECEDENTS_CAP + 1 }, (_, i) => mk(100 + i));
+  appendPrecedents(many, file);
+  const all = readPrecedents(file);
+  assert.equal(all.length, PRECEDENTS_CAP);
+  assert.equal(all[0].text, '第101句');
+  fs.appendFileSync(file, 'not json\n', 'utf-8');
+  assert.equal(readPrecedents(file).length, PRECEDENTS_CAP);
+});
+
+test('跨局讀取：同 persona 最新優先 → 同 phase 任一 → 無則 null；跨局句存在性', () => {
+  const file = tmpLedger();
+  const row = (t: number, phase: string, who: string, kind: string, hit: string, text: string): PrecedentEntry => ({
+    t, game: 'g0', meeting: 'wolf', phase, kind, hit, who, text, fixed: false,
+  });
+  appendPrecedents([
+    row(1, 'first_pre', 'P1/rin', 'grounding', '有問題', '舊句rin'),
+    row(2, 'first_pre', 'P2/ren', 'format', '缺旗標', '舊句ren'),
+    row(3, 'later_pre', 'P3/rin', 'lang', '英文超標', 'old words'),
+  ], file);
+  assert.equal(findCrossGamePrecedent('wolf', 'first_pre', 'rin', file)?.text, '舊句rin');
+  assert.equal(findCrossGamePrecedent('wolf', 'first_pre', 'yuko', file)?.text, '舊句ren');
+  assert.equal(findCrossGamePrecedent('wolf', 'expand', 'rin', file), null);
+  assert.equal(findCrossGamePrecedent('day', 'first_pre', 'rin', file), null);
+  const note = buildCrossGameNote(findCrossGamePrecedent('wolf', 'first_pre', 'rin', file)!);
+  assert.equal(note, '過去同情境曾因含「有問題」的無源指控被退，不要重蹈（也不得以換皮說法重述同一指控）。');
+  assert.ok(!note.includes('舊句rin'), '改版不再引前句全文');
+  const fmtNote = buildCrossGameNote(findCrossGamePrecedent('wolf', 'first_pre', 'yuko', file)!);
+  assert.equal(fmtNote, '過去同情境曾有format問題（缺旗標）被退，不要重蹈。');
+  const targetNote = buildCrossGameNote({ t: 9, game: 'g0', meeting: 'wolf', phase: 'first_pre', kind: 'target', hit: '同盟P1', who: 'P2/ren', text: '殺P1吧', fixed: false });
+  assert.equal(targetNote, '過去同情境曾因點名同盟為襲擊目標被退，不要重蹈（也不得以「同盟P編號」等字樣在發言中提及同盟）。');
+});
+
+test('三檢測：lang 邊界／target 三類／checkWolfDraft 命中放行', () => {
+  assert.equal(isEnglishHeavy('tonight we should vote on P5'), true);
+  assert.equal(isEnglishHeavy('我覺得P5不錯'), false);
+  assert.equal(isEnglishHeavy('AB中文'), false);
+  assert.equal(isEnglishHeavy('ABC中文'), true);
+  assert.equal(isEnglishHeavy(''), false);
+  assert.ok(buildLangRetryNote('vote P5').includes('必須使用繁體中文，不得使用英文或簡體字。重寫。'));
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  const wolves = s.players.filter((p) => p.alive && p.role === Role.WEREWOLF);
+  const wolf = wolves[0];
+  const ally = wolves[1] ?? wolves[0];
+  const legal = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF)!.id;
+  assert.equal(illegalWolfTarget(s, wolf.id, wolf.id), `自指P${wolf.id}`);
+  assert.equal(illegalWolfTarget(s, wolf.id, ally.id), wolf.id === ally.id ? `自指P${wolf.id}` : `同盟P${ally.id}`);
+  assert.equal(illegalWolfTarget(s, wolf.id, 999), '非法P999');
+  assert.equal(illegalWolfTarget(s, wolf.id, legal), '');
+  const langRej = checkWolfDraft('tonight we vote P5\n決定:殺P5', s, wolf.id)!;
+  assert.equal(langRej.kind, 'lang');
+  assert.ok(langRej.note.includes('只談你自己的狀態'), 'pre lang 拒帶自狀態指引');
+  const selfRej = checkWolfDraft(`先殺P${wolf.id}吧。\n[決定:殺P${wolf.id}]`, s, wolf.id)!;
+  assert.equal(selfRej.kind, 'target');
+  assert.ok(selfRej.note.includes(`不能是你自己（P${wolf.id}）`));
+  assert.ok(buildTargetRetryNote('殺P1', wolf.id).includes('也不可是同盟'));
+  const fmtRej = checkWolfDraft('我沒想法，再看看。', s, wolf.id)!;
+  assert.equal(fmtRej.kind, 'format');
+  assert.equal(checkWolfDraft(`隨便指一個，P${legal}吧。\n[決定:殺P${legal}]`, s, wolf.id), null);
+  assert.equal(checkWolfDraft('我沒想法。\n[決定:資訊不足]', s, wolf.id), null);
 });
 
 test('簡轉繁正規化：遊戲高頻簡體字映射＋冪等', () => {
@@ -216,6 +789,7 @@ test('簡轉繁正規化：遊戲高頻簡體字映射＋冪等', () => {
   assert.equal(normalizeTraditional('我懷疑他，有证据吗？派他去臥底保护我方'), '我懷疑他，有證據嗎？派他去臥底保護我方');
   assert.equal(normalizeTraditional('已經是繁體：殺P5、對話'), '已經是繁體：殺P5、對話');
   assert.equal(normalizeTraditional(''), '');
+  assert.equal(normalizeTraditional('我認為P3可能在说谎'), '我認為P3可能在說謊');
   // 只收無歧義字：只/面/里等多音多義字不動
   assert.equal(normalizeTraditional('只有裡面有只貓'), '只有裡面有只貓');
 });
@@ -1006,13 +1580,14 @@ test('狼模式候選：僅存活 AI 狼（不含 seer/guard/真人）', async (
   }
 });
 
-test('狼模式：決策目標是同盟/自己 → 視為棄票（不計 decided、不擋會議）', async () => {
+test('狼模式：決策目標是同盟/自己 → 拒收重試，耗盡判資訊不足（不計 decided、不播出）', async () => {
   const s = createGameState(9);
   for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
   transition(s, { type: 'START_GAME' });
   assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
   const wolves = s.players.filter((p) => p.alive && p.role === Role.WEREWOLF);
   const allyId = wolves[0].id;
+  const file = tmpLedger();
   const llm = new MockLLM((prompt) => {
     if (prompt.includes('【裁判任務】')) return judgeBySlotDesc(prompt);
     if (prompt.includes('【你的預發言草稿】')) return 'P0：「展開。」';
@@ -1020,13 +1595,81 @@ test('狼模式：決策目標是同盟/自己 → 視為棄票（不計 decided
     const id = m ? m[1] : '1';
     return `P${id}：「建議襲擊P${allyId}。」\n[決定:殺P${allyId}]`;
   });
-  const { ctx } = makeCtx(s, llm);
-  const sch = new SpeechScheduler(ctx, { cdMs: 60000 });
+  const { ctx, events } = makeCtx(s, llm);
+  const sch = new SpeechScheduler(ctx, { cdMs: 60000, ledgerFile: file });
   try {
     sch.onPhaseEntered(s);
-    await flushN(3);
+    await flushN(5);
     assert.equal(sch.flagStats().decided, 0, '同盟目標不應計為 decided');
-    assert.equal(sch.flagStats().abstain, wolves.length, '同盟目標應視為棄票');
+    assert.equal(sch.flagStats().uncertain, wolves.length, '耗盡應兜底資訊不足');
+    assert.ok(!events.some((e) => e.type === 'AI_WOLF_SPEECH_DONE'), '拒收耗盡不應播出');
+    const retries = llm.calls.filter((c) => c.kind === 'pre_speech' && c.prompt.includes('被退回的草稿'));
+    assert.ok(retries.length > 0, '應帶自指版前科重試');
+    assert.ok(retries[0].prompt.includes('也不可是同盟'), '自指版前科照抄');
+    const rows = readPrecedents(file);
+    assert.ok(rows.length > 0 && rows.every((r) => r.kind === 'target' && r.fixed === false), '賬本記 target 且 fixed=false');
+  } finally {
+    sch.stop();
+  }
+});
+
+test('前科迴圈：違規→重試帶前科→改過自新記 fixed=true', async () => {
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
+  const file = tmpLedger();
+  let first = true;
+  const llm = new MockLLM((prompt) => {
+    if (prompt.includes('【裁判任務】')) return judgeBySlotDesc(prompt);
+    if (prompt.includes('【你的預發言草稿】')) return 'P0：「沿用。」';
+    if (first) { first = false; return '我覺得P5有問題，先殺他。'; }
+    return '我沒想法。\n[決定:資訊不足]';
+  });
+  const { ctx } = makeCtx(s, llm);
+  const sch = new SpeechScheduler(ctx, { cdMs: 60000, ledgerFile: file });
+  try {
+    sch.onPhaseEntered(s);
+    await flushN(5);
+    const retries = llm.calls.filter((c) => c.kind === 'pre_speech' && c.prompt.includes('被退回的草稿'));
+    assert.equal(retries.length, 1);
+    assert.ok(retries[0].prompt.includes('含「有問題」'), '違規版前科帶命中詞');
+    const rows = readPrecedents(file);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].kind, 'grounding');
+    assert.equal(rows[0].fixed, true);
+    assert.ok(rows[0].who.startsWith('P'));
+  } finally {
+    sch.stop();
+  }
+});
+
+test('兜底：2 attempt 仍犯→棄權（資訊不足、不播出）＋賬本 fixed=false', async () => {
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
+  const wolves = s.players.filter((p) => p.alive && p.role === Role.WEREWOLF);
+  const file = tmpLedger();
+  const llm = new MockLLM((prompt) => {
+    if (prompt.includes('【裁判任務】')) return judgeBySlotDesc(prompt);
+    if (prompt.includes('【你的預發言草稿】')) return 'P0：「沿用。」';
+    return '我覺得P5有問題，先殺他。';
+  });
+  const { ctx, events } = makeCtx(s, llm);
+  const sch = new SpeechScheduler(ctx, { cdMs: 60000, ledgerFile: file });
+  try {
+    sch.onPhaseEntered(s);
+    await flushN(5);
+    const pres = llm.calls.filter((c) => c.kind === 'pre_speech');
+    assert.equal(pres.length, wolves.length * 2, '每候選皆用滿 2 attempt');
+    assert.ok(pres.some((c) => c.prompt.includes('被退回的草稿')), '第二輪帶前科');
+    assert.equal(sch.stashForTest(), null, '全棄權則無暫存');
+    assert.ok(!events.some((e) => e.type === 'AI_WOLF_SPEECH_DONE'), '不播錯');
+    assert.deepEqual(sch.flagStats(), { decided: 0, abstain: 0, uncertain: wolves.length });
+    const rows = readPrecedents(file);
+    assert.equal(rows.length, wolves.length * 2);
+    assert.ok(rows.every((r) => r.fixed === false && r.kind === 'grounding'));
   } finally {
     sch.stop();
   }
@@ -1043,7 +1686,7 @@ test('狼模式：expand 決策優先 — pre_speech 資訊不足但 expand 殺P
     if (prompt.includes('【你的預發言草稿】')) return `P0：「我決定襲擊P${target}。」\n[決定:殺P${target}]`;
     const m = prompt.match(/你是 P(\d+)/);
     const id = m ? m[1] : '1';
-    return `P${id}：「資訊還不足，我無法決定，想再聽聽大家的說法。」`;
+    return `P${id}：「資訊還不足，我無法決定，想再聽聽大家的說法。」\n[決定:資訊不足]`;
   });
   const { ctx, events } = makeCtx(s, llm);
   const sch = new SpeechScheduler(ctx, { cdMs: 60000 });
