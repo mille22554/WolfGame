@@ -37,7 +37,7 @@ export declare function normalizeTraditional(text: string): string;
 export declare function stripDecisionFlags(text: string): string;
 /** 兩層解析：先正規，失敗走寬鬆關鍵字；都抓不到 → uncertain（計入安全閥） */
 export declare function parseDecisionFlag(text: string): AIDecision;
-/** grounding 黑名單種子：命中草稿文本即判違規（新制單次：拒收＋記賬＋棄權，無重試；哲學：首夜保護優先，後夜誤傷接受） */
+/** grounding 黑名單種子：命中草稿文本即判違規（新制單次：拒收＋記賬＋棄權，無重試；哲學：首夜保護優先，後夜誤傷接受；受害者視角一律違規，loop10 self-state 例外廢止） */
 export declare const GROUNDING_VIOLATION_SEEDS: string[];
 /** 黑名單命中：回傳命中的種子，未命中回傳空字串（比對已正規化文本） */
 export declare function findGroundingViolation(text: string): string;
@@ -59,7 +59,7 @@ export declare function buildLangRetryNote(prevDraft: string, selfState?: boolea
 export declare function buildTargetRetryNote(prevDraft: string, playerId: number): string;
 /** 非法狼目標：自己／同盟／不存在或死亡 → 回傳 hit 說明，通過回傳空字串 */
 export declare function illegalWolfTarget(st: GameState, playerId: number, targetId: number): string;
-/** 空討論虛構：無任何討論紀錄卻聲稱大家已討論／說過，即判虛構（後夜有紀錄不攔，由呼叫方首夜 gated） */
+/** 空討論虛構：無任何討論紀錄卻聲稱大家／眾人已討論／說過，即判虛構（後夜有紀錄不攔，由呼叫方首夜 gated） */
 export declare function findEmptyDiscussionFabrication(text: string): string;
 /** 首夜捏造檢查：昨晚系／白天持續行為／空討論虛構即判虛構（後夜有公開紀錄不攔） */
 export declare function findFirstNightFabrication(text: string): string;

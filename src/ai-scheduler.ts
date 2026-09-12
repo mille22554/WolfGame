@@ -50,7 +50,7 @@ export const MAX_UNCERTAIN_ROUNDS = 50;
 export const DECISION_FLAG_RE = /\[決定[:：](投P\s*\d+|殺P\s*\d+|棄票|資訊不足)\]/g;
 const DECISION_TARGET_RE = /(?:投|殺)P\s*(\d+)/;
 /** 狼目標正則（文本掃描＋漂移＋救回共用；group1 動詞+P、group2 對P下手/動手） */
-const WOLF_TARGET_RE = /(?:殺|殺掉|攻擊|襲擊|針對|目標是|鎖定|盯住|盯著|盯上|盯緊|優先處理|先處理|活捉)\s*P\s*(\d+)|對\s*P\s*(\d+)\s*(?:下手|動手)/g;
+const WOLF_TARGET_RE = /(?:殺|殺掉|攻擊|襲擊|針對|目標是|鎖定|盯住|盯著|盯上|盯緊|優先處理|先處理|活捉|該殺|要殺|kill)\s*P\s*(\d+)|對\s*P\s*(\d+)\s*(?:下手|動手)/g;
 
 /** 寬鬆層：決策語境的投 Pn（動詞＋編號才認，避免討論提及誤判） */
 const LOOSE_VOTE_RES: RegExp[] = [
@@ -92,7 +92,7 @@ const SIMP_TO_TRAD: Record<string, string> = {
   劲: '勁', 怀: '懷', 证: '證', 确: '確', 据: '據', 辩: '辯', 护: '護',
   态: '態', 伪: '偽', 装: '裝', 潜: '潛', 吗: '嗎', 谎: '謊', 谨: '謹', 择: '擇',
   决: '決', 动: '動', 无: '無', 体: '體', 击: '擊', 别: '別', 着: '著', 优: '優', 处: '處', 围: '圍', 变: '變',
-  员: '員', 倾: '傾', 论: '論', 没: '沒', 异: '異', 应: '應', 们: '們', 线: '線', 袭: '襲', 讨: '討',
+  员: '員', 倾: '傾', 论: '論', 没: '沒', 异: '異', 应: '應', 们: '們', 线: '線', 袭: '襲', 讨: '討', 随: '隨',
 };
 const SIMP_RE = new RegExp(`[${Object.keys(SIMP_TO_TRAD).join('')}]`, 'g');
 
@@ -149,13 +149,15 @@ export function parseDecisionFlag(text: string): AIDecision {
   return { status: 'uncertain' };
 }
 
-/** grounding 黑名單種子：命中草稿文本即判違規（新制單次：拒收＋記賬＋棄權，無重試；哲學：首夜保護優先，後夜誤傷接受） */
+/** grounding 黑名單種子：命中草稿文本即判違規（新制單次：拒收＋記賬＋棄權，無重試；哲學：首夜保護優先，後夜誤傷接受；受害者視角一律違規，loop10 self-state 例外廢止） */
 export const GROUNDING_VIOLATION_SEEDS = [
   '說謊', '藏陰謀', '有問題', '可疑', '不對勁', '怪怪的', '沒表達', '容易被忽略', '氣氛緊張',
   '嫌疑', '疑慮', '異常', '懷疑', '觀察其行為', '特別的表現', '藏了一些事情', '暗中觀察',
   '藏了一些什麼', '不太穩定', '奇怪', '動向', '沉默', '舉動', '不像村人', '可能是村人',
   '不太像村人', '關鍵人物', '行動比較獨立', '都不說話', '單薄', '有點孤獨', '藏有疑點', '異動', '孤僻',
   '提防襲擊', '被襲擊', '小心防守', '守護', '保護同盟', '反應', '有點特別', '沒人說話', '藏有陰謀',
+  '提防', '成為攻擊目標', '成為狼人目標', '過於活躍', '關鍵位置',
+  '不太自然', '不自然', '不太對勁', '防備', '被當成目標', '躲躲藏藏',
 ];
 
 /** 黑名單命中：回傳命中的種子，未命中回傳空字串（比對已正規化文本） */
@@ -217,12 +219,12 @@ export function illegalWolfTarget(st: GameState, playerId: number, targetId: num
   return '';
 }
 
-/** 空討論虛構：無任何討論紀錄卻聲稱大家已討論／說過，即判虛構（後夜有紀錄不攔，由呼叫方首夜 gated） */
-export function findEmptyDiscussionFabrication(text: string): string { const m = /大家(討論|說|提|講|發言).{0,6}(了|過|一下|一些)/.exec(text); return m ? m[0] : ''; }
+/** 空討論虛構：無任何討論紀錄卻聲稱大家／眾人已討論／說過，即判虛構（後夜有紀錄不攔，由呼叫方首夜 gated） */
+export function findEmptyDiscussionFabrication(text: string): string { const m = /(大家|眾人)(討論|說|提|講|發言).{0,6}(了|過|一下|一些)/.exec(text); return m ? m[0] : ''; }
 
 /** 首夜捏造檢查：昨晚系／白天持續行為／空討論虛構即判虛構（後夜有公開紀錄不攔） */
 export function findFirstNightFabrication(text: string): string {
-  const m = /昨晚的(行動|行為|表現|發言)|白天(總是|一直|比較|從來|向來|也沒|似乎|好像|看起來|討論時|發言時|討論|發言)/.exec(text);
+  const m = /昨晚的(行動|行為|表現|發言)|白天(總是|一直|比較|從來|向來|也沒|似乎|好像|看起來|討論時|發言時|討論|發言)|夜間(行動時|行動|活動時|活動|總|總是|一直|從來|向來)/.exec(text);
   if (m) return m[0];
   return findEmptyDiscussionFabrication(text);
 }
@@ -233,8 +235,8 @@ export function simplifiedRejection(rawRaw: string): string {
   return buildLangRetryNote(rawRaw);
 }
 
-/** 英文短詞：ASCII 字母占比啟發式漏網的英文殘留，整詞命中即拒 */
-const ENGLISH_WORDS = ['anyone', 'maybe', 'members', 'everyone', 'someone', 'ok', 'yes', 'no', 'please', 'thanks', 'targeting', 'behaviour', 'behavior', 'tonight'];
+/** 英文短詞：ASCII 字母占比啟發式漏網的英文殘留，整詞命中即拒（target/kill 置尾，targeting 優先） */
+const ENGLISH_WORDS = ['anyone', 'maybe', 'members', 'everyone', 'someone', 'ok', 'yes', 'no', 'please', 'thanks', 'targeting', 'behaviour', 'behavior', 'tonight', 'target', 'kill'];
 
 /** 英文短詞檢查：整詞命中回傳該詞，未命中回傳空字串 */
 export function findEnglishWord(text: string): string {

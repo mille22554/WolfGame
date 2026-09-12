@@ -216,7 +216,7 @@ test('黑名單：命中回傳種子、未命中回空字串', () => {
     // 正規化後命中：说谎 → 說謊（谎→謊已補表）
     assert.equal(findGroundingViolation(normalizeTraditional('我認為P3可能在说谎')), '說謊');
 });
-test('黑名單擴詞至 43：嫌疑／疑慮／異常／懷疑／觀察其行為／特別的表現／藏了一些事情／暗中觀察／沉默／舉動／不像村人／可能是村人／不太像村人／關鍵人物／行動比較獨立／都不說話／單薄／有點孤獨／藏有疑點／異動／孤僻命中', () => {
+test('黑名單擴詞至 54：嫌疑／疑慮／異常／懷疑／觀察其行為／特別的表現／藏了一些事情／暗中觀察／沉默／舉動／不像村人／可能是村人／不太像村人／關鍵人物／行動比較獨立／都不說話／單薄／有點孤獨／藏有疑點／異動／孤僻命中', () => {
     assert.equal(findGroundingViolation('P5和P12可能有嫌疑'), '嫌疑');
     assert.equal(findGroundingViolation('他的行動引起我的疑慮'), '疑慮');
     assert.equal(findGroundingViolation('他昨晚的行動好像有點異常'), '異常');
@@ -244,7 +244,7 @@ test('黑名單擴詞至 43：嫌疑／疑慮／異常／懷疑／觀察其行�
     assert.equal(findGroundingViolation('可能藏有疑點'), '藏有疑點');
     assert.equal(findGroundingViolation('稍有異動'), '異動');
     assert.equal(findGroundingViolation('這個人看起來比較孤僻'), '孤僻');
-    assert.equal(GROUNDING_VIOLATION_SEEDS.length, 43);
+    assert.equal(GROUNDING_VIOLATION_SEEDS.length, 54);
 });
 test('角色錯亂 5 種子（新制）：提防襲擊／被襲擊／小心防守／守護／保護同盟命中；暴露系不收', () => {
     assert.equal(findGroundingViolation('今晚需提防襲擊，隨便指個目標'), '提防襲擊');
@@ -256,6 +256,17 @@ test('角色錯亂 5 種子（新制）：提防襲擊／被襲擊／小心防�
     assert.equal(findGroundingViolation('這個人看起來有點特別，可能是目標'), '有點特別');
     assert.equal(findGroundingViolation('今天沒人說話，先觀望'), '沒人說話');
     assert.equal(findGroundingViolation('他可能藏有陰謀，要小心'), '藏有陰謀');
+    assert.equal(findGroundingViolation('今晚要小心提防，避免成為攻擊目標'), '提防');
+    assert.equal(findGroundingViolation('避免成為攻擊目標，謹慎行事'), '成為攻擊目標');
+    assert.equal(findGroundingViolation('避免成為狼人目標，低調一點'), '成為狼人目標');
+    assert.equal(findGroundingViolation('他表現有些過於活躍，可能是目標'), '過於活躍');
+    assert.equal(findGroundingViolation('他處於關鍵位置，易成目標'), '關鍵位置');
+    assert.equal(findGroundingViolation('這人一直表現得不太自然，感覺怪'), '不太自然');
+    assert.equal(findGroundingViolation('這人不自然，少接觸為妙'), '不自然');
+    assert.equal(findGroundingViolation('感覺他不太對勁，先觀望'), '不太對勁');
+    assert.equal(findGroundingViolation('今晚要小心防備，避免出事'), '防備');
+    assert.equal(findGroundingViolation('避免被當成目標，低調一點'), '被當成目標');
+    assert.equal(findGroundingViolation('他在夜間行動時躲躲藏藏的'), '躲躲藏藏');
     assert.equal(findGroundingViolation('避免暴露身份，小心行事'), '');
     assert.equal(findGroundingViolation('避免暴露同盟，謹慎選擇'), '');
     assert.equal(findGroundingViolation('我們需掩蓋身份，選擇安全目標'), '');
@@ -275,6 +286,9 @@ test('首夜捏造檢查：首夜攔、後夜放', () => {
     assert.equal(findFirstNightFabrication('白天發言時要小心'), '白天發言時');
     assert.equal(findFirstNightFabrication('白天討論再決定'), '白天討論');
     assert.equal(findFirstNightFabrication('白天發言要有依據'), '白天發言');
+    assert.equal(findFirstNightFabrication('夜間行動時總是躲藏'), '夜間行動時');
+    assert.equal(findFirstNightFabrication('他夜間活動頻繁'), '夜間活動');
+    assert.equal(findFirstNightFabrication('夜間總是不安分'), '夜間總');
     assert.equal(findFirstNightFabrication('明天白天投票再說'), '');
     assert.equal(findFirstNightFabrication('我會在白天跟票'), '');
     assert.equal(findFirstNightFabrication('我沒想法，跟票。'), '');
@@ -293,6 +307,8 @@ test('虛構已討論：空局聲稱大家已討論即判虛構，後夜有紀�
     assert.equal(findEmptyDiscussionFabrication('大家讨论了一下可能的袭击目标'), '', '簡體先正規化，原文直測不命中');
     assert.equal(findEmptyDiscussionFabrication('大家討論了一下可能的襲擊目標'), '大家討論了一下');
     assert.equal(findEmptyDiscussionFabrication('大家說過要先殺P5'), '大家說過');
+    assert.equal(findEmptyDiscussionFabrication('眾人討論了一下目標'), '眾人討論了一下');
+    assert.equal(findEmptyDiscussionFabrication('今晚眾人對襲擊目標的討論尚無明確方向'), '', '討論尚無非聲稱，不攔');
     assert.equal(findEmptyDiscussionFabrication('我比較在意大家的發言'), '');
     assert.equal(findEmptyDiscussionFabrication('大家意見一致，先觀望'), '');
     assert.equal(findEmptyDiscussionFabrication('大家還是再討論一下目標'), '');
@@ -395,6 +411,7 @@ test('簡體映射補字：决动无体击优处围变员倾论没异应们线�
     assert.equal(normalizeTraditional('行为异常'), '行為異常');
     assert.equal(normalizeTraditional('我们观察反应'), '我們觀察反應');
     assert.equal(normalizeTraditional('线索指向袭击'), '線索指向襲擊');
+    assert.equal(normalizeTraditional('随便猜一下'), '隨便猜一下');
 });
 test('文本目標掃描：同盟／自指拒收、合法放行', () => {
     const s = createGameState(9);
@@ -440,17 +457,28 @@ test('WOLF_TARGET_RE 新動詞三分支＋lastIndex 重置', () => {
     assert.equal(gazeTight.kind, 'target');
     const duel2 = checkWolfDraft(`對P${ally.id}動手吧。\n[決定:資訊不足]`, s, wolf.id);
     assert.equal(duel2.kind, 'target');
-    // 殺掉分支（14 動詞；「殺掉P編號」同走 group1）
+    // 殺掉分支（17 動詞；「殺掉P編號」同走 group1）
     const killOff = checkWolfDraft(`今晚的目標是殺掉P${ally.id}。\n[決定:資訊不足]`, s, wolf.id);
     assert.equal(killOff.kind, 'target');
     assert.equal(checkWolfDraft(`今晚的目標是殺掉P${legal}。\n[決定:資訊不足]`, s, wolf.id), null);
-    // 活捉分支（14 動詞；修「目標是活捉P編號」自指逃逸）
+    // 活捉分支（17 動詞；修「目標是活捉P編號」自指逃逸）
     const seizeAlly = checkWolfDraft(`今晚的目標是活捉P${ally.id}。\n[決定:資訊不足]`, s, wolf.id);
     assert.equal(seizeAlly.kind, 'target');
     const seizeSelf = checkWolfDraft(`今晚的目標是活捉P${wolf.id}。\n[決定:資訊不足]`, s, wolf.id);
     assert.equal(seizeSelf.kind, 'target');
     assert.ok(seizeSelf.hit.startsWith('自指P'));
     assert.equal(checkWolfDraft(`今晚的目標是活捉P${legal}。\n[決定:資訊不足]`, s, wolf.id), null);
+    // 該殺／要殺分支（16 動詞；補 rescue 文本提名缺口）
+    const shouldKill = checkWolfDraft(`我們該殺P${ally.id}吧。\n[決定:資訊不足]`, s, wolf.id);
+    assert.equal(shouldKill.kind, 'target');
+    const wantKill = checkWolfDraft(`今晚要殺P${ally.id}。\n[決定:資訊不足]`, s, wolf.id);
+    assert.equal(wantKill.kind, 'target');
+    assert.equal(checkWolfDraft(`我們該殺P${legal}吧。\n[決定:資訊不足]`, s, wolf.id), null);
+    // kill 分支（17 動詞；英文先判 lang，動詞分支為縱深——單測鎖定順序）
+    const killEn = checkWolfDraft(`今晚 kill P${ally.id} 吧。\n[決定:資訊不足]`, s, wolf.id);
+    assert.equal(killEn.kind, 'lang');
+    assert.equal(killEn.hit, '英文短詞(kill)');
+    assert.equal(checkWolfDraft(`今晚 kill P${legal} 吧。\n[決定:資訊不足]`, s, wolf.id).kind, 'lang');
 });
 test('跨局 t 排序：不依文件序，取 t 最新', () => {
     const file = tmpLedger();
@@ -561,6 +589,10 @@ test('英文表命中：整詞才拒', () => {
     assert.equal(findEnglishWord('behaviour 有些奇怪'), 'behaviour');
     assert.equal(findEnglishWord('behavior 有些奇怪'), 'behavior');
     assert.equal(findEnglishWord('tonight 的目標'), 'tonight');
+    assert.equal(findEnglishWord('今晚需謹慎選 Target，避免冤假錯情'), 'target');
+    assert.equal(findEnglishWord('targeting P12 先盯著'), 'targeting');
+    assert.equal(findEnglishWord('今晚 kill P15 吧'), 'kill');
+    assert.equal(findEnglishWord('目標是P5'), '');
     assert.equal(findEnglishWord('我覺得P5不錯'), '');
     assert.equal(findEnglishWord('沒有英文'), '');
     assert.equal(findEnglishWord('大家安靜點'), '');
