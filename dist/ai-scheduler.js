@@ -73,7 +73,7 @@ const SIMP_TO_TRAD = {
     劲: '勁', 怀: '懷', 证: '證', 确: '確', 据: '據', 辩: '辯', 护: '護',
     态: '態', 伪: '偽', 装: '裝', 潜: '潛', 吗: '嗎', 谎: '謊', 谨: '謹', 择: '擇',
     决: '決', 动: '動', 无: '無', 体: '體', 击: '擊', 别: '別', 着: '著', 优: '優', 处: '處', 围: '圍', 变: '變',
-    员: '員', 倾: '傾',
+    员: '員', 倾: '傾', 论: '論', 没: '沒', 异: '異', 应: '應', 们: '們', 线: '線', 袭: '襲', 讨: '討',
 };
 const SIMP_RE = new RegExp(`[${Object.keys(SIMP_TO_TRAD).join('')}]`, 'g');
 export function normalizeTraditional(text) {
@@ -142,7 +142,7 @@ export const GROUNDING_VIOLATION_SEEDS = [
     '嫌疑', '疑慮', '異常', '懷疑', '觀察其行為', '特別的表現', '藏了一些事情', '暗中觀察',
     '藏了一些什麼', '不太穩定', '奇怪', '動向', '沉默', '舉動', '不像村人', '可能是村人',
     '不太像村人', '關鍵人物', '行動比較獨立', '都不說話', '單薄', '有點孤獨', '藏有疑點', '異動', '孤僻',
-    '提防襲擊', '被襲擊', '小心防守', '守護', '保護同盟', '反應',
+    '提防襲擊', '被襲擊', '小心防守', '守護', '保護同盟', '反應', '有點特別', '沒人說話', '藏有陰謀',
 ];
 /** 黑名單命中：回傳命中的種子，未命中回傳空字串（比對已正規化文本） */
 export function findGroundingViolation(text) {
@@ -198,8 +198,15 @@ export function illegalWolfTarget(st, playerId, targetId) {
         return `同盟P${targetId}`;
     return '';
 }
-/** 首夜捏造檢查：首夜出現昨晚的行動／行為／表現／發言、或白天持續行為描述即判虛構（後夜有公開紀錄不攔） */
-export function findFirstNightFabrication(text) { const m = /昨晚的(行動|行為|表現|發言)|白天(總是|一直|比較|從來|向來|也沒|似乎|好像|看起來)/.exec(text); return m ? m[0] : ''; }
+/** 空討論虛構：無任何討論紀錄卻聲稱大家已討論／說過，即判虛構（後夜有紀錄不攔，由呼叫方首夜 gated） */
+export function findEmptyDiscussionFabrication(text) { const m = /大家(討論|說|提|講|發言).{0,6}(了|過|一下|一些)/.exec(text); return m ? m[0] : ''; }
+/** 首夜捏造檢查：昨晚系／白天持續行為／空討論虛構即判虛構（後夜有公開紀錄不攔） */
+export function findFirstNightFabrication(text) {
+    const m = /昨晚的(行動|行為|表現|發言)|白天(總是|一直|比較|從來|向來|也沒|似乎|好像|看起來|討論時|發言時|討論|發言)/.exec(text);
+    if (m)
+        return m[0];
+    return findEmptyDiscussionFabrication(text);
+}
 /** 簡體攔截：原文與正規化後不同即拒（回傳前科 note，空字串表通過） */
 export function simplifiedRejection(rawRaw) {
     if (rawRaw === normalizeTraditional(rawRaw))
@@ -216,57 +223,80 @@ export function findEnglishWord(text) {
     }
     return '';
 }
-/** 狼草稿拒收檢查：回傳前科回寫（含 kind/hit 供賬本），null 表通過 */
-export function checkWolfDraft(raw, st, pid) {
-    const firstNight = st.wolfDiscussionLog.length === 0 && st.discussionLog.length === 0;
+/** 狼草稿全量收集：一稿命中 N 種全收（順序：英文→種子→fab→目標→格式；同 kind+hit 去重），供單次多筆記賬 */
+export function collectWolfViolations(raw, st, pid) {
+    const out = [];
+    const push = (kind, hit) => {
+        if (hit && !out.some((e) => e.kind === kind && e.hit === hit))
+            out.push({ kind, hit });
+    };
     if (isEnglishHeavy(raw))
-        return { kind: 'lang', hit: '英文超標', note: buildLangRetryNote(raw, true) };
+        push('lang', '英文超標');
     const engWord = findEnglishWord(raw);
     if (engWord)
-        return { kind: 'lang', hit: `英文短詞(${engWord})`, note: buildLangRetryNote(raw, true) };
+        push('lang', `英文短詞(${engWord})`);
     const hitSeed = findGroundingViolation(raw);
-    if (hitSeed) {
-        return { kind: 'grounding', hit: hitSeed, note: buildViolationRetryNote(raw, hitSeed, firstNight) };
-    }
+    if (hitSeed)
+        push('grounding', hitSeed);
+    const firstNight = st.wolfDiscussionLog.length === 0 && st.discussionLog.length === 0;
     if (firstNight) {
         const fab = findFirstNightFabrication(raw);
         if (fab)
-            return { kind: 'grounding', hit: fab, note: buildViolationRetryNote(raw, fab, true) };
+            push('grounding', fab);
     }
     // 文本層目標掃描：文本點名即驗合法性（旗標之外第二道門；否定修飾低機率誤傷可接受）
     WOLF_TARGET_RE.lastIndex = 0;
     const textTarget = WOLF_TARGET_RE.exec(raw);
     if (textTarget) {
-        const mentioned = parseInt(textTarget[1] ?? textTarget[2], 10);
-        const badMention = illegalWolfTarget(st, pid, mentioned);
+        const badMention = illegalWolfTarget(st, pid, parseInt(textTarget[1] ?? textTarget[2], 10));
         if (badMention)
-            return { kind: 'target', hit: badMention, note: buildTargetRetryNote(raw, pid) };
+            push('target', badMention);
     }
     const parsed = parseDecisionFlag(raw);
     if (parsed.status === 'decided' && parsed.target !== 'abstain') {
         const badTarget = illegalWolfTarget(st, pid, parsed.target);
         if (badTarget)
-            return { kind: 'target', hit: badTarget, note: buildTargetRetryNote(raw, pid) };
+            push('target', badTarget);
     }
-    if (parsed.status === 'uncertain' && !hasExplicitFlag(raw)) {
-        return { kind: 'format', hit: '缺旗標', note: buildFormatRetryNote(raw) };
-    }
-    return null;
+    if (parsed.status === 'uncertain' && !hasExplicitFlag(raw))
+        push('format', '缺旗標');
+    return out;
 }
-/** expand 違規檢查：seed→fab（僅首夜）→eng 三層；回傳 kind/hit，null 表通過 */
-export function checkExpandViolation(raw, firstNight) {
+/** 狼草稿拒收檢查：回傳首個命中（含 kind/hit 供賬本），null 表通過（處置順序與全量一致） */
+export function checkWolfDraft(raw, st, pid) {
+    const firstNight = st.wolfDiscussionLog.length === 0 && st.discussionLog.length === 0;
+    const all = collectWolfViolations(raw, st, pid);
+    if (all.length === 0)
+        return null;
+    const first = all[0];
+    if (first.kind === 'lang')
+        return { kind: 'lang', hit: first.hit, note: buildLangRetryNote(raw, true) };
+    if (first.kind === 'grounding')
+        return { kind: 'grounding', hit: first.hit, note: buildViolationRetryNote(raw, first.hit, firstNight) };
+    if (first.kind === 'target')
+        return { kind: 'target', hit: first.hit, note: buildTargetRetryNote(raw, pid) };
+    return { kind: 'format', hit: first.hit, note: buildFormatRetryNote(raw) };
+}
+/** expand 全量收集：seed→fab（僅首夜）→eng 命中全收，供單次多筆記賬 */
+export function collectExpandViolations(raw, firstNight) {
+    const out = [];
     const seed = findGroundingViolation(raw);
     if (seed)
-        return { kind: 'grounding', hit: seed };
+        out.push({ kind: 'grounding', hit: seed });
     if (firstNight) {
         const fab = findFirstNightFabrication(raw);
-        if (fab)
-            return { kind: 'grounding', hit: fab };
+        if (fab && fab !== seed)
+            out.push({ kind: 'grounding', hit: fab });
     }
     const eng = findEnglishWord(raw);
     if (eng)
-        return { kind: 'lang', hit: `英文短詞(${eng})` };
-    return null;
+        out.push({ kind: 'lang', hit: `英文短詞(${eng})` });
+    return out;
+}
+/** expand 違規檢查：seed→fab（僅首夜）→eng 三層；回傳 kind/hit，null 表通過（首個命中） */
+export function checkExpandViolation(raw, firstNight) {
+    const all = collectExpandViolations(raw, firstNight);
+    return all.length > 0 ? all[0] : null;
 }
 /** 賬本上限行數（舊制殘留，新制無上限不使用；保留匯出免壞外部呼叫） */
 export const PRECEDENTS_CAP = 500;
@@ -770,20 +800,21 @@ export class SpeechScheduler {
         }
         if (!rawRaw)
             return this.abstainPre(pid, isWolf);
-        if (isWolf && simplifiedRejection(rawRaw)) {
-            this.groundingStreak = 0;
-            this.recordPrecedents([{ meeting: 'wolf', phase, kind: 'lang', hit: '簡體混入', who, text: rawRaw }], false);
-            return this.abstainPre(pid, isWolf);
-        }
-        const raw = normalizeTraditional(rawRaw);
         if (isWolf) {
-            const rej = checkWolfDraft(raw, st, pid);
-            if (rej) {
+            // 全量記賬：一稿命中 N 種記 N 筆（同 text；處置仍一次棄權）
+            const pending = [];
+            const raw = normalizeTraditional(rawRaw);
+            if (simplifiedRejection(rawRaw))
+                pending.push({ kind: 'lang', hit: '簡體混入', text: raw });
+            for (const v of collectWolfViolations(raw, st, pid))
+                pending.push({ kind: v.kind, hit: v.hit, text: raw });
+            if (pending.length > 0) {
                 this.groundingStreak = 0; // 熔斷看逃逸連計：拒收即清零
-                this.recordPrecedents([{ meeting: 'wolf', phase, kind: rej.kind, hit: rej.hit, who, text: raw }], false);
+                this.recordPrecedents(pending.map((p) => ({ meeting: 'wolf', phase, kind: p.kind, hit: p.hit, who, text: p.text })), false);
                 return this.abstainPre(pid, isWolf);
             }
         }
+        const raw = normalizeTraditional(rawRaw);
         const parsed = parseDecisionFlag(raw);
         const decision = this.updateDecision(pid, isWolf ? this.validateWolfTarget(st, pid, parsed) : parsed);
         const text = stripDecisionFlags(raw);
@@ -807,32 +838,29 @@ export class SpeechScheduler {
         }
         catch { /* 賬本 best-effort */ }
     }
-    /** expand 取文（新制單次：違規記賬 fixed=false 後回空退草稿；日間單發舊流程） */
+    /** expand 取文（新制單次：違規全量記賬 fixed=false 後回空退草稿；日間單發舊流程） */
     async fetchExpandText(expandPrompt, isWolfMode, pid, st) {
         const firstNight = st.wolfDiscussionLog.length === 0 && st.discussionLog.length === 0;
         const rawRaw = (await this.ctx.llm.generate(expandPrompt, {
             temperature: this.options.expandTemp,
             maxTokens: 100,
         })).trim();
-        if (isWolfMode && simplifiedRejection(rawRaw)) {
-            const persona = st.players.find((p) => p.id === pid)?.personality ?? `p${pid}`;
-            this.recordPrecedents([{
-                    meeting: 'wolf', phase: 'expand', kind: 'lang', hit: '簡體混入',
-                    who: `P${pid}/${persona}`, text: rawRaw,
-                }], false);
-            return ''; // 單次違規 → 空字串（上游退回草稿，不播錯）
-        }
         const raw = normalizeTraditional(rawRaw);
         if (!isWolfMode)
             return raw;
-        const v = checkExpandViolation(raw, firstNight);
-        if (!v)
+        // 全量記賬：一稿命中 N 種記 N 筆（處置仍一次退草稿）
+        const pending = [];
+        if (simplifiedRejection(rawRaw))
+            pending.push({ kind: 'lang', hit: '簡體混入', text: raw });
+        for (const v of collectExpandViolations(raw, firstNight))
+            pending.push({ kind: v.kind, hit: v.hit, text: raw });
+        if (pending.length === 0)
             return raw;
         const persona = st.players.find((p) => p.id === pid)?.personality ?? `p${pid}`;
-        this.recordPrecedents([{
-                meeting: 'wolf', phase: 'expand', kind: v.kind, hit: v.hit,
-                who: `P${pid}/${persona}`, text: raw,
-            }], false);
+        this.recordPrecedents(pending.map((p) => ({
+            meeting: 'wolf', phase: 'expand', kind: p.kind, hit: p.hit,
+            who: `P${pid}/${persona}`, text: p.text,
+        })), false);
         return ''; // 單次違規 → 空字串（上游退回草稿，不播錯）
     }
     /** 驗證狼襲擊目標合法性：存活、非自己、非狼同盟；不合法 → 視為棄票（狼放棄這票，不擋會議；夜晚結算另有過濾） */

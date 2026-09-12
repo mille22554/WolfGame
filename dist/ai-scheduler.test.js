@@ -6,7 +6,7 @@ import { test, mock, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { SpeechScheduler, parseDecisionFlag, stripDecisionFlags, normalizeTraditional, MAX_UNCERTAIN_ROUNDS, GROUNDING_VIOLATION_SEEDS, findGroundingViolation, buildViolationRetryNote, buildFormatRetryNote, isEnglishHeavy, illegalWolfTarget, checkWolfDraft, buildLangRetryNote, buildTargetRetryNote, findFirstNightFabrication, simplifiedRejection, findEnglishWord, checkExpandViolation, readPrecedents, appendPrecedents, findCrossGamePrecedent, buildCrossGameNote, findRecentPrecedentsByKind, PRECEDENTS_CAP, } from './ai-scheduler.js';
+import { SpeechScheduler, parseDecisionFlag, stripDecisionFlags, normalizeTraditional, MAX_UNCERTAIN_ROUNDS, GROUNDING_VIOLATION_SEEDS, findGroundingViolation, buildViolationRetryNote, buildFormatRetryNote, isEnglishHeavy, illegalWolfTarget, checkWolfDraft, buildLangRetryNote, buildTargetRetryNote, findFirstNightFabrication, simplifiedRejection, findEnglishWord, checkExpandViolation, collectWolfViolations, collectExpandViolations, findEmptyDiscussionFabrication, readPrecedents, appendPrecedents, findCrossGamePrecedent, buildCrossGameNote, findRecentPrecedentsByKind, PRECEDENTS_CAP, } from './ai-scheduler.js';
 import { createGameState, transition, getNightActors, stripSpeechPrefix } from './game-state.js';
 import { noveltyPenalty, bigramJaccard, pNumberOverlap } from './novelty.js';
 import { Role } from './types.js';
@@ -216,7 +216,7 @@ test('黑名單：命中回傳種子、未命中回空字串', () => {
     // 正規化後命中：说谎 → 說謊（谎→謊已補表）
     assert.equal(findGroundingViolation(normalizeTraditional('我認為P3可能在说谎')), '說謊');
 });
-test('黑名單擴詞至 40：嫌疑／疑慮／異常／懷疑／觀察其行為／特別的表現／藏了一些事情／暗中觀察／沉默／舉動／不像村人／可能是村人／不太像村人／關鍵人物／行動比較獨立／都不說話／單薄／有點孤獨／藏有疑點／異動／孤僻命中', () => {
+test('黑名單擴詞至 43：嫌疑／疑慮／異常／懷疑／觀察其行為／特別的表現／藏了一些事情／暗中觀察／沉默／舉動／不像村人／可能是村人／不太像村人／關鍵人物／行動比較獨立／都不說話／單薄／有點孤獨／藏有疑點／異動／孤僻命中', () => {
     assert.equal(findGroundingViolation('P5和P12可能有嫌疑'), '嫌疑');
     assert.equal(findGroundingViolation('他的行動引起我的疑慮'), '疑慮');
     assert.equal(findGroundingViolation('他昨晚的行動好像有點異常'), '異常');
@@ -244,7 +244,7 @@ test('黑名單擴詞至 40：嫌疑／疑慮／異常／懷疑／觀察其行�
     assert.equal(findGroundingViolation('可能藏有疑點'), '藏有疑點');
     assert.equal(findGroundingViolation('稍有異動'), '異動');
     assert.equal(findGroundingViolation('這個人看起來比較孤僻'), '孤僻');
-    assert.equal(GROUNDING_VIOLATION_SEEDS.length, 40);
+    assert.equal(GROUNDING_VIOLATION_SEEDS.length, 43);
 });
 test('角色錯亂 5 種子（新制）：提防襲擊／被襲擊／小心防守／守護／保護同盟命中；暴露系不收', () => {
     assert.equal(findGroundingViolation('今晚需提防襲擊，隨便指個目標'), '提防襲擊');
@@ -253,6 +253,9 @@ test('角色錯亂 5 種子（新制）：提防襲擊／被襲擊／小心防�
     assert.equal(findGroundingViolation('建議先守護關鍵玩家以防突襲'), '守護');
     assert.equal(findGroundingViolation('今晚的目標是保護同盟，避免暴露'), '保護同盟');
     assert.equal(findGroundingViolation('我會觀察其他玩家的反應'), '反應');
+    assert.equal(findGroundingViolation('這個人看起來有點特別，可能是目標'), '有點特別');
+    assert.equal(findGroundingViolation('今天沒人說話，先觀望'), '沒人說話');
+    assert.equal(findGroundingViolation('他可能藏有陰謀，要小心'), '藏有陰謀');
     assert.equal(findGroundingViolation('避免暴露身份，小心行事'), '');
     assert.equal(findGroundingViolation('避免暴露同盟，謹慎選擇'), '');
     assert.equal(findGroundingViolation('我們需掩蓋身份，選擇安全目標'), '');
@@ -268,6 +271,10 @@ test('首夜捏造檢查：首夜攔、後夜放', () => {
     assert.equal(findFirstNightFabrication('他白天似乎很安靜'), '白天似乎');
     assert.equal(findFirstNightFabrication('他白天好像沒說話'), '白天好像');
     assert.equal(findFirstNightFabrication('白天看起來不太積極'), '白天看起來');
+    assert.equal(findFirstNightFabrication('他在白天討論時表現得比較積極'), '白天討論時');
+    assert.equal(findFirstNightFabrication('白天發言時要小心'), '白天發言時');
+    assert.equal(findFirstNightFabrication('白天討論再決定'), '白天討論');
+    assert.equal(findFirstNightFabrication('白天發言要有依據'), '白天發言');
     assert.equal(findFirstNightFabrication('明天白天投票再說'), '');
     assert.equal(findFirstNightFabrication('我會在白天跟票'), '');
     assert.equal(findFirstNightFabrication('我沒想法，跟票。'), '');
@@ -282,6 +289,88 @@ test('首夜捏造檢查：首夜攔、後夜放', () => {
     s.wolfDiscussionLog.push({ playerId: wolf.id, text: '先殺P5，直覺', day: s.day });
     assert.equal(checkWolfDraft('他昨晚的行動值得注意。\n[決定:資訊不足]', s, wolf.id), null);
 });
+test('虛構已討論：空局聲稱大家已討論即判虛構，後夜有紀錄不攔', () => {
+    assert.equal(findEmptyDiscussionFabrication('大家讨论了一下可能的袭击目标'), '', '簡體先正規化，原文直測不命中');
+    assert.equal(findEmptyDiscussionFabrication('大家討論了一下可能的襲擊目標'), '大家討論了一下');
+    assert.equal(findEmptyDiscussionFabrication('大家說過要先殺P5'), '大家說過');
+    assert.equal(findEmptyDiscussionFabrication('我比較在意大家的發言'), '');
+    assert.equal(findEmptyDiscussionFabrication('大家意見一致，先觀望'), '');
+    assert.equal(findEmptyDiscussionFabrication('大家還是再討論一下目標'), '');
+    assert.equal(findFirstNightFabrication('大家討論了一下可能的目標'), '大家討論了一下');
+    const s = createGameState(9);
+    for (let i = 0; i < 9; i++)
+        transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+    transition(s, { type: 'START_GAME' });
+    const wolf = s.players.find((p) => p.alive && p.role === Role.WEREWOLF);
+    const legal = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF).id;
+    const solo = `大家討論了一下P${legal}吧。\n[決定:殺P${legal}]`;
+    const rej = checkWolfDraft(solo, s, wolf.id);
+    assert.equal(rej.kind, 'grounding');
+    assert.ok(rej.hit.includes('大家討論了一下'));
+    s.wolfDiscussionLog.push({ playerId: wolf.id, text: '先殺P5，直覺', day: s.day });
+    assert.equal(checkWolfDraft(solo, s, wolf.id), null);
+});
+test('全量多筆：一稿命中 N 種記 N 筆（處置仍取首個，舊單條行為不變）', () => {
+    const s = createGameState(9);
+    for (let i = 0; i < 9; i++)
+        transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+    transition(s, { type: 'START_GAME' });
+    const wolf = s.players.find((p) => p.alive && p.role === Role.WEREWOLF);
+    const legal = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF).id;
+    const multi = `我懷疑他昨晚的行動很可疑 maybe\n[決定:殺P${legal}]`;
+    const all = collectWolfViolations(multi, s, wolf.id);
+    assert.deepEqual(all.map((e) => e.kind), ['lang', 'grounding', 'grounding']);
+    assert.deepEqual(all.map((e) => e.hit), ['英文短詞(maybe)', '可疑', '昨晚的行動']);
+    const first = checkWolfDraft(multi, s, wolf.id);
+    assert.equal(first.kind, 'lang');
+    assert.equal(first.hit, '英文短詞(maybe)');
+    const exAll = collectExpandViolations('他看起來有點可疑 maybe', true);
+    assert.deepEqual(exAll.map((e) => `${e.kind}/${e.hit}`), ['grounding/可疑', 'lang/英文短詞(maybe)']);
+    assert.equal(checkExpandViolation('他看起來有點可疑 maybe', true)?.hit, '可疑');
+});
+test('全量記賬整合：違規稿記 N 筆同 text、棄權一次、無重試', async () => {
+    const s = createGameState(9);
+    for (let i = 0; i < 9; i++)
+        transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+    transition(s, { type: 'START_GAME' });
+    assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
+    const wolves = s.players.filter((p) => p.alive && p.role === Role.WEREWOLF);
+    const file = tmpLedger();
+    const llm = new MockLLM((prompt) => {
+        if (prompt.includes('【裁判任務】'))
+            return judgeBySlotDesc(prompt);
+        if (prompt.includes('【你的預發言草稿】'))
+            return 'P0：「沿用。」';
+        return '我懷疑他昨晚的行動很可疑 maybe\n[決定:資訊不足]';
+    });
+    const { ctx, events } = makeCtx(s, llm);
+    const sch = new SpeechScheduler(ctx, { cdMs: 60000, ledgerFile: file });
+    try {
+        sch.onPhaseEntered(s);
+        await flushN(5);
+        const retries = llm.calls.filter((c) => c.kind === 'pre_speech' && c.prompt.includes('被退回的草稿'));
+        assert.equal(retries.length, 0, '新制無重試');
+        assert.equal(sch.stashForTest(), null, '全棄權則無暫存');
+        assert.ok(!events.some((e) => e.type === 'AI_WOLF_SPEECH_DONE'), '不播錯');
+        assert.deepEqual(sch.flagStats(), { decided: 0, abstain: 0, uncertain: wolves.length });
+        const rows = readPrecedents(file);
+        assert.equal(rows.length, wolves.length * 3, '一稿三命中記三筆');
+        assert.ok(rows.every((r) => r.fixed === false));
+        for (const w of wolves) {
+            const mine = rows.filter((r) => r.who.startsWith(`P${w.id}/`));
+            assert.equal(mine.length, 3);
+            assert.ok(mine.every((r) => r.text === mine[0].text), '同稿同 text');
+            assert.deepEqual(mine.map((r) => `${r.kind}/${r.hit}`), ['lang/英文短詞(maybe)', 'grounding/可疑', 'grounding/昨晚的行動']);
+        }
+    }
+    finally {
+        sch.stop();
+        try {
+            fs.rmSync(file, { force: true });
+        }
+        catch { /* 丟棄 */ }
+    }
+});
 test('簡體攔截：原文含簡體即拒（映射＋前科句）', () => {
     assert.equal(normalizeTraditional('选择P5'), '選擇P5');
     assert.equal(normalizeTraditional('我需要谨慎一点'), '我需要謹慎一點');
@@ -289,7 +378,7 @@ test('簡體攔截：原文含簡體即拒（映射＋前科句）', () => {
     assert.equal(simplifiedRejection('我需要謹慎一點'), '');
     assert.equal(simplifiedRejection(''), '');
 });
-test('簡體映射補字：决动无体击优处围变员倾', () => {
+test('簡體映射補字：决动无体击优处围变员倾论没异应们线袭讨', () => {
     assert.equal(normalizeTraditional('决定'), '決定');
     assert.equal(normalizeTraditional('行动'), '行動');
     assert.equal(normalizeTraditional('无法'), '無法');
@@ -301,6 +390,11 @@ test('簡體映射補字：决动无体击优处围变员倾', () => {
     assert.equal(normalizeTraditional('变化'), '變化');
     assert.equal(normalizeTraditional('同盟成员'), '同盟成員');
     assert.equal(normalizeTraditional('倾向于'), '傾向于');
+    assert.equal(normalizeTraditional('大家讨论'), '大家討論');
+    assert.equal(normalizeTraditional('他说没事'), '他說沒事');
+    assert.equal(normalizeTraditional('行为异常'), '行為異常');
+    assert.equal(normalizeTraditional('我们观察反应'), '我們觀察反應');
+    assert.equal(normalizeTraditional('线索指向袭击'), '線索指向襲擊');
 });
 test('文本目標掃描：同盟／自指拒收、合法放行', () => {
     const s = createGameState(9);
@@ -1822,9 +1916,9 @@ test('前科單次：違規→記賬 fixed=false→棄權（無重試）', async
         const retries = llm.calls.filter((c) => c.kind === 'pre_speech' && c.prompt.includes('被退回的草稿'));
         assert.equal(retries.length, 0, '新制無重試');
         const rows = readPrecedents(file);
-        assert.equal(rows.length, 1);
-        assert.equal(rows[0].kind, 'grounding');
-        assert.equal(rows[0].fixed, false);
+        assert.equal(rows.length, 2, 'S1 全量：一稿雙命中記兩筆');
+        assert.deepEqual(rows.map((r) => `${r.kind}/${r.hit}`), ['grounding/有問題', 'format/缺旗標']);
+        assert.ok(rows.every((r) => r.fixed === false));
         assert.ok(rows[0].who.startsWith('P'));
     }
     finally {
@@ -1862,8 +1956,9 @@ test('兜底：單次違規→棄權（資訊不足、不播出）＋賬本 fixe
         assert.ok(!events.some((e) => e.type === 'AI_WOLF_SPEECH_DONE'), '不播錯');
         assert.deepEqual(sch.flagStats(), { decided: 0, abstain: 0, uncertain: wolves.length });
         const rows = readPrecedents(file);
-        assert.equal(rows.length, wolves.length);
-        assert.ok(rows.every((r) => r.fixed === false && r.kind === 'grounding'));
+        assert.equal(rows.length, wolves.length * 2, 'S1 全量：每稿雙命中記兩筆');
+        assert.ok(rows.every((r) => r.fixed === false));
+        assert.deepEqual([...new Set(rows.map((r) => `${r.kind}/${r.hit}`))].sort(), ['format/缺旗標', 'grounding/有問題']);
     }
     finally {
         sch.stop();

@@ -419,7 +419,7 @@ export function buildWolfPreSpeechPrompt(state: GameState, playerId: number): st
     `【你的個性】\n${buildWolfPersonalityLine(personaPrompt)}`,
     `【今晚的討論】\n${recent.length > 0 ? recent.join('\n') : '（尚無發言）'}`,
     dayBlock,
-    `【輸出】一句 5-30 字的發言草稿；另起一行寫你的決定：[決定:殺P編號] 或 [決定:資訊不足]。`,
+    `【輸出】一句 5-30 字的發言草稿；另起一行寫你的決定：[決定:殺P編號] 或 [決定:資訊不足]。若你已在發言中指名具體目標（P編號），決定行請寫 [決定:殺P編號]；未指名才寫 [決定:資訊不足]。全篇只能使用繁體中文，嚴禁任何簡體字（如杀/发/对/说）。`,
   ];
   let prompt = parts.filter((s) => s !== '').join('\n\n');
   // 超預算：先丟白天最舊，再丟今晚最舊（固定部分保留）

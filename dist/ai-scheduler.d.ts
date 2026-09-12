@@ -59,15 +59,27 @@ export declare function buildLangRetryNote(prevDraft: string, selfState?: boolea
 export declare function buildTargetRetryNote(prevDraft: string, playerId: number): string;
 /** 非法狼目標：自己／同盟／不存在或死亡 → 回傳 hit 說明，通過回傳空字串 */
 export declare function illegalWolfTarget(st: GameState, playerId: number, targetId: number): string;
-/** 首夜捏造檢查：首夜出現昨晚的行動／行為／表現／發言、或白天持續行為描述即判虛構（後夜有公開紀錄不攔） */
+/** 空討論虛構：無任何討論紀錄卻聲稱大家已討論／說過，即判虛構（後夜有紀錄不攔，由呼叫方首夜 gated） */
+export declare function findEmptyDiscussionFabrication(text: string): string;
+/** 首夜捏造檢查：昨晚系／白天持續行為／空討論虛構即判虛構（後夜有公開紀錄不攔） */
 export declare function findFirstNightFabrication(text: string): string;
 /** 簡體攔截：原文與正規化後不同即拒（回傳前科 note，空字串表通過） */
 export declare function simplifiedRejection(rawRaw: string): string;
 /** 英文短詞檢查：整詞命中回傳該詞，未命中回傳空字串 */
 export declare function findEnglishWord(text: string): string;
-/** 狼草稿拒收檢查：回傳前科回寫（含 kind/hit 供賬本），null 表通過 */
+/** 狼草稿全量收集：一稿命中 N 種全收（順序：英文→種子→fab→目標→格式；同 kind+hit 去重），供單次多筆記賬 */
+export declare function collectWolfViolations(raw: string, st: GameState, pid: number): {
+    kind: string;
+    hit: string;
+}[];
+/** 狼草稿拒收檢查：回傳首個命中（含 kind/hit 供賬本），null 表通過（處置順序與全量一致） */
 export declare function checkWolfDraft(raw: string, st: GameState, pid: number): WolfRejection | null;
-/** expand 違規檢查：seed→fab（僅首夜）→eng 三層；回傳 kind/hit，null 表通過 */
+/** expand 全量收集：seed→fab（僅首夜）→eng 命中全收，供單次多筆記賬 */
+export declare function collectExpandViolations(raw: string, firstNight: boolean): {
+    kind: 'grounding' | 'lang';
+    hit: string;
+}[];
+/** expand 違規檢查：seed→fab（僅首夜）→eng 三層；回傳 kind/hit，null 表通過（首個命中） */
 export declare function checkExpandViolation(raw: string, firstNight: boolean): {
     kind: 'grounding' | 'lang';
     hit: string;
@@ -176,7 +188,7 @@ export declare class SpeechScheduler implements AIScheduler {
     private abstainPre;
     /** 賬本寫入（IO 失敗吞掉，不影響生產） */
     private recordPrecedents;
-    /** expand 取文（新制單次：違規記賬 fixed=false 後回空退草稿；日間單發舊流程） */
+    /** expand 取文（新制單次：違規全量記賬 fixed=false 後回空退草稿；日間單發舊流程） */
     private fetchExpandText;
     /** 驗證狼襲擊目標合法性：存活、非自己、非狼同盟；不合法 → 視為棄票（狼放棄這票，不擋會議；夜晚結算另有過濾） */
     private validateWolfTarget;
