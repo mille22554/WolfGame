@@ -37,7 +37,7 @@ export declare function normalizeTraditional(text: string): string;
 export declare function stripDecisionFlags(text: string): string;
 /** 兩層解析：先正規，失敗走寬鬆關鍵字；都抓不到 → uncertain（計入安全閥） */
 export declare function parseDecisionFlag(text: string): AIDecision;
-/** grounding 黑名單種子：命中草稿文本即判違規（拒收＋重試；重試上限沿用既有；哲學：首夜保護優先，後夜誤傷接受） */
+/** grounding 黑名單種子：命中草稿文本即判違規（新制單次：拒收＋記賬＋棄權，無重試；哲學：首夜保護優先，後夜誤傷接受） */
 export declare const GROUNDING_VIOLATION_SEEDS: string[];
 /** 黑名單命中：回傳命中的種子，未命中回傳空字串（比對已正規化文本） */
 export declare function findGroundingViolation(text: string): string;
@@ -84,7 +84,7 @@ export interface PrecedentEntry {
     text: string;
     fixed: boolean;
 }
-/** 賬本上限行數（超了砍最舊） */
+/** 賬本上限行數（舊制殘留，新制無上限不使用；保留匯出免壞外部呼叫） */
 export declare const PRECEDENTS_CAP = 500;
 /** 賬本檔名（<dataDir> 下；已 gitignore） */
 export declare const PRECEDENTS_FILE = "precedents.jsonl";
@@ -92,10 +92,12 @@ export declare const PRECEDENTS_FILE = "precedents.jsonl";
 export declare function precedentsFile(dataDir?: string): string;
 /** 賬本讀取（缺檔／壞行容錯） */
 export declare function readPrecedents(file?: string): PrecedentEntry[];
-/** 賬本寫入（append-only 語義；超上限砍最舊） */
+/** 賬本寫入（append-only 語義；無上限，只增不減） */
 export declare function appendPrecedents(entries: PrecedentEntry[], file?: string): void;
 /** 跨局 top-1：同 meeting＋同 phase 按 t 降冪（寫入序，不依賴文件序），own 優先、否則取最新 */
 export declare function findCrossGamePrecedent(meeting: string, phase: string, persona: string, file?: string): PrecedentEntry | null;
+/** 跨局每種一條：同 meeting＋同 phase 按 t 降冪，grounding／簡體／英文／target／format 各取最新 1 筆 */
+export declare function findRecentPrecedentsByKind(meeting: string, phase: string, file?: string): PrecedentEntry[];
 /** 跨局句（改版：不再引前句全文，防模板抄襲；target 分支抽象化） */
 export declare function buildCrossGameNote(entry: PrecedentEntry): string;
 export interface SpeechSchedulerOptions {
@@ -168,11 +170,13 @@ export declare class SpeechScheduler implements AIScheduler {
     /** 生產失敗 → N 秒後重試；重試前不播出（無暫存）、不推進掛機計數（transition 只在發言成功時計數） */
     private scheduleRetry;
     private collectPreSpeeches;
-    /** 單候選 pre_speech（含狼拒收重試＋賬本＋兜底棄權；白天沿用舊流程） */
+    /** 單候選 pre_speech（新制單次：首稿即唯一稿；違規記賬 fixed=false 後棄權；白天沿用舊流程） */
     private runPreSpeechCandidate;
+    /** 單次棄權兜底：狼記 uncertain 不播出；白天回 null（不計安全閥） */
+    private abstainPre;
     /** 賬本寫入（IO 失敗吞掉，不影響生產） */
     private recordPrecedents;
-    /** expand 取文（狼黑名單重試：簡體源頭攔／seed/fab/eng 命中→前科再取，上限另計 2 次；日間單發舊流程） */
+    /** expand 取文（新制單次：違規記賬 fixed=false 後回空退草稿；日間單發舊流程） */
     private fetchExpandText;
     /** 驗證狼襲擊目標合法性：存活、非自己、非狼同盟；不合法 → 視為棄票（狼放棄這票，不擋會議；夜晚結算另有過濾） */
     private validateWolfTarget;

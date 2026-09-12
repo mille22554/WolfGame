@@ -53,6 +53,7 @@ async function boot(overrides: Parameters<typeof startServer>[0] = {}): Promise<
     openBrowser: false,
     exitProcess: false,
     dispatcherFactory: () => mockDispatcher(),
+    ledgerFile: 'C:/Users/morowin/AppData/Local/Temp/opencode/server-test-precedents.jsonl',
     ...overrides,
   });
 }

@@ -52,6 +52,7 @@ async function boot(overrides = {}) {
         openBrowser: false,
         exitProcess: false,
         dispatcherFactory: () => mockDispatcher(),
+        ledgerFile: 'C:/Users/morowin/AppData/Local/Temp/opencode/server-test-precedents.jsonl',
         ...overrides,
     });
 }

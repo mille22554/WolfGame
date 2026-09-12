@@ -1386,6 +1386,8 @@ export async function startServer(options = {}) {
             },
             getState: () => engine.getState(),
             llm: dispatcher,
+        }, {
+            ...(options.ledgerFile ? { ledgerFile: options.ledgerFile } : {}),
         });
         // 收斂直進投票（第 2 項）：討論結束不再靠發言數強制關閉，
         // 改由 AI_READY_VOTE／HUMAN_READY_VOTE 的統一檢查推進；此處無需 timer。

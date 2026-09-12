@@ -36,6 +36,7 @@ export interface ServerOptions {
     llamaServerRelease?: string;
     llamaServerBinDir?: string;
     llamaServerBinPath?: string;
+    ledgerFile?: string;
     backend?: BackendPreference;
     llamaGpuLayers?: number;
 }

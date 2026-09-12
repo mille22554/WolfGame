@@ -5,9 +5,8 @@
 import { test, mock, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
-import { SpeechScheduler, parseDecisionFlag, stripDecisionFlags, normalizeTraditional, MAX_UNCERTAIN_ROUNDS, GROUNDING_VIOLATION_SEEDS, findGroundingViolation, buildViolationRetryNote, buildFormatRetryNote, isEnglishHeavy, illegalWolfTarget, checkWolfDraft, buildLangRetryNote, buildTargetRetryNote, findFirstNightFabrication, simplifiedRejection, findEnglishWord, checkExpandViolation, readPrecedents, appendPrecedents, findCrossGamePrecedent, buildCrossGameNote, PRECEDENTS_CAP, } from './ai-scheduler.js';
+import { SpeechScheduler, parseDecisionFlag, stripDecisionFlags, normalizeTraditional, MAX_UNCERTAIN_ROUNDS, GROUNDING_VIOLATION_SEEDS, findGroundingViolation, buildViolationRetryNote, buildFormatRetryNote, isEnglishHeavy, illegalWolfTarget, checkWolfDraft, buildLangRetryNote, buildTargetRetryNote, findFirstNightFabrication, simplifiedRejection, findEnglishWord, checkExpandViolation, readPrecedents, appendPrecedents, findCrossGamePrecedent, buildCrossGameNote, findRecentPrecedentsByKind, PRECEDENTS_CAP, } from './ai-scheduler.js';
 import { createGameState, transition, getNightActors, stripSpeechPrefix } from './game-state.js';
 import { noveltyPenalty, bigramJaccard, pNumberOverlap } from './novelty.js';
 import { Role } from './types.js';
@@ -217,7 +216,7 @@ test('黑名單：命中回傳種子、未命中回空字串', () => {
     // 正規化後命中：说谎 → 說謊（谎→謊已補表）
     assert.equal(findGroundingViolation(normalizeTraditional('我認為P3可能在说谎')), '說謊');
 });
-test('黑名單擴詞至 34：嫌疑／疑慮／異常／懷疑／觀察其行為／特別的表現／藏了一些事情／暗中觀察／沉默／舉動／不像村人／可能是村人／不太像村人／關鍵人物／行動比較獨立／都不說話／單薄／有點孤獨／藏有疑點／異動／孤僻命中', () => {
+test('黑名單擴詞至 40：嫌疑／疑慮／異常／懷疑／觀察其行為／特別的表現／藏了一些事情／暗中觀察／沉默／舉動／不像村人／可能是村人／不太像村人／關鍵人物／行動比較獨立／都不說話／單薄／有點孤獨／藏有疑點／異動／孤僻命中', () => {
     assert.equal(findGroundingViolation('P5和P12可能有嫌疑'), '嫌疑');
     assert.equal(findGroundingViolation('他的行動引起我的疑慮'), '疑慮');
     assert.equal(findGroundingViolation('他昨晚的行動好像有點異常'), '異常');
@@ -245,7 +244,18 @@ test('黑名單擴詞至 34：嫌疑／疑慮／異常／懷疑／觀察其行�
     assert.equal(findGroundingViolation('可能藏有疑點'), '藏有疑點');
     assert.equal(findGroundingViolation('稍有異動'), '異動');
     assert.equal(findGroundingViolation('這個人看起來比較孤僻'), '孤僻');
-    assert.equal(GROUNDING_VIOLATION_SEEDS.length, 34);
+    assert.equal(GROUNDING_VIOLATION_SEEDS.length, 40);
+});
+test('角色錯亂 5 種子（新制）：提防襲擊／被襲擊／小心防守／守護／保護同盟命中；暴露系不收', () => {
+    assert.equal(findGroundingViolation('今晚需提防襲擊，隨便指個目標'), '提防襲擊');
+    assert.equal(findGroundingViolation('今晚注意防守，避免被襲擊'), '被襲擊');
+    assert.equal(findGroundingViolation('今晚要小心防守，避免被發現'), '小心防守');
+    assert.equal(findGroundingViolation('建議先守護關鍵玩家以防突襲'), '守護');
+    assert.equal(findGroundingViolation('今晚的目標是保護同盟，避免暴露'), '保護同盟');
+    assert.equal(findGroundingViolation('我會觀察其他玩家的反應'), '反應');
+    assert.equal(findGroundingViolation('避免暴露身份，小心行事'), '');
+    assert.equal(findGroundingViolation('避免暴露同盟，謹慎選擇'), '');
+    assert.equal(findGroundingViolation('我們需掩蓋身份，選擇安全目標'), '');
 });
 test('首夜捏造檢查：首夜攔、後夜放', () => {
     assert.equal(findFirstNightFabrication('他昨晚的行動引起我的注意'), '昨晚的行動');
@@ -254,6 +264,10 @@ test('首夜捏造檢查：首夜攔、後夜放', () => {
     assert.equal(findFirstNightFabrication('這個人在白天總是比較沉默'), '白天總是');
     assert.equal(findFirstNightFabrication('他白天一直很安靜'), '白天一直');
     assert.equal(findFirstNightFabrication('白天從來不發言'), '白天從來');
+    assert.equal(findFirstNightFabrication('白天也沒太參與討論'), '白天也沒');
+    assert.equal(findFirstNightFabrication('他白天似乎很安靜'), '白天似乎');
+    assert.equal(findFirstNightFabrication('他白天好像沒說話'), '白天好像');
+    assert.equal(findFirstNightFabrication('白天看起來不太積極'), '白天看起來');
     assert.equal(findFirstNightFabrication('明天白天投票再說'), '');
     assert.equal(findFirstNightFabrication('我會在白天跟票'), '');
     assert.equal(findFirstNightFabrication('我沒想法，跟票。'), '');
@@ -275,7 +289,7 @@ test('簡體攔截：原文含簡體即拒（映射＋前科句）', () => {
     assert.equal(simplifiedRejection('我需要謹慎一點'), '');
     assert.equal(simplifiedRejection(''), '');
 });
-test('簡體映射補字：决动无体击优处围变', () => {
+test('簡體映射補字：决动无体击优处围变员倾', () => {
     assert.equal(normalizeTraditional('决定'), '決定');
     assert.equal(normalizeTraditional('行动'), '行動');
     assert.equal(normalizeTraditional('无法'), '無法');
@@ -285,6 +299,8 @@ test('簡體映射補字：决动无体击优处围变', () => {
     assert.equal(normalizeTraditional('处理'), '處理');
     assert.equal(normalizeTraditional('周围'), '周圍');
     assert.equal(normalizeTraditional('变化'), '變化');
+    assert.equal(normalizeTraditional('同盟成员'), '同盟成員');
+    assert.equal(normalizeTraditional('倾向于'), '傾向于');
 });
 test('文本目標掃描：同盟／自指拒收、合法放行', () => {
     const s = createGameState(9);
@@ -330,26 +346,41 @@ test('WOLF_TARGET_RE 新動詞三分支＋lastIndex 重置', () => {
     assert.equal(gazeTight.kind, 'target');
     const duel2 = checkWolfDraft(`對P${ally.id}動手吧。\n[決定:資訊不足]`, s, wolf.id);
     assert.equal(duel2.kind, 'target');
-    // 殺掉分支（13 動詞；「殺掉P編號」同走 group1）
+    // 殺掉分支（14 動詞；「殺掉P編號」同走 group1）
     const killOff = checkWolfDraft(`今晚的目標是殺掉P${ally.id}。\n[決定:資訊不足]`, s, wolf.id);
     assert.equal(killOff.kind, 'target');
     assert.equal(checkWolfDraft(`今晚的目標是殺掉P${legal}。\n[決定:資訊不足]`, s, wolf.id), null);
+    // 活捉分支（14 動詞；修「目標是活捉P編號」自指逃逸）
+    const seizeAlly = checkWolfDraft(`今晚的目標是活捉P${ally.id}。\n[決定:資訊不足]`, s, wolf.id);
+    assert.equal(seizeAlly.kind, 'target');
+    const seizeSelf = checkWolfDraft(`今晚的目標是活捉P${wolf.id}。\n[決定:資訊不足]`, s, wolf.id);
+    assert.equal(seizeSelf.kind, 'target');
+    assert.ok(seizeSelf.hit.startsWith('自指P'));
+    assert.equal(checkWolfDraft(`今晚的目標是活捉P${legal}。\n[決定:資訊不足]`, s, wolf.id), null);
 });
 test('跨局 t 排序：不依文件序，取 t 最新', () => {
     const file = tmpLedger();
-    const row = (t, who, kind, hit, text) => ({
-        t, game: 'g', meeting: 'wolf', phase: 'first_pre', kind, hit, who, text, fixed: false,
-    });
-    appendPrecedents([
-        row(300, 'P9/yuko', 'format', '缺旗標', '新句'),
-        row(100, 'P1/rin', 'grounding', '有問題', '舊句rin'),
-        row(200, 'P2/ren', 'lang', '英文超標', '舊句ren'),
-    ], file);
-    assert.equal(findCrossGamePrecedent('wolf', 'first_pre', 'yuko', file)?.text, '新句');
-    assert.equal(findCrossGamePrecedent('wolf', 'first_pre', 'rin', file)?.text, '舊句rin');
-    assert.equal(findCrossGamePrecedent('wolf', 'first_pre', 'nobody', file)?.text, '新句');
+    try {
+        const row = (t, who, kind, hit, text) => ({
+            t, game: 'g', meeting: 'wolf', phase: 'first_pre', kind, hit, who, text, fixed: false,
+        });
+        appendPrecedents([
+            row(300, 'P9/yuko', 'format', '缺旗標', '新句'),
+            row(100, 'P1/rin', 'grounding', '有問題', '舊句rin'),
+            row(200, 'P2/ren', 'lang', '英文超標', '舊句ren'),
+        ], file);
+        assert.equal(findCrossGamePrecedent('wolf', 'first_pre', 'yuko', file)?.text, '新句');
+        assert.equal(findCrossGamePrecedent('wolf', 'first_pre', 'rin', file)?.text, '舊句rin');
+        assert.equal(findCrossGamePrecedent('wolf', 'first_pre', 'nobody', file)?.text, '新句');
+    }
+    finally {
+        try {
+            fs.rmSync(file, { force: true });
+        }
+        catch { /* 丟棄 */ }
+    }
 });
-test('expand 兜底：兩次違規→回傳空→退回草稿文本＋沿草稿決策', async () => {
+test('expand 兜底：單次違規→回傳空→退回草稿文本＋沿草稿決策', async () => {
     const s = createGameState(9);
     for (let i = 0; i < 9; i++)
         transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
@@ -370,21 +401,25 @@ test('expand 兜底：兩次違規→回傳空→退回草稿文本＋沿草稿�
     try {
         sch.onPhaseEntered(s);
         await flushN(5);
-        assert.equal(llm.calls.filter((c) => c.kind === 'expand').length, 2, 'expand 違規應重試一次');
+        assert.equal(llm.calls.filter((c) => c.kind === 'expand').length, 1, '新制單次：expand 違規不重試');
         const stash = sch.stashForTest();
         assert.ok(stash, '兜底應有暫存（草稿退回）');
         assert.ok(/^先殺P\d+。$/.test(stash.text), `應退回草稿文本，實得：${stash.text}`);
         assert.equal(stash.decision.status, 'decided');
         const rows = readPrecedents(file);
-        assert.equal(rows.length, 2);
+        assert.equal(rows.length, 1);
         assert.ok(rows.every((r) => r.phase === 'expand' && r.fixed === false));
         assert.ok(!rows.some((r) => r.text === stash.text), '兜底退回的乾淨草稿不應再記逃逸');
     }
     finally {
         sch.stop();
+        try {
+            fs.rmSync(file, { force: true });
+        }
+        catch { /* 丟棄 */ }
     }
 });
-test('簡體前科迴圈：原文簡體→lang 拒收重試→改過 fixed=true', async () => {
+test('簡體單次：原文簡體→lang 拒收記賬 fixed=false→棄權（無重試）', async () => {
     const s = createGameState(9);
     for (let i = 0; i < 9; i++)
         transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
@@ -409,16 +444,19 @@ test('簡體前科迴圈：原文簡體→lang 拒收重試→改過 fixed=true'
         sch.onPhaseEntered(s);
         await flushN(5);
         const retries = llm.calls.filter((c) => c.kind === 'pre_speech' && c.prompt.includes('被退回的草稿'));
-        assert.equal(retries.length, 1);
-        assert.ok(retries[0].prompt.includes('不得使用英文或簡體字'), '簡體版前科照抄');
+        assert.equal(retries.length, 0, '新制無重試：不應帶前科重發');
         const rows = readPrecedents(file);
         assert.equal(rows.length, 1);
         assert.equal(rows[0].kind, 'lang');
         assert.equal(rows[0].hit, '簡體混入');
-        assert.equal(rows[0].fixed, true);
+        assert.equal(rows[0].fixed, false);
     }
     finally {
         sch.stop();
+        try {
+            fs.rmSync(file, { force: true });
+        }
+        catch { /* 丟棄 */ }
     }
 });
 test('英文表命中：整詞才拒', () => {
@@ -475,6 +513,10 @@ test('熔斷 a 漂移：expand 文本異數→整份退回草稿', async () => {
     }
     finally {
         sch.stop();
+        try {
+            fs.rmSync(file, { force: true });
+        }
+        catch { /* 丟棄 */ }
     }
 });
 test('熔斷 a 一致：expand 文本旗標皆合草稿→採信 expand', async () => {
@@ -508,6 +550,10 @@ test('熔斷 a 一致：expand 文本旗標皆合草稿→採信 expand', async 
     }
     finally {
         sch.stop();
+        try {
+            fs.rmSync(file, { force: true });
+        }
+        catch { /* 丟棄 */ }
     }
 });
 test('文旗救回：expand 無旗標但文本提名合法→轉 decided', async () => {
@@ -541,6 +587,10 @@ test('文旗救回：expand 無旗標但文本提名合法→轉 decided', async
     }
     finally {
         sch.stop();
+        try {
+            fs.rmSync(file, { force: true });
+        }
+        catch { /* 丟棄 */ }
     }
 });
 test('文旗救回：文本提名同盟→validate 擋回 abstain', async () => {
@@ -571,9 +621,13 @@ test('文旗救回：文本提名同盟→validate 擋回 abstain', async () => 
     }
     finally {
         sch.stop();
+        try {
+            fs.rmSync(file, { force: true });
+        }
+        catch { /* 丟棄 */ }
     }
 });
-test('expand 英文：eng 重試→改過 fixed=true（kind=lang）', async () => {
+test('expand 英文：單次違規記賬 fixed=false→退草稿（kind=lang）', async () => {
     const s = createGameState(9);
     for (let i = 0; i < 9; i++)
         transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
@@ -600,19 +654,23 @@ test('expand 英文：eng 重試→改過 fixed=true（kind=lang）', async () =
     try {
         sch.onPhaseEntered(s);
         await flushN(5);
-        assert.equal(llm.calls.filter((c) => c.kind === 'expand').length, 2, 'eng 應觸發 expand 重試');
+        assert.equal(llm.calls.filter((c) => c.kind === 'expand').length, 1, '新制單次：eng 違規不重試');
         const rows = readPrecedents(file);
         assert.equal(rows.length, 1);
         assert.equal(rows[0].phase, 'expand');
         assert.equal(rows[0].kind, 'lang');
         assert.equal(rows[0].hit, '英文短詞(maybe)');
-        assert.equal(rows[0].fixed, true);
+        assert.equal(rows[0].fixed, false);
     }
     finally {
         sch.stop();
+        try {
+            fs.rmSync(file, { force: true });
+        }
+        catch { /* 丟棄 */ }
     }
 });
-test('expand 簡體：源頭攔截重試→改過 fixed=true（kind=lang）', async () => {
+test('expand 簡體：單次源頭攔截記賬 fixed=false→退草稿（kind=lang）', async () => {
     const s = createGameState(9);
     for (let i = 0; i < 9; i++)
         transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
@@ -645,31 +703,51 @@ test('expand 簡體：源頭攔截重試→改過 fixed=true（kind=lang）', as
         sch.onPhaseEntered(s);
         await flushN(5);
         const expands = llm.calls.filter((c) => c.kind === 'expand');
-        assert.equal(expands.length, 2, '簡體應觸發 expand 源頭重試');
-        assert.ok(expands[1].prompt.includes('不得使用英文或簡體字'), '簡體版前科照抄');
+        assert.equal(expands.length, 1, '新制單次：簡體違規不重試');
         const stash = sch.stashForTest();
-        assert.ok(stash, '改過後應有暫存');
+        assert.ok(stash, '退草稿後應有暫存（草稿文本）');
         assert.equal(simplifiedRejection(stash.text), '', '播出文本不應殘留簡體');
         const rows = readPrecedents(file);
         assert.equal(rows.length, 1);
         assert.equal(rows[0].phase, 'expand');
         assert.equal(rows[0].kind, 'lang');
         assert.equal(rows[0].hit, '簡體混入');
-        assert.equal(rows[0].fixed, true);
+        assert.equal(rows[0].fixed, false);
     }
     finally {
         sch.stop();
+        try {
+            fs.rmSync(file, { force: true });
+        }
+        catch { /* 丟棄 */ }
     }
 });
-test('loop2 門檻：賬本含乾淨 6 筆 loop1 真實＋回填（按 game 過濾，容測試污染）', () => {
-    const rows = readPrecedents().filter((r) => r.game === 'gmtxnnias');
-    assert.equal(rows.length, 6);
-    assert.ok(rows.every((r) => r.fixed === false), '回填修正後全為 false');
-    const hits = rows.map((r) => r.hit);
-    for (const h of ['缺旗標', '可疑', '嫌疑', '疑慮', '異常'])
-        assert.ok(hits.includes(h));
-    assert.ok(rows.some((r) => r.phase === 'expand'), '應含 expand 筆');
-    assert.ok(rows.some((r) => r.who === 'P7/tatuya'), '應含 P7 回填筆');
+test('loop1 隔離夾具：6 筆 loop1 樣式全 false（含 expand＋P7 筆）', () => {
+    const file = tmpLedger();
+    try {
+        appendPrecedents([
+            { t: 1, game: 'gLoop1', meeting: 'wolf', phase: 'first_pre', kind: 'format', hit: '缺旗標', who: 'P14/chihiro', text: '句1', fixed: false },
+            { t: 2, game: 'gLoop1', meeting: 'wolf', phase: 'first_pre', kind: 'format', hit: '缺旗標', who: 'P14/chihiro', text: '句2', fixed: false },
+            { t: 3, game: 'gLoop1', meeting: 'wolf', phase: 'first_pre', kind: 'grounding', hit: '可疑', who: 'P11/yuma', text: '句3', fixed: false },
+            { t: 4, game: 'gLoop1', meeting: 'wolf', phase: 'first_pre', kind: 'grounding', hit: '嫌疑', who: 'P7/tatuya', text: '句4', fixed: false },
+            { t: 5, game: 'gLoop1', meeting: 'wolf', phase: 'first_pre', kind: 'grounding', hit: '疑慮', who: 'P11/yuma', text: '句5', fixed: false },
+            { t: 6, game: 'gLoop1', meeting: 'wolf', phase: 'expand', kind: 'grounding', hit: '異常', who: 'P11/yuma', text: '句6', fixed: false },
+        ], file);
+        const rows = readPrecedents(file).filter((r) => r.game === 'gLoop1');
+        assert.equal(rows.length, 6);
+        assert.ok(rows.every((r) => r.fixed === false), '新制一律 false');
+        const hits = rows.map((r) => r.hit);
+        for (const h of ['缺旗標', '可疑', '嫌疑', '疑慮', '異常'])
+            assert.ok(hits.includes(h));
+        assert.ok(rows.some((r) => r.phase === 'expand'), '應含 expand 筆');
+        assert.ok(rows.some((r) => r.who === 'P7/tatuya'), '應含 P7 筆');
+    }
+    finally {
+        try {
+            fs.rmSync(file, { force: true });
+        }
+        catch { /* 丟棄 */ }
+    }
 });
 test('前科回寫兩版：違規版（首夜／後夜情境）＋格式版存在性', () => {
     const first = buildViolationRetryNote('我覺得P3有問題', '有問題', true);
@@ -696,52 +774,119 @@ test('前科回寫兩版：違規版（首夜／後夜情境）＋格式版存�
     }
 });
 // ---------- 外部積累賬本 ----------
-/** 測試用賬本檔（系統暫存下獨立目錄，不污染 repo） */
+/** 測試用賬本檔（指定暫存 test-*.jsonl，用完即丟，不碰真賬本） */
 function tmpLedger() {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-ledger-'));
-    return path.join(dir, 'precedents.jsonl');
+    const dir = 'C:/Users/morowin/AppData/Local/Temp/opencode';
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `test-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}.jsonl`);
+    fs.writeFileSync(file, '', 'utf-8');
+    return file;
 }
-test('賬本：寫讀往返＋上限 500 砍最舊＋壞行容錯', () => {
+test('賬本：寫讀往返＋無上限只增不減＋壞行容錯', () => {
     const file = tmpLedger();
-    assert.deepEqual(readPrecedents(file), []);
-    const mk = (i) => ({
-        t: i, game: 'g1', meeting: 'wolf', phase: 'first_pre', kind: 'grounding',
-        hit: '有問題', who: `P${i}/rin`, text: `第${i}句`, fixed: i % 2 === 0,
-    });
-    appendPrecedents([mk(1), mk(2)], file);
-    const two = readPrecedents(file);
-    assert.equal(two.length, 2);
-    assert.equal(two[0].text, '第1句');
-    assert.equal(two[1].fixed, true);
-    const many = Array.from({ length: PRECEDENTS_CAP + 1 }, (_, i) => mk(100 + i));
-    appendPrecedents(many, file);
-    const all = readPrecedents(file);
-    assert.equal(all.length, PRECEDENTS_CAP);
-    assert.equal(all[0].text, '第101句');
-    fs.appendFileSync(file, 'not json\n', 'utf-8');
-    assert.equal(readPrecedents(file).length, PRECEDENTS_CAP);
+    try {
+        assert.deepEqual(readPrecedents(file), []);
+        const mk = (i) => ({
+            t: i, game: 'g1', meeting: 'wolf', phase: 'first_pre', kind: 'grounding',
+            hit: '有問題', who: `P${i}/rin`, text: `第${i}句`, fixed: false,
+        });
+        appendPrecedents([mk(1), mk(2)], file);
+        const two = readPrecedents(file);
+        assert.equal(two.length, 2);
+        assert.equal(two[0].text, '第1句');
+        assert.equal(two[1].fixed, false);
+        const many = Array.from({ length: PRECEDENTS_CAP + 1 }, (_, i) => mk(100 + i));
+        appendPrecedents(many, file);
+        const all = readPrecedents(file);
+        assert.equal(all.length, 2 + PRECEDENTS_CAP + 1);
+        assert.equal(all[0].text, '第1句');
+        fs.appendFileSync(file, 'not json\n', 'utf-8');
+        assert.equal(readPrecedents(file).length, 2 + PRECEDENTS_CAP + 1);
+    }
+    finally {
+        try {
+            fs.rmSync(file, { force: true });
+        }
+        catch { /* 丟棄 */ }
+    }
 });
 test('跨局讀取：同 persona 最新優先 → 同 phase 任一 → 無則 null；跨局句存在性', () => {
     const file = tmpLedger();
-    const row = (t, phase, who, kind, hit, text) => ({
-        t, game: 'g0', meeting: 'wolf', phase, kind, hit, who, text, fixed: false,
-    });
-    appendPrecedents([
-        row(1, 'first_pre', 'P1/rin', 'grounding', '有問題', '舊句rin'),
-        row(2, 'first_pre', 'P2/ren', 'format', '缺旗標', '舊句ren'),
-        row(3, 'later_pre', 'P3/rin', 'lang', '英文超標', 'old words'),
-    ], file);
-    assert.equal(findCrossGamePrecedent('wolf', 'first_pre', 'rin', file)?.text, '舊句rin');
-    assert.equal(findCrossGamePrecedent('wolf', 'first_pre', 'yuko', file)?.text, '舊句ren');
-    assert.equal(findCrossGamePrecedent('wolf', 'expand', 'rin', file), null);
-    assert.equal(findCrossGamePrecedent('day', 'first_pre', 'rin', file), null);
-    const note = buildCrossGameNote(findCrossGamePrecedent('wolf', 'first_pre', 'rin', file));
-    assert.equal(note, '過去同情境曾因含「有問題」的無源指控被退，不要重蹈（也不得以換皮說法重述同一指控）。');
-    assert.ok(!note.includes('舊句rin'), '改版不再引前句全文');
-    const fmtNote = buildCrossGameNote(findCrossGamePrecedent('wolf', 'first_pre', 'yuko', file));
-    assert.equal(fmtNote, '過去同情境曾有format問題（缺旗標）被退，不要重蹈。');
-    const targetNote = buildCrossGameNote({ t: 9, game: 'g0', meeting: 'wolf', phase: 'first_pre', kind: 'target', hit: '同盟P1', who: 'P2/ren', text: '殺P1吧', fixed: false });
-    assert.equal(targetNote, '過去同情境曾因點名同盟為襲擊目標被退，不要重蹈（也不得以「同盟P編號」等字樣在發言中提及同盟）。');
+    try {
+        const row = (t, phase, who, kind, hit, text) => ({
+            t, game: 'g0', meeting: 'wolf', phase, kind, hit, who, text, fixed: false,
+        });
+        appendPrecedents([
+            row(1, 'first_pre', 'P1/rin', 'grounding', '有問題', '舊句rin'),
+            row(2, 'first_pre', 'P2/ren', 'format', '缺旗標', '舊句ren'),
+            row(3, 'later_pre', 'P3/rin', 'lang', '英文超標', 'old words'),
+        ], file);
+        assert.equal(findCrossGamePrecedent('wolf', 'first_pre', 'rin', file)?.text, '舊句rin');
+        assert.equal(findCrossGamePrecedent('wolf', 'first_pre', 'yuko', file)?.text, '舊句ren');
+        assert.equal(findCrossGamePrecedent('wolf', 'expand', 'rin', file), null);
+        assert.equal(findCrossGamePrecedent('day', 'first_pre', 'rin', file), null);
+        const note = buildCrossGameNote(findCrossGamePrecedent('wolf', 'first_pre', 'rin', file));
+        assert.equal(note, '過去同情境曾因含「有問題」的無源指控被退，不要重蹈（也不得以換皮說法重述同一指控）。');
+        assert.ok(!note.includes('舊句rin'), '改版不再引前句全文');
+        const fmtNote = buildCrossGameNote(findCrossGamePrecedent('wolf', 'first_pre', 'yuko', file));
+        assert.equal(fmtNote, '過去同情境曾有format問題（缺旗標）被退，不要重蹈。');
+        const targetNote = buildCrossGameNote({ t: 9, game: 'g0', meeting: 'wolf', phase: 'first_pre', kind: 'target', hit: '同盟P1', who: 'P2/ren', text: '殺P1吧', fixed: false });
+        assert.equal(targetNote, '過去同情境曾因點名同盟為襲擊目標被退，不要重蹈（也不得以「同盟P編號」等字樣在發言中提及同盟）。');
+    }
+    finally {
+        try {
+            fs.rmSync(file, { force: true });
+        }
+        catch { /* 丟棄 */ }
+    }
+});
+test('跨局每種一條：同 meeting＋phase 按 t 取各 kind 最新 1，上限 5 固定序', () => {
+    const file = tmpLedger();
+    try {
+        const row = (t, kind, hit) => ({
+            t, game: 'g0', meeting: 'wolf', phase: 'first_pre', kind, hit, who: 'P1/rin', text: `${kind}${t}`, fixed: false,
+        });
+        appendPrecedents([
+            row(1, 'grounding', '舊'), row(5, 'grounding', '新'),
+            row(2, 'lang', '舊'), row(6, 'lang', '新'),
+            row(3, 'target', '舊'), row(7, 'target', '新'),
+            row(4, 'format', '舊'), row(8, 'format', '新'),
+            { t: 9, game: 'g0', meeting: 'wolf', phase: 'expand', kind: 'grounding', hit: '他局', who: 'P1/rin', text: '他局', fixed: false },
+        ], file);
+        const recents = findRecentPrecedentsByKind('wolf', 'first_pre', file);
+        assert.equal(recents.length, 4);
+        assert.deepEqual(recents.map((r) => r.kind), ['grounding', 'lang', 'target', 'format']);
+        assert.deepEqual(recents.map((r) => r.hit), ['新', '新', '新', '新']);
+        assert.deepEqual(findRecentPrecedentsByKind('wolf', 'expand', file).map((r) => r.kind), ['grounding']);
+        assert.deepEqual(findRecentPrecedentsByKind('day', 'first_pre', file), []);
+    }
+    finally {
+        try {
+            fs.rmSync(file, { force: true });
+        }
+        catch { /* 丟棄 */ }
+    }
+});
+test('跨局 lang 細分：簡體／英文各最新 1（英文不再被遮蔽）', () => {
+    const file = tmpLedger();
+    try {
+        const row = (t, hit) => ({
+            t, game: 'g0', meeting: 'wolf', phase: 'first_pre', kind: 'lang', hit, who: 'P1/rin', text: hit + t, fixed: false,
+        });
+        appendPrecedents([
+            row(1, '英文短詞(tonight)'), row(2, '簡體混入'),
+            row(3, '英文短詞(anyone)'), row(4, '簡體混入'),
+        ], file);
+        const recents = findRecentPrecedentsByKind('wolf', 'first_pre', file);
+        assert.equal(recents.length, 2);
+        assert.deepEqual(recents.map((r) => r.hit), ['簡體混入', '英文短詞(anyone)']);
+    }
+    finally {
+        try {
+            fs.rmSync(file, { force: true });
+        }
+        catch { /* 丟棄 */ }
+    }
 });
 test('三檢測：lang 邊界／target 三類／checkWolfDraft 命中放行', () => {
     assert.equal(isEnglishHeavy('tonight we should vote on P5'), true);
@@ -1611,7 +1756,7 @@ test('狼模式候選：僅存活 AI 狼（不含 seer/guard/真人）', async (
         sch.stop();
     }
 });
-test('狼模式：決策目標是同盟/自己 → 拒收重試，耗盡判資訊不足（不計 decided、不播出）', async () => {
+test('狼模式：決策目標是同盟/自己 → 單次拒收記賬棄權（不計 decided、不播出）', async () => {
     const s = createGameState(9);
     for (let i = 0; i < 9; i++)
         transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
@@ -1635,19 +1780,22 @@ test('狼模式：決策目標是同盟/自己 → 拒收重試，耗盡判資�
         sch.onPhaseEntered(s);
         await flushN(5);
         assert.equal(sch.flagStats().decided, 0, '同盟目標不應計為 decided');
-        assert.equal(sch.flagStats().uncertain, wolves.length, '耗盡應兜底資訊不足');
-        assert.ok(!events.some((e) => e.type === 'AI_WOLF_SPEECH_DONE'), '拒收耗盡不應播出');
+        assert.equal(sch.flagStats().uncertain, wolves.length, '單次拒收應兜底資訊不足');
+        assert.ok(!events.some((e) => e.type === 'AI_WOLF_SPEECH_DONE'), '拒收棄權不應播出');
         const retries = llm.calls.filter((c) => c.kind === 'pre_speech' && c.prompt.includes('被退回的草稿'));
-        assert.ok(retries.length > 0, '應帶自指版前科重試');
-        assert.ok(retries[0].prompt.includes('也不可是同盟'), '自指版前科照抄');
+        assert.equal(retries.length, 0, '新制無重試');
         const rows = readPrecedents(file);
         assert.ok(rows.length > 0 && rows.every((r) => r.kind === 'target' && r.fixed === false), '賬本記 target 且 fixed=false');
     }
     finally {
         sch.stop();
+        try {
+            fs.rmSync(file, { force: true });
+        }
+        catch { /* 丟棄 */ }
     }
 });
-test('前科迴圈：違規→重試帶前科→改過自新記 fixed=true', async () => {
+test('前科單次：違規→記賬 fixed=false→棄權（無重試）', async () => {
     const s = createGameState(9);
     for (let i = 0; i < 9; i++)
         transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
@@ -1672,19 +1820,22 @@ test('前科迴圈：違規→重試帶前科→改過自新記 fixed=true', asy
         sch.onPhaseEntered(s);
         await flushN(5);
         const retries = llm.calls.filter((c) => c.kind === 'pre_speech' && c.prompt.includes('被退回的草稿'));
-        assert.equal(retries.length, 1);
-        assert.ok(retries[0].prompt.includes('含「有問題」'), '違規版前科帶命中詞');
+        assert.equal(retries.length, 0, '新制無重試');
         const rows = readPrecedents(file);
         assert.equal(rows.length, 1);
         assert.equal(rows[0].kind, 'grounding');
-        assert.equal(rows[0].fixed, true);
+        assert.equal(rows[0].fixed, false);
         assert.ok(rows[0].who.startsWith('P'));
     }
     finally {
         sch.stop();
+        try {
+            fs.rmSync(file, { force: true });
+        }
+        catch { /* 丟棄 */ }
     }
 });
-test('兜底：2 attempt 仍犯→棄權（資訊不足、不播出）＋賬本 fixed=false', async () => {
+test('兜底：單次違規→棄權（資訊不足、不播出）＋賬本 fixed=false', async () => {
     const s = createGameState(9);
     for (let i = 0; i < 9; i++)
         transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
@@ -1705,17 +1856,21 @@ test('兜底：2 attempt 仍犯→棄權（資訊不足、不播出）＋賬本 
         sch.onPhaseEntered(s);
         await flushN(5);
         const pres = llm.calls.filter((c) => c.kind === 'pre_speech');
-        assert.equal(pres.length, wolves.length * 2, '每候選皆用滿 2 attempt');
-        assert.ok(pres.some((c) => c.prompt.includes('被退回的草稿')), '第二輪帶前科');
+        assert.equal(pres.length, wolves.length, '新制單次：每候選僅 1 稿');
+        assert.ok(!pres.some((c) => c.prompt.includes('被退回的草稿')), '新制無第二輪前科');
         assert.equal(sch.stashForTest(), null, '全棄權則無暫存');
         assert.ok(!events.some((e) => e.type === 'AI_WOLF_SPEECH_DONE'), '不播錯');
         assert.deepEqual(sch.flagStats(), { decided: 0, abstain: 0, uncertain: wolves.length });
         const rows = readPrecedents(file);
-        assert.equal(rows.length, wolves.length * 2);
+        assert.equal(rows.length, wolves.length);
         assert.ok(rows.every((r) => r.fixed === false && r.kind === 'grounding'));
     }
     finally {
         sch.stop();
+        try {
+            fs.rmSync(file, { force: true });
+        }
+        catch { /* 丟棄 */ }
     }
 });
 test('狼模式：expand 決策優先 — pre_speech 資訊不足但 expand 殺P → 計 decided 且播出後 AI_WOLF_READY', async () => {

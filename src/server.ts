@@ -71,6 +71,7 @@ export interface ServerOptions {
   llamaServerRelease?: string;     // env LLAMA_SERVER_RELEASE，預設 'b10361'
   llamaServerBinDir?: string;      // env LLAMA_SERVER_BIN_DIR，預設 getDefaultBinDir()
   llamaServerBinPath?: string;     // 測試 hook：直接指定 exe 路徑（跳過下載）
+  ledgerFile?: string;              // 賬本路徑覆寫（測試隔離；預設 <dataDir>/precedents.jsonl）
   backend?: BackendPreference;     // 測試 hook：手動後端覆寫（最高優先；預設讀持久化＋env）
   llamaGpuLayers?: number;         // env LLAMA_GPU_LAYERS；省略＝ defaultGpuLayers() 保守分級
 }
@@ -1418,6 +1419,8 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerHa
       },
       getState: () => engine!.getState(),
       llm: dispatcher,
+    }, {
+      ...(options.ledgerFile ? { ledgerFile: options.ledgerFile } : {}),
     });
 
     // 收斂直進投票（第 2 項）：討論結束不再靠發言數強制關閉，
