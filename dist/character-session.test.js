@@ -186,7 +186,7 @@ test('buildWolfPreSpeechPrompt：含襲擊/今晚語境 + 殺P 決策旗標指�
     assert.ok(prompt.includes('資訊不足'));
     assert.ok(prompt.includes('指名目標→殺P編號，未指名→資訊不足'), '平衡句 decided 出口');
     assert.ok(prompt.includes('全篇繁體中文，禁止任何英文'), 'pre 應明令繁體中文＋禁英文');
-    assert.ok(prompt.includes('直接提案目標'), '真對話指引');
+    assert.ok(prompt.includes('提案目標'), '真對話指引');
 });
 test('狼 prompt：極簡 pre 列合法目標（不含同盟）；expand 沿用舊約束', () => {
     const s = createGameState(9);

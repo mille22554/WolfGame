@@ -419,7 +419,9 @@ export function buildWolfPreSpeechPrompt(state: GameState, playerId: number): st
     `【你的個性】\n${buildWolfPersonalityLine(personaPrompt)}`,
     `【今晚的討論】\n${recent.length > 0 ? recent.join('\n') : '（尚無發言）'}`,
     dayBlock,
-    `【輸出】直接提案目標（例：「我覺得殺P7」，措辭自己決定）或說「跟票」「交棒」；不要複述規則、不要談論怎麼說話。格式：一句 5-30 字發言；另起一行 [決定:殺P編號] 或 [決定:資訊不足]（指名目標→殺P編號，未指名→資訊不足）。全篇繁體中文，禁止任何英文（tonight/kill/target/maybe）與簡體字。`,
+    recent.length === 0
+      ? `【輸出】提案目標（例：「我覺得殺P7」）。不要複述規則、不要談論怎麼說話。格式：一句 5-30 字發言；另起一行 [決定:殺P編號] 或 [決定:資訊不足]（指名目標→殺P編號，未指名→資訊不足）。全篇繁體中文，禁止任何英文（tonight/kill/target/maybe）與簡體字。`
+      : `【輸出】回應同伴的提案：同意就說「同意，殺P13」或「跟票P13」，不同意就提出你的目標（例：「我傾向P9」）。不要逐字重複同伴的句式。格式：一句 5-30 字發言；另起一行 [決定:殺P編號] 或 [決定:資訊不足]（指名目標→殺P編號，未指名→資訊不足）。全篇繁體中文，禁止任何英文（tonight/kill/target/maybe）與簡體字。`,
   ];
   let prompt = parts.filter((s) => s !== '').join('\n\n');
   // 超預算：先丟白天最舊，再丟今晚最舊（固定部分保留）
