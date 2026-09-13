@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>狼人殺 · Werewolf Online</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- 背景裝飾：地平線光暈、星空、月亮、狼的剪影 -->
+  <div class="sky" aria-hidden="true">
+    <div class="horizon"></div>
+    <div class="stars" id="stars"></div>
+    <div class="moon"></div>
+    <svg class="wolf" viewBox="0 0 240 160">
+      <path d="M 18 148
+               C 12 138, 14 124, 26 118
+               C 45 108, 70 104, 92 102
+               C 100 101, 106 96, 108 84
+               C 110 72, 110 58, 106 48
+               L 98 14
+               L 116 26
+               L 126 8
+               L 134 34
+               C 138 44, 142 58, 146 72
+               C 150 84, 160 92, 176 98
+               C 196 106, 214 116, 224 128
+               C 230 136, 231 144, 228 148
+               Z"/>
+    </svg>
+  </div>
+
+  <!-- ==================== 首頁 ==================== -->
+  <main class="page" id="page-home">
+    <header class="home-header">
+      <h1 class="title">狼人殺</h1>
+      <p class="subtitle">Werewolf Online</p>
+      <div class="divider"><i></i><span>🌙</span><i></i></div>
+    </header>
+
+    <div class="home-cards">
+      <!-- 建立房間 -->
+      <section class="card">
+        <h2>建立房間</h2>
+        <div class="field">
+          <label for="create-nick">暱稱</label>
+          <input type="text" id="create-nick" maxlength="12"
+                 placeholder="輸入你的暱稱" autocomplete="off">
+        </div>
+        <button class="btn btn-primary" id="btn-create">建立房間</button>
+      </section>
+
+      <!-- 加入房間 -->
+      <section class="card">
+        <h2>加入房間</h2>
+        <div class="field">
+          <label for="join-code">房間代碼</label>
+          <input type="text" id="join-code" maxlength="6"
+                 placeholder="6 位代碼" class="code-input" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="join-nick">暱稱</label>
+          <input type="text" id="join-nick" maxlength="12"
+                 placeholder="輸入你的暱稱" autocomplete="off">
+        </div>
+        <button class="btn btn-primary" id="btn-join">加入房間</button>
+        <p class="demo-hint">小密語：代碼 <code>999999</code> 可體驗「房間已滿」</p>
+      </section>
+    </div>
+
+    <footer class="home-footer">v0.1 · 前端畫面原型</footer>
+  </main>
+
+  <!-- ==================== 房間 / Lobby ==================== -->
+  <main class="page" id="page-room">
+    <!-- 頂欄 -->
+    <header class="room-topbar">
+      <div class="room-code">
+        <span class="label">房間代號</span>
+        <span class="code" id="room-code">------</span>
+      </div>
+      <div class="room-meta">
+        <span class="badge" id="spectate-badge" hidden>👁 觀戰中</span>
+        <span class="player-count"><b id="player-count">0</b> / <span id="player-max">15</span></span>
+        <button class="btn btn-ghost btn-leave" id="btn-leave">離開</button>
+      </div>
+    </header>
+
+    <div class="room-grid">
+      <!-- 左：玩家列表 -->
+      <aside class="panel panel-players">
+        <h3>🐺 玩家</h3>
+        <ul class="player-list" id="player-list"></ul>
+      </aside>
+
+      <!-- 中：聊天 -->
+      <section class="panel panel-chat">
+        <h3>💬 聊天</h3>
+        <div class="chat-messages" id="chat-messages"></div>
+        <div class="chat-input">
+          <input type="text" id="chat-text" maxlength="200"
+                 placeholder="說點什麼…" autocomplete="off">
+          <button class="btn btn-primary" id="btn-send">發送</button>
+        </div>
+      </section>
+
+      <!-- 右：房主設定 -->
+      <aside class="panel panel-settings">
+        <h3>⚙ 房間設定</h3>
+
+        <!-- 房主工具（只有房主看到） -->
+        <div class="settings-body" id="host-tools">
+          <div class="setting">
+            <label for="max-players">玩家人數上限</label>
+            <div class="setting-row">
+              <input type="range" id="max-players" min="2" max="18" step="1" value="15">
+              <span class="range-value" id="max-players-value">15</span>
+            </div>
+          </div>
+          <button class="btn btn-start" id="btn-start">開始遊戲</button>
+          <p class="hint">只有房主可以調整人數上限、開始遊戲與移出玩家。</p>
+        </div>
+
+        <!-- 非房主：等待中 -->
+        <div class="note-box" id="waiting-note" hidden>
+          <span>⏳ 等待房主開始遊戲<br>人齊後房主會按下「開始遊戲」</span>
+        </div>
+
+        <!-- 觀戰中 -->
+        <div class="note-box" id="spectate-note" hidden>
+          <span>👁 你正在以觀戰身份觀看<br>無法發言與操作</span>
+        </div>
+      </aside>
+    </div>
+  </main>
+
+  <!-- ==================== 過渡：加入房間中 ==================== -->
+  <div class="overlay" id="overlay-loading" hidden>
+    <div class="overlay-box">
+      <div class="spinner"></div>
+      <p>加入房間中…</p>
+    </div>
+  </div>
+
+  <!-- ==================== 過渡：房間已滿 ==================== -->
+  <div class="overlay" id="overlay-full" hidden>
+    <div class="overlay-box">
+      <p class="overlay-title">房間已滿</p>
+      <p>是否以觀戰身份進入？</p>
+      <div class="overlay-actions">
+        <button class="btn btn-primary" id="btn-spectate">以觀戰進入</button>
+        <button class="btn btn-ghost" id="btn-cancel">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
