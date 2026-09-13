@@ -266,16 +266,19 @@ try {
   if (flagRemnant.length > 0) {
     push(`- ⚠ 決策旗標洩漏進白板：${flagRemnant.length} 筆播出含旗標殘留（stripDecisionFlags 未清乾淨）。`);
   }
-  // H3/H4 同意接地：同意/跟票框架的目標必須在此前白板出現過（順序走查）
+  // H3/H4 同意接地：與 gate 邏輯一致（marker-anchored 提取 + 不 guard + 裸P seen set）
   const seenTargets = new Set();
   const coherenceViolations = [];
   for (const d of final.wolfDiscussionLog) {
-    const targets = [...d.text.matchAll(/P(\d+)/g)].map((m) => parseInt(m[1], 10));
-    const hasAgreement = /(同意|跟票|附議|就P)/.test(d.text);
-    if (hasAgreement && targets.length > 0 && !seenTargets.has(targets[0])) {
-      coherenceViolations.push({ playerId: d.playerId, target: targets[0], text: d.text });
+    const hasAgreement = /(?<!不)(同意|跟票|附議|就P)/.test(d.text);
+    if (hasAgreement) {
+      const markerM = d.text.match(/(?:同意[，,]?\s*(?:殺|殺掉)?|跟票|跟|附議|就)\s*P\s*(\d+)/);
+      const mentioned = markerM ? parseInt(markerM[1], 10) : null;
+      if (mentioned !== null && !seenTargets.has(mentioned)) {
+        coherenceViolations.push({ playerId: d.playerId, target: mentioned, text: d.text });
+      }
     }
-    for (const t of targets) seenTargets.add(t);
+    for (const bm of d.text.matchAll(/P(\d+)/g)) seenTargets.add(parseInt(bm[1], 10));
   }
   if (coherenceViolations.length > 0) {
     for (const v of coherenceViolations) {

@@ -275,22 +275,39 @@ export function collectWolfViolations(raw, st, pid) {
     }
     if (parsed.status === 'uncertain' && !hasExplicitFlag(raw))
         push('format', '缺旗標');
-    // H3/H4 同意接地：同意/跟票框架的目標必須出現在今日白板（先有提案才能同意；新目標不能用同意引出）
-    const AGREEMENT_RE = /(同意|跟票|附議|就P)/;
-    if (AGREEMENT_RE.test(raw) && textTarget) {
-        const mentioned = parseInt(textTarget[1] ?? textTarget[2], 10);
-        const boardTargets = new Set();
-        for (const entry of st.wolfDiscussionLog) {
-            if (entry.day !== st.day)
-                continue;
-            WOLF_TARGET_RE.lastIndex = 0;
-            let m;
-            while ((m = WOLF_TARGET_RE.exec(entry.text)) !== null) {
-                boardTargets.add(parseInt(m[1] ?? m[2], 10));
-            }
+    // 文旗不一致（文本靜默）：文本（不含旗標行）完全未提目標編號但 flag decided → 隱藏無接地投票
+    if (parsed.status === 'decided' && parsed.target !== 'abstain') {
+        const textPortion = raw.replace(/\[決定[:：][^\]]*\]/g, '').trim();
+        if (!textPortion.includes(`P${parsed.target}`)) {
+            push('format', `文旗不一致（文本未提P${parsed.target}）`);
         }
-        if (!boardTargets.has(mentioned)) {
-            push('coherence', `同意接地失敗（P${mentioned} 未在白板上出現過）`);
+    }
+    // H3/H4 同意接地：同意/跟票/附議/就 框架的目標必須出現在白板（先有提案才能同意）
+    // 不 guard：「不同意」不視為同意框架
+    const AGREEMENT_RE = /(?<!不)(同意|跟票|附議|就P)/;
+    if (AGREEMENT_RE.test(raw)) {
+        // 從同意標記上下文提取目標（跟票P13/就P13/附議P13 無殺動詞，verb-anchored 抓不到）
+        const markerTarget = raw.match(/(?:同意[，,]?\s*(?:殺|殺掉)?|跟票|跟|附議|就)\s*P\s*(\d+)/);
+        const mentioned = markerTarget
+            ? parseInt(markerTarget[1], 10)
+            : textTarget ? parseInt(textTarget[1] ?? textTarget[2], 10) : null;
+        if (mentioned !== null) {
+            // 白板目標集合（跨天：prompt 顯示近期白板含前夜，gate 應一致）
+            const boardTargets = new Set();
+            for (const entry of st.wolfDiscussionLog) {
+                WOLF_TARGET_RE.lastIndex = 0;
+                let m;
+                while ((m = WOLF_TARGET_RE.exec(entry.text)) !== null) {
+                    boardTargets.add(parseInt(m[1] ?? m[2], 10));
+                }
+                // 也收裸 P#（非動詞錨定），與 prompt 顯示的白板一致
+                for (const bm of entry.text.matchAll(/P(\d+)/g)) {
+                    boardTargets.add(parseInt(bm[1], 10));
+                }
+            }
+            if (!boardTargets.has(mentioned)) {
+                push('coherence', `同意接地失敗（P${mentioned} 未在白板上出現過）`);
+            }
         }
     }
     return out;

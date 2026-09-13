@@ -381,8 +381,8 @@ test('全量多筆：一稿命中 N 種記 N 筆（處置仍取首個，舊單�
   const legal = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF)!.id;
   const multi = `我懷疑他昨晚的行動很可疑 maybe\n[決定:殺P${legal}]`;
   const all = collectWolfViolations(multi, s, wolf.id);
-  assert.deepEqual(all.map((e) => e.kind), ['lang', 'grounding', 'grounding']);
-  assert.deepEqual(all.map((e) => e.hit), ['英文短詞(maybe)', '可疑', '昨晚的行動']);
+  assert.deepEqual(all.map((e) => e.kind), ['lang', 'grounding', 'grounding', 'format']);
+  assert.deepEqual(all.map((e) => e.hit).slice(0, 3), ['英文短詞(maybe)', '可疑', '昨晚的行動']);
   const first = checkWolfDraft(multi, s, wolf.id)!;
   assert.equal(first.kind, 'lang');
   assert.equal(first.hit, '英文短詞(maybe)');
@@ -547,6 +547,77 @@ test('WOLF_TARGET_RE 新動詞三分支＋lastIndex 重置', () => {
   const focusAlly = checkWolfDraft(`建議聚焦P${ally.id}之處。\n[決定:資訊不足]`, s, wolf.id)!;
   assert.equal(focusAlly.kind, 'target');
   assert.equal(checkWolfDraft(`建議聚焦P${legal}之處。\n[決定:殺P${legal}]`, s, wolf.id), null);
+});
+
+test('H3/H4 同意接地：跟票/就/附議 無接地目標 → 拒收', () => {
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF)!;
+  const wolves = s.players.filter((p) => p.role === Role.WEREWOLF);
+  // 找合法目標（非狼非自己）：一個在白板上、一個不在
+  const onBoard = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF && p.id !== wolf.id)!.id;
+  const offBoard = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF && p.id !== wolf.id && p.id !== onBoard)!.id;
+  // 白板只有 onBoard 的提案
+  s.wolfDiscussionLog.push({ playerId: onBoard, text: `我覺得殺P${onBoard}。`, day: s.day });
+  // 跟票P{offBoard}：offBoard 未在白板上 → coherence 拒收
+  const r1 = checkWolfDraft(`跟票P${offBoard}。\n[決定:殺P${offBoard}]`, s, wolf.id)!;
+  assert.equal(r1.kind, 'coherence');
+  // 就P{offBoard}：同上
+  const r2 = checkWolfDraft(`就P${offBoard}。\n[決定:殺P${offBoard}]`, s, wolf.id)!;
+  assert.equal(r2.kind, 'coherence');
+  // 附議P{offBoard}：同上
+  const r3 = checkWolfDraft(`附議P${offBoard}。\n[決定:殺P${offBoard}]`, s, wolf.id)!;
+  assert.equal(r3.kind, 'coherence');
+  // 同意，殺P{onBoard}：onBoard 在白板上 → 放行
+  assert.equal(checkWolfDraft(`同意，殺P${onBoard}。\n[決定:殺P${onBoard}]`, s, wolf.id), null);
+  // 跟票P{onBoard}：onBoard 在白板上 → 放行
+  assert.equal(checkWolfDraft(`跟票P${onBoard}。\n[決定:殺P${onBoard}]`, s, wolf.id), null);
+  // 就P{onBoard}：onBoard 在白板上 → 放行
+  assert.equal(checkWolfDraft(`就P${onBoard}。\n[決定:殺P${onBoard}]`, s, wolf.id), null);
+});
+
+test('H3/H4 不 guard：不同意殺P{legal} 不觸發 coherence 拒收', () => {
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF)!;
+  const wolves = s.players.filter((p) => p.role === Role.WEREWOLF);
+  // 找一個合法目標（非狼、非自己）
+  const legal = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF && p.id !== wolf.id)!.id;
+  s.wolfDiscussionLog.push({ playerId: legal, text: `我覺得殺P${legal}。`, day: s.day });
+  // 「不同意殺P{legal}」：不 guard 生效 → 不觸發 coherence；文本目標=旗標目標=legal → 放行
+  assert.equal(checkWolfDraft(`不同意殺P${legal}。\n[決定:殺P${legal}]`, s, wolf.id), null);
+  // 對比：「同意殺P{other}」(P{other} 不在白板) → coherence 拒收
+  const other = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF && p.id !== wolf.id && p.id !== legal)!.id;
+  const rej = checkWolfDraft(`同意殺P${other}。\n[決定:殺P${other}]`, s, wolf.id)!;
+  assert.equal(rej.kind, 'coherence');
+});
+
+test('文旗不一致（文本靜默）：文本未提目標編號但 flag decided → 拒收', () => {
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF)!;
+  const target = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF && p.id !== wolf.id)!.id;
+  // 文本完全沒提 P{target}，但 flag 說殺P{target}
+  const r = checkWolfDraft(`好，就按這個辦。\n[決定:殺P${target}]`, s, wolf.id)!;
+  assert.equal(r.kind, 'format');
+  assert.ok(r.hit.includes(`P${target}`));
+  // 文本有提 P{target}（即使無動詞錨定）→ 放行
+  assert.equal(checkWolfDraft(`我選P${target}。\n[決定:殺P${target}]`, s, wolf.id), null);
+});
+
+test('H3/H4 跨天白板：前夜提案今日仍可同意', () => {
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF)!;
+  // 前夜（day=0）的白板有 P7
+  s.wolfDiscussionLog.push({ playerId: 5, text: '我覺得殺P7。', day: 0 });
+  // 今日（day=1）同意殺P7 → 跨天放行（prompt 顯示近期白板含前夜）
+  s.day = 1;
+  assert.equal(checkWolfDraft(`同意，殺P7。\n[決定:殺P7]`, s, wolf.id), null);
 });
 
 test('跨局 t 排序：不依文件序，取 t 最新', () => {
