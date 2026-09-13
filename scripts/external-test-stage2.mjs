@@ -197,7 +197,6 @@ try {
       const draftDecided = draft && draft.status === 'decided' && draft.target !== 'abstain';
       const expandDecided = c.decision.status === 'decided' && c.decision.target !== 'abstain';
       if (draftDecided && expandDecided && c.decision.target !== draft.target) {
-        // 與 scheduler 矛盾防護一致：沿用草稿
         contradictions.push({
           round: roundsSorted.indexOf(bv) + 1,
           playerId: c.playerId,
@@ -209,6 +208,12 @@ try {
         finalEffective.set(c.playerId, { target: c.decision.target, round: roundsSorted.indexOf(bv) + 1, via: 'expand' });
       } else if (draftDecided) {
         finalEffective.set(c.playerId, { target: draft.target, round: roundsSorted.indexOf(bv) + 1, via: '草稿' });
+      }
+    }
+    // 狼模式無 expand：draft 即最終決策（fallback）
+    for (const [pid, draft] of drafts) {
+      if (!finalEffective.has(pid) && draft.status === 'decided' && draft.target !== 'abstain') {
+        finalEffective.set(pid, { target: draft.target, round: roundsSorted.indexOf(bv) + 1, via: '草稿' });
       }
     }
   }
@@ -260,6 +265,24 @@ try {
     /\[決定[:：]/.test(d.text) || /(^|\n)\s*決定\s*[:：]\s*(投P\s*\d+|殺P\s*\d+|棄票|資訊不足)\s*($|\n)/.test(d.text));
   if (flagRemnant.length > 0) {
     push(`- ⚠ 決策旗標洩漏進白板：${flagRemnant.length} 筆播出含旗標殘留（stripDecisionFlags 未清乾淨）。`);
+  }
+  // H3/H4 同意接地：同意/跟票框架的目標必須在此前白板出現過（順序走查）
+  const seenTargets = new Set();
+  const coherenceViolations = [];
+  for (const d of final.wolfDiscussionLog) {
+    const targets = [...d.text.matchAll(/P(\d+)/g)].map((m) => parseInt(m[1], 10));
+    const hasAgreement = /(同意|跟票|附議|就P)/.test(d.text);
+    if (hasAgreement && targets.length > 0 && !seenTargets.has(targets[0])) {
+      coherenceViolations.push({ playerId: d.playerId, target: targets[0], text: d.text });
+    }
+    for (const t of targets) seenTargets.add(t);
+  }
+  if (coherenceViolations.length > 0) {
+    for (const v of coherenceViolations) {
+      push(`- ⚠ H3/H4 同意接地違規：P${v.playerId}「${v.text}」— P${v.target} 未在此前白板出現過（hard violation）。`);
+    }
+  } else {
+    push(`- H3/H4 同意接地：0 違規（所有同意/跟票目標皆在此前白板出現過）。`);
   }
   // 簡體字檢查：驗白板（最終播出，scheduler 正規化後）為準；
   // raw 殘留僅供參考（正規化前原文，預期仍有零星混入，已被清洗）。

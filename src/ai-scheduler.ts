@@ -189,7 +189,7 @@ function hasExplicitFlag(text: string): boolean {
 }
 
 /** 狼草稿拒收檢查結果 */
-export interface WolfRejection { kind: 'grounding' | 'format' | 'lang' | 'target'; hit: string; note: string; }
+export interface WolfRejection { kind: 'grounding' | 'format' | 'lang' | 'target' | 'coherence'; hit: string; note: string; }
 
 /** 英文超標：ASCII 字母占比過半即拒（全英文拒、中英夾雜不過半放行） */
 export function isEnglishHeavy(text: string): boolean {
@@ -279,7 +279,31 @@ export function collectWolfViolations(raw: string, st: GameState, pid: number): 
     const mentionedLegal = illegalWolfTarget(st, pid, parseInt(textTarget[1] ?? textTarget[2], 10)) === '';
     if (mentionedLegal) push('format', '文旗分歧（文本提名／旗標資訊不足）');
   }
+  // 文旗不一致：文本與旗標皆 decided 但目標不同（4B 模型常見：文本說 P1 旗標寫 P12）
+  if (textTarget && parsed.status === 'decided' && parsed.target !== 'abstain') {
+    const textNum = parseInt(textTarget[1] ?? textTarget[2], 10);
+    if (textNum !== parsed.target) {
+      push('format', `文旗不一致（文本P${textNum}／旗標P${parsed.target}）`);
+    }
+  }
   if (parsed.status === 'uncertain' && !hasExplicitFlag(raw)) push('format', '缺旗標');
+  // H3/H4 同意接地：同意/跟票框架的目標必須出現在今日白板（先有提案才能同意；新目標不能用同意引出）
+  const AGREEMENT_RE = /(同意|跟票|附議|就P)/;
+  if (AGREEMENT_RE.test(raw) && textTarget) {
+    const mentioned = parseInt(textTarget[1] ?? textTarget[2], 10);
+    const boardTargets = new Set<number>();
+    for (const entry of st.wolfDiscussionLog) {
+      if (entry.day !== st.day) continue;
+      WOLF_TARGET_RE.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = WOLF_TARGET_RE.exec(entry.text)) !== null) {
+        boardTargets.add(parseInt(m[1] ?? m[2], 10));
+      }
+    }
+    if (!boardTargets.has(mentioned)) {
+      push('coherence', `同意接地失敗（P${mentioned} 未在白板上出現過）`);
+    }
+  }
   return out;
 }
 
@@ -292,6 +316,7 @@ export function checkWolfDraft(raw: string, st: GameState, pid: number): WolfRej
   if (first.kind === 'lang') return { kind: 'lang', hit: first.hit, note: buildLangRetryNote(raw, true) };
   if (first.kind === 'grounding') return { kind: 'grounding', hit: first.hit, note: buildViolationRetryNote(raw, first.hit, firstNight) };
   if (first.kind === 'target') return { kind: 'target', hit: first.hit, note: buildTargetRetryNote(raw, pid) };
+  if (first.kind === 'coherence') return { kind: 'coherence', hit: first.hit, note: `你的同意目標（${first.hit.replace('同意接地失敗（', '').replace('）', '')}）不在白板紀錄中。同意只能針對上面已出現的編號；新目標要當新提案講（「我覺得殺P編號」）。` };
   return { kind: 'format', hit: first.hit, note: buildFormatRetryNote(raw) };
 }
 
@@ -663,67 +688,26 @@ export class SpeechScheduler implements AIScheduler {
       const winner = this.selectWinner(cur2, drafts, scores);
       const commitVersion = this.ctx.getState().boardVersion;
 
-      // ---- EXPAND：產出後清洗 flag（廉價保險），再暫存 ----
-      let expandPrompt = isWolfMode
-        ? buildWolfExpandPrompt(cur2, winner.playerId, winner.text)
-        : buildExpandPrompt(cur2, winner.playerId, winner.text);
-      // 前科注入：expand 前科（phase='expand'）跨局積累
-      if (isWolfMode) {
-        try {
-          const expandRecents = findRecentPrecedentsByKind('wolf', 'expand', this.options.ledgerFile);
-          if (expandRecents.length > 0) expandPrompt = `${expandPrompt}\n\n${expandRecents.map(buildCrossGameNote).join('\n')}`;
-        } catch { /* 無賬本照舊 */ }
-      }
+      // ---- EXPAND：狼模式直接沿用草稿（免 LLM 呼叫，消滅 drift 來源）；日模式走 expand 管線 ----
       let full: string;
       let decision: AIDecision = winner.decision;
-      try {
-        const rawExpand = await this.fetchExpandText(expandPrompt, isWolfMode, winner.playerId, cur2);
-        if (isWolfMode && rawExpand === '') {
-          // expand 兜底：單次違規→退回草稿（草稿已通過驗證；防 scheduleRetry 無限重試）
-          decision = this.updateDecision(winner.playerId, winner.decision);
-          full = stripSpeechPrefix(winner.text);
-        } else {
-          const expandDecision = parseDecisionFlag(rawExpand);
-          full = stripSpeechPrefix(stripDecisionFlags(rawExpand));
-          // 狼模式：expand 是對外最終承諾，其決策優先（無效目標→棄票）；expand 未決定→沿用草稿決策。
-          // 熔斷 a：expand 文本目標對齊——草稿有目標時文本出現異數即漂移，整份退回草稿（文本恐已漂移）。
-          // 矛盾防護：expand 旗標目標與草稿決策目標不一致 → 退回草稿文本＋草稿決策（草稿已通過驗證）
-          if (isWolfMode) {
-            const draft = winner.decision;
-            const draftTarget = draft.status === 'decided' && draft.target !== 'abstain' ? draft.target : null;
-          let drift = false;
-          if (draftTarget !== null) {
-            WOLF_TARGET_RE.lastIndex = 0;
-            let tm: RegExpExecArray | null;
-            while ((tm = WOLF_TARGET_RE.exec(rawExpand)) !== null) {
-              if (parseInt(tm[1] ?? tm[2], 10) !== draftTarget) { drift = true; break; }
-            }
+      if (isWolfMode) {
+        // 狼模式：草稿已通過全量驗證（lang/grounding/target/coherence/format），直接播出
+        decision = this.updateDecision(winner.playerId, winner.decision);
+        full = stripSpeechPrefix(stripDecisionFlags(winner.text));
+      } else {
+        const expandPrompt = buildExpandPrompt(cur2, winner.playerId, winner.text);
+        try {
+          const rawExpand = await this.fetchExpandText(expandPrompt, false, winner.playerId, cur2);
+          if (rawExpand === '') {
+            full = stripSpeechPrefix(winner.text);
+          } else {
+            full = stripSpeechPrefix(stripDecisionFlags(rawExpand));
           }
-            if (drift) {
-              decision = this.updateDecision(winner.playerId, winner.decision);
-              // 退回草稿文本時同樣要剝 P 前綴（與正常路徑一致），否則播出確認比對失敗會誤判為拒絕
-              full = stripSpeechPrefix(winner.text);
-            } else if (expandDecision.status === 'decided' && expandDecision.target !== 'abstain') {
-              if (draftTarget === null || expandDecision.target === draftTarget) {
-                decision = this.updateDecision(winner.playerId, this.validateWolfTarget(cur2, winner.playerId, expandDecision));
-              } else {
-                decision = this.updateDecision(winner.playerId, winner.decision);
-                full = stripSpeechPrefix(winner.text);
-              }
-            }
-            // 文旗分歧救回（選 A）：expand 無旗標但文本提名→轉 decided（兌現「中控自行判讀」；非法 validate 擋回 abstain）
-            if (decision.status === 'uncertain' && !hasExplicitFlag(rawExpand)) {
-              WOLF_TARGET_RE.lastIndex = 0;
-              const nominate = WOLF_TARGET_RE.exec(rawExpand);
-              if (nominate) {
-                decision = this.updateDecision(winner.playerId, this.validateWolfTarget(cur2, winner.playerId, { status: 'decided', target: parseInt(nominate[1] ?? nominate[2], 10) }));
-              }
-            }
-          }
+        } catch {
+          this.scheduleRetry();
+          return;
         }
-      } catch {
-        this.scheduleRetry();
-        return;
       }
       if (token !== this.prodToken) return;
       if (this.ctx.getState().phase !== 'DAY_DISCUSSION_OPEN' && this.ctx.getState().phase !== 'NIGHT_DISCUSSION_OPEN') return;

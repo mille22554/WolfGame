@@ -47,7 +47,7 @@ export declare function buildViolationRetryNote(prevDraft: string, hitSeed: stri
 export declare function buildFormatRetryNote(prevDraft: string): string;
 /** 狼草稿拒收檢查結果 */
 export interface WolfRejection {
-    kind: 'grounding' | 'format' | 'lang' | 'target';
+    kind: 'grounding' | 'format' | 'lang' | 'target' | 'coherence';
     hit: string;
     note: string;
 }
