@@ -65,7 +65,7 @@
 | 前端 | 輕量 SPA（待選：React / Vue / 原生） | 頁面簡單（首頁 + 房間），不需重框架 |
 | 實時通訊 | WebSocket（沿用 main 的 `ws` 模式） | 打字交流需要低延遲 bidirectional |
 | 狀態持久化 | 記憶體為主 + 可选 JSON 快照 | MVP 不需資料庫；伺服器重啟房間重置 |
-| 部署 | 待討論（裸機 pm2 / Docker / systemd） | — |
+| 部署 | nginx（靜態）+ cloudflared tunnel | 前端已上線；後端 WebSocket 待實作後改用 pm2/systemd |
 
 ### 與 main 分支的關係
 - **共用**：遊戲規則常數（角色定義、勝利條件）、類型定義（`Role`、`PlayerState`）、可能的 prompt 模板
@@ -127,10 +127,30 @@
 | M3 | 觀戰模式 + 房間超時清理 | 加入已開始房間 → 只讀；空房 30 分鐘自動消失 |
 | M4 | 遊戲設定面板（房主調人數等）+ START_GAME 事件 | 房主可設參數、觸發開始（遊戲邏輯後續接） |
 
-## 10. 待確認
+## 10. 部署現狀
 
-- [ ] 前端框架偏好（React 沿用 / Vue / 原生 JS）
-- [ ] 是否需要 HTTPS（域名 + 憑證）還是先 HTTP 內網測試
-- [ ] 部署環境：有 GPU 嗎？（影響後續 LLM 推理方案）
+| 項目 | 狀態 |
+|---|---|
+| URL | `https://morowin.win/wolfgame/` |
+| 伺服器 | `192.168.0.94`（Ubuntu，user `morowin`） |
+| 靜態檔案 | `/var/www/wolf/`（nginx root） |
+| 反向代理 | nginx（port 80）→ cloudflared tunnel → `morowin.win` |
+| 隧道 | cloudflared service（systemd），routes：`morowin.win`→`:80`、`api.morowin.win`→`:9090` |
+| 前端 | 已上線（純 HTML/CSS/JS，無 build step） |
+| 後端 | 尚未實作（WebSocket 房間伺服器待 M1） |
+
+### 更新前端部署流程
+
+```bash
+# 本機修改 ubuntu-web/ 後：
+scp -i ~/.ssh/id_ed25519_mille22554 ubuntu-web/* morowin@192.168.0.94:/var/www/wolf/
+# 或 git push 後在 server 上 git pull + 手動 copy
+```
+
+## 11. 待確認
+
+- [x] 前端框架：原生 HTML/CSS/JS（已定）
+- [x] HTTPS：cloudflared tunnel 已提供（已定）
+- [x] 部署環境：Ubuntu 伺服器，無 GPU（已定）
 - [ ] 房間代碼長度：6 位夠嗎？（72^6 ≈ 1.4 億組合，MVP 足夠）
 - [ ] 是否需要在首頁顯示「進行中的房間」列表（讓玩家可以瀏覽加入）
