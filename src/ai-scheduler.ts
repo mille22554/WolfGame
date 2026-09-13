@@ -601,11 +601,11 @@ export class SpeechScheduler implements AIScheduler {
   }
 
   /** 草稿候選：存活 AI 除上輪發言者外全員（狼模式僅存活狼 AI）；為空 → 不生產（等真人）。
-   *  已就緒（voteReady/wolfReady）者排除：已表態者不再草稿，降噪＋省算力＋加速收斂；
-   *  收回就緒（人類）會重回候選。唯一候選時不斷線（避免單人僵局）。 */
+    *  狼模式不排除 ready 狼——ready 與發言解耦，每輪全狼發言直到目標一致；
+    *  白天模式仍排除 voteReady（已投票者不再草稿）。唯一候選時不斷線（避免單人僵局）。 */
   private candidateIds(state: GameState): number[] {
     const isWolf = state.phase === 'NIGHT_DISCUSSION_OPEN';
-    const readySet = isWolf ? state.wolfReady : state.voteReady;
+    const readySet = isWolf ? [] as number[] : state.voteReady;
     const aliveAI = getAlivePlayers(state.players)
       .filter((p) => p.controlledBy === 'ai' && (!isWolf || p.role === Role.WEREWOLF))
       .filter((p) => !readySet.includes(p.id));

@@ -38,10 +38,11 @@ function aliveIds(s: GameState): number[] {
   return s.players.filter((p) => p.alive).map((p) => p.id);
 }
 
-/** 狼密談收斂：全存活狼 ready → NIGHT_COLLECTING（新流程：START_GAME/ADVANCE_DAY 先進 NIGHT_DISCUSSION_OPEN） */
+/** 狼密談收斂：全存活狼目標一致 → wolfReady → NIGHT_COLLECTING */
 function convergeWolfDiscussion(s: GameState): void {
   for (const p of s.players) {
     if (p.alive && p.role === Role.WEREWOLF) {
+      s.wolfDiscussionLog.push({ playerId: p.id, text: '殺P2', day: s.day });
       const r = transition(s, p.controlledBy === 'human'
         ? { type: 'HUMAN_WOLF_READY', playerId: p.id }
         : { type: 'AI_WOLF_READY', playerId: p.id });
@@ -416,6 +417,7 @@ test('ADVANCE_DAY → 狼會議紀錄跨日保留（不清空，prompt 層以分
   // 收斂進夜晚 → timeout → 結算 → 公布 → 推進下一天
   for (const p of s.players) {
     if (p.alive && p.role === Role.WEREWOLF) {
+      s.wolfDiscussionLog.push({ playerId: p.id, text: '殺P3', day: s.day });
       transition(s, { type: 'AI_WOLF_READY', playerId: p.id });
     }
   }
@@ -485,11 +487,13 @@ test('全存活狼 ready → NIGHT_COLLECTING + 開夜晚 gate；部分 ready �
   const wolves = s.players.filter((p) => p.alive && p.role === Role.WEREWOLF);
   assert.ok(wolves.length >= 2);
   const first = wolves[0];
+  s.wolfDiscussionLog.push({ playerId: first.id, text: '殺P2', day: s.day });
   transition(s, first.controlledBy === 'human'
     ? { type: 'HUMAN_WOLF_READY', playerId: first.id }
     : { type: 'AI_WOLF_READY', playerId: first.id });
   assert.equal(s.phase, 'NIGHT_DISCUSSION_OPEN');
   for (const w of wolves.slice(1)) {
+    s.wolfDiscussionLog.push({ playerId: w.id, text: '殺P2', day: s.day });
     transition(s, w.controlledBy === 'human'
       ? { type: 'HUMAN_WOLF_READY', playerId: w.id }
       : { type: 'AI_WOLF_READY', playerId: w.id });
@@ -503,9 +507,7 @@ test('HUMAN_WOLF_UNREADY → 移出 wolfReady', () => {
   const s = joinedState(9);
   transition(s, { type: 'START_GAME' });
   const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
-  transition(s, wolf.controlledBy === 'human'
-    ? { type: 'HUMAN_WOLF_READY', playerId: wolf.id }
-    : { type: 'AI_WOLF_READY', playerId: wolf.id });
+  s.wolfReady.push(wolf.id);
   assert.ok(s.wolfReady.includes(wolf.id));
   assert.equal(transition(s, { type: 'HUMAN_WOLF_UNREADY', playerId: wolf.id }).accepted, true);
   assert.ok(!s.wolfReady.includes(wolf.id));

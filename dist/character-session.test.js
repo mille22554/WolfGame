@@ -10,14 +10,25 @@ function joinAll(state, count) {
     for (let i = 0; i < count; i++)
         transition(state, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
 }
-/** 狼密談收斂：全存活狼 ready → NIGHT_COLLECTING（新流程：START_GAME/ADVANCE_DAY 先進 NIGHT_DISCUSSION_OPEN） */
+/** 狼密談收斂：全存活狼目標一致 → wolfReady → NIGHT_COLLECTING */
 function convergeWolfDiscussion(s) {
     for (const p of s.players) {
         if (p.alive && p.role === Role.WEREWOLF) {
-            const r = transition(s, p.controlledBy === 'human'
-                ? { type: 'HUMAN_WOLF_READY', playerId: p.id }
-                : { type: 'AI_WOLF_READY', playerId: p.id });
-            assert.equal(r.accepted, true);
+            s.wolfDiscussionLog.push({ playerId: p.id, text: '殺P2', day: s.day });
+        }
+    }
+    let aiDispatched = false;
+    for (const p of s.players) {
+        if (p.alive && p.role === Role.WEREWOLF) {
+            if (p.controlledBy === 'human') {
+                const r = transition(s, { type: 'HUMAN_WOLF_READY', playerId: p.id });
+                assert.equal(r.accepted, true);
+            }
+            else if (!aiDispatched) {
+                const r = transition(s, { type: 'AI_WOLF_READY', playerId: p.id });
+                assert.equal(r.accepted, true);
+                aiDispatched = true;
+            }
         }
     }
     assert.equal(s.phase, 'NIGHT_COLLECTING');

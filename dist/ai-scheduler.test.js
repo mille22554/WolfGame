@@ -61,14 +61,26 @@ class MockLLM {
         return this.calls.map((c) => c.kind);
     }
 }
-/** 狼密談收斂：全存活狼 ready → NIGHT_COLLECTING（新流程：START_GAME/ADVANCE_DAY 先進 NIGHT_DISCUSSION_OPEN） */
+/** 狼密談收斂：全存活狼目標一致 → wolfReady → NIGHT_COLLECTING */
 function convergeWolfDiscussion(s) {
     for (const p of s.players) {
         if (p.alive && p.role === Role.WEREWOLF) {
-            const r = transition(s, p.controlledBy === 'human'
-                ? { type: 'HUMAN_WOLF_READY', playerId: p.id }
-                : { type: 'AI_WOLF_READY', playerId: p.id });
-            assert.equal(r.accepted, true);
+            s.wolfDiscussionLog.push({ playerId: p.id, text: '殺P2', day: s.day });
+        }
+    }
+    let aiDispatched = false;
+    for (const p of s.players) {
+        if (p.alive && p.role === Role.WEREWOLF) {
+            if (p.controlledBy === 'human') {
+                const r = transition(s, { type: 'HUMAN_WOLF_READY', playerId: p.id });
+                assert.equal(r.accepted, true);
+            }
+            else if (!aiDispatched) {
+                // 一次 AI_WOLF_READY 即觸發 consensus → 全狼入 ready + 轉 phase
+                const r = transition(s, { type: 'AI_WOLF_READY', playerId: p.id });
+                assert.equal(r.accepted, true);
+                aiDispatched = true;
+            }
         }
     }
     assert.equal(s.phase, 'NIGHT_COLLECTING');
@@ -108,8 +120,14 @@ function makeCtx(state, llm) {
                     state.wolfDiscussionLog.push({ playerId: e.playerId, text: stripSpeechPrefix(e.text), day: state.day });
                     state.boardVersion++;
                 }
-                if (e.type === 'AI_WOLF_READY' && !state.wolfReady.includes(e.playerId)) {
-                    state.wolfReady.push(e.playerId);
+                if (e.type === 'AI_WOLF_READY') {
+                    if (!state.wolfReady.includes(e.playerId))
+                        state.wolfReady.push(e.playerId);
+                    // 全狼 ready → 轉 phase（模擬 transition 的 phase 轉換）
+                    const allWolves = state.players.filter((p) => p.alive && p.role === Role.WEREWOLF);
+                    if (allWolves.every((w) => state.wolfReady.includes(w.id))) {
+                        state.phase = 'NIGHT_COLLECTING';
+                    }
                 }
                 if (e.type === 'HUMAN_SPEAK')
                     state.boardVersion++;

@@ -259,6 +259,21 @@ export function allAliveWolvesReady(state: GameState): boolean {
   return wolves.length > 0 && wolves.every((w) => state.wolfReady.includes(w.id));
 }
 
+/** 檢查所有存活狼當天最新發言目標是否一致（用於 wolfReady 入場判定） */
+export function wolfTargetConsensus(state: GameState): boolean {
+  const wolves = getAliveWerewolves(state.players);
+  if (wolves.length === 0) return false;
+  const targets = new Set<string>();
+  for (const w of wolves) {
+    const entries = state.wolfDiscussionLog.filter((d) => d.playerId === w.id && d.day === state.day);
+    if (entries.length === 0) return false;
+    const match = entries[entries.length - 1].text.match(/P(\d+)/);
+    if (!match) return false;
+    targets.add(match[1]);
+  }
+  return targets.size === 1;
+}
+
 /** 掛機接管門檻：未定真人在連續 N 次 AI 發言無活動後視為掛機（transition 計數、engine 執行接管） */
 export const IDLE_TAKEOVER_THRESHOLD = 10;
 
@@ -544,8 +559,17 @@ export function transition(state: GameState, event: GameEvent): TransitionResult
         if (!player || !player.alive) {
           return { state, effects: [], accepted: false, reason: `P${event.playerId} not alive` };
         }
-        if (player.role === Role.WEREWOLF && !state.wolfReady.includes(event.playerId)) {
-          state.wolfReady.push(event.playerId);
+        if (player.role === Role.WEREWOLF) {
+          if (event.type === 'AI_WOLF_READY') {
+            // AI 狼：ready 與發言解耦——目標一致才入 ready（全狼同時入）
+            if (wolfTargetConsensus(state)) {
+              for (const w of getAliveWerewolves(state.players)) {
+                if (!state.wolfReady.includes(w.id)) state.wolfReady.push(w.id);
+              }
+            }
+          } else if (!state.wolfReady.includes(event.playerId)) {
+            state.wolfReady.push(event.playerId);
+          }
         }
         delete state.idleCounts[event.playerId];   // 已 ready 直接清空並列入計數對象外
         const effects: Effect[] = [];

@@ -17,6 +17,8 @@ export declare function buildLobbySnapshot(state: GameState): LobbySnapshot;
 export declare function allAlivePlayersReady(state: GameState): boolean;
 /** 狼人會議收斂檢查：所有存活狼皆在 wolfReady → 開夜晚 gate */
 export declare function allAliveWolvesReady(state: GameState): boolean;
+/** 檢查所有存活狼當天最新發言目標是否一致（用於 wolfReady 入場判定） */
+export declare function wolfTargetConsensus(state: GameState): boolean;
 /** 掛機接管門檻：未定真人在連續 N 次 AI 發言無活動後視為掛機（transition 計數、engine 執行接管） */
 export declare const IDLE_TAKEOVER_THRESHOLD = 10;
 /** 掛機接管執行（engine 在 IDLE_TAKEOVER effect 到達時呼叫；沿用斷線路徑語義） */
