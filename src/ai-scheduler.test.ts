@@ -241,7 +241,7 @@ test('黑名單：命中回傳種子、未命中回空字串', () => {
   assert.equal(findGroundingViolation(normalizeTraditional('我認為P3可能在说谎')), '說謊');
 });
 
-test('黑名單擴詞至 54：嫌疑／疑慮／異常／懷疑／觀察其行為／特別的表現／藏了一些事情／暗中觀察／沉默／舉動／不像村人／可能是村人／不太像村人／關鍵人物／行動比較獨立／都不說話／單薄／有點孤獨／藏有疑點／異動／孤僻命中', () => {
+test('黑名單擴詞至 58：嫌疑／疑慮／異常／懷疑／觀察其行為／特別的表現／藏了一些事情／暗中觀察／沉默／舉動／不像村人／可能是村人／不太像村人／關鍵人物／行動比較獨立／都不說話／單薄／有點孤獨／藏有疑點／異動／孤僻命中', () => {
   assert.equal(findGroundingViolation('P5和P12可能有嫌疑'), '嫌疑');
   assert.equal(findGroundingViolation('他的行動引起我的疑慮'), '疑慮');
   assert.equal(findGroundingViolation('他昨晚的行動好像有點異常'), '異常');
@@ -269,7 +269,7 @@ test('黑名單擴詞至 54：嫌疑／疑慮／異常／懷疑／觀察其行�
   assert.equal(findGroundingViolation('可能藏有疑點'), '藏有疑點');
   assert.equal(findGroundingViolation('稍有異動'), '異動');
   assert.equal(findGroundingViolation('這個人看起來比較孤僻'), '孤僻');
-  assert.equal(GROUNDING_VIOLATION_SEEDS.length, 54);
+  assert.equal(GROUNDING_VIOLATION_SEEDS.length, 58);
 });
 
 test('角色錯亂 5 種子（新制）：提防襲擊／被襲擊／小心防守／守護／保護同盟命中；暴露系不收', () => {
@@ -293,6 +293,10 @@ test('角色錯亂 5 種子（新制）：提防襲擊／被襲擊／小心防�
   assert.equal(findGroundingViolation('今晚要小心防備，避免出事'), '防備');
   assert.equal(findGroundingViolation('避免被當成目標，低調一點'), '被當成目標');
   assert.equal(findGroundingViolation('他在夜間行動時躲躲藏藏的'), '躲躲藏藏');
+  assert.equal(findGroundingViolation('今晚需防範潛在威脅，謹慎行事'), '防範');
+  assert.equal(findGroundingViolation('局勢有潛在威脅，不可大意'), '潛在威脅');
+  assert.equal(findGroundingViolation('他可能藏著什麼陰謀，要小心'), '藏著什麼陰謀');
+  assert.equal(findGroundingViolation('他表現比較急躁，可能是目標'), '急躁');
   assert.equal(findGroundingViolation('避免暴露身份，小心行事'), '');
   assert.equal(findGroundingViolation('避免暴露同盟，謹慎選擇'), '');
   assert.equal(findGroundingViolation('我們需掩蓋身份，選擇安全目標'), '');
@@ -436,7 +440,7 @@ test('簡體映射補字：决动无体击优处围变员倾论没异应们线�
   assert.equal(normalizeTraditional('随便猜一下'), '隨便猜一下');
 });
 
-test('文本目標掃描：同盟／自指拒收、合法放行', () => {
+test('文本目標掃描：同盟／自指拒收、合法 decided 放行（合法＋uncertain 走文旗分歧）', () => {
   const s = createGameState(9);
   for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
   transition(s, { type: 'START_GAME' });
@@ -451,7 +455,26 @@ test('文本目標掃描：同盟／自指拒收、合法放行', () => {
   assert.equal(selfRej.kind, 'target');
   assert.ok(selfRej.hit.startsWith('自指P'));
   assert.ok(selfRej.note.includes(`不能是你自己（P${wolf.id}）`));
-  assert.equal(checkWolfDraft(`今晚目標是P${legal}。\n[決定:資訊不足]`, s, wolf.id), null);
+  assert.equal(checkWolfDraft(`今晚目標是P${legal}。\n[決定:殺P${legal}]`, s, wolf.id), null);
+});
+
+test('文旗分歧：文本提名合法＋uncertain 拒收（flag 權威不轉換）', () => {
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  const wolves = s.players.filter((p) => p.alive && p.role === Role.WEREWOLF);
+  const wolf = wolves[0];
+  const ally = wolves[1] ?? wolves[0];
+  const legal = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF)!.id;
+  const split = checkWolfDraft(`今晚殺P${legal}好。\n[決定:資訊不足]`, s, wolf.id)!;
+  assert.equal(split.kind, 'format');
+  assert.equal(split.hit, '文旗分歧（文本提名／旗標資訊不足）');
+  const badOnly = collectWolfViolations(`今晚殺P${ally.id}好。\n[決定:資訊不足]`, s, wolf.id);
+  assert.deepEqual(badOnly.map((e) => `${e.kind}/${e.hit}`), [`target/同盟P${ally.id}`]);
+  assert.equal(checkWolfDraft('我沒想法。\n[決定:資訊不足]', s, wolf.id), null);
+  assert.equal(checkWolfDraft(`今晚殺P${legal}好。\n[決定:殺P${legal}]`, s, wolf.id), null);
+  const p2style = collectWolfViolations(`今晚要小心防備，殺P${legal}。\n[決定:資訊不足]`, s, wolf.id);
+  assert.deepEqual(p2style.map((e) => `${e.kind}/${e.hit}`), ['grounding/防備', 'format/文旗分歧（文本提名／旗標資訊不足）']);
 });
 
 test('WOLF_TARGET_RE 新動詞三分支＋lastIndex 重置', () => {
@@ -466,7 +489,7 @@ test('WOLF_TARGET_RE 新動詞三分支＋lastIndex 重置', () => {
   assert.equal(stalk.kind, 'target');
   const duel = checkWolfDraft(`對P${ally.id}下手吧。\n[決定:資訊不足]`, s, wolf.id)!;
   assert.equal(duel.kind, 'target');
-  assert.equal(checkWolfDraft(`針對P${legal}吧。\n[決定:資訊不足]`, s, wolf.id), null);
+  assert.equal(checkWolfDraft(`針對P${legal}吧。\n[決定:殺P${legal}]`, s, wolf.id), null);
   const again = checkWolfDraft(`今晚盯住P${ally.id}吧。\n[決定:資訊不足]`, s, wolf.id)!;
   assert.equal(again.kind, 'target');
   assert.equal(again.hit, stalk.hit);
@@ -479,28 +502,35 @@ test('WOLF_TARGET_RE 新動詞三分支＋lastIndex 重置', () => {
   assert.equal(gazeTight.kind, 'target');
   const duel2 = checkWolfDraft(`對P${ally.id}動手吧。\n[決定:資訊不足]`, s, wolf.id)!;
   assert.equal(duel2.kind, 'target');
-  // 殺掉分支（17 動詞；「殺掉P編號」同走 group1）
+  // 殺掉分支（20 動詞；「殺掉P編號」同走 group1）
   const killOff = checkWolfDraft(`今晚的目標是殺掉P${ally.id}。\n[決定:資訊不足]`, s, wolf.id)!;
   assert.equal(killOff.kind, 'target');
-  assert.equal(checkWolfDraft(`今晚的目標是殺掉P${legal}。\n[決定:資訊不足]`, s, wolf.id), null);
-  // 活捉分支（17 動詞；修「目標是活捉P編號」自指逃逸）
+  assert.equal(checkWolfDraft(`今晚的目標是殺掉P${legal}。\n[決定:殺P${legal}]`, s, wolf.id), null);
+  // 活捉分支（20 動詞；修「目標是活捉P編號」自指逃逸）
   const seizeAlly = checkWolfDraft(`今晚的目標是活捉P${ally.id}。\n[決定:資訊不足]`, s, wolf.id)!;
   assert.equal(seizeAlly.kind, 'target');
   const seizeSelf = checkWolfDraft(`今晚的目標是活捉P${wolf.id}。\n[決定:資訊不足]`, s, wolf.id)!;
   assert.equal(seizeSelf.kind, 'target');
   assert.ok(seizeSelf.hit.startsWith('自指P'));
-  assert.equal(checkWolfDraft(`今晚的目標是活捉P${legal}。\n[決定:資訊不足]`, s, wolf.id), null);
-  // 該殺／要殺分支（16 動詞；補 rescue 文本提名缺口）
+  assert.equal(checkWolfDraft(`今晚的目標是活捉P${legal}。\n[決定:殺P${legal}]`, s, wolf.id), null);
+  // 該殺／要殺分支（20 動詞；補 rescue 文本提名缺口）
   const shouldKill = checkWolfDraft(`我們該殺P${ally.id}吧。\n[決定:資訊不足]`, s, wolf.id)!;
   assert.equal(shouldKill.kind, 'target');
   const wantKill = checkWolfDraft(`今晚要殺P${ally.id}。\n[決定:資訊不足]`, s, wolf.id)!;
   assert.equal(wantKill.kind, 'target');
-  assert.equal(checkWolfDraft(`我們該殺P${legal}吧。\n[決定:資訊不足]`, s, wolf.id), null);
-  // kill 分支（17 動詞；英文先判 lang，動詞分支為縱深——單測鎖定順序）
+  assert.equal(checkWolfDraft(`我們該殺P${legal}吧。\n[決定:殺P${legal}]`, s, wolf.id), null);
+  // kill 分支（20 動詞；英文先判 lang，動詞分支為縱深——單測鎖定順序）
   const killEn = checkWolfDraft(`今晚 kill P${ally.id} 吧。\n[決定:資訊不足]`, s, wolf.id)!;
   assert.equal(killEn.kind, 'lang');
   assert.equal(killEn.hit, '英文短詞(kill)');
   assert.equal(checkWolfDraft(`今晚 kill P${legal} 吧。\n[決定:資訊不足]`, s, wolf.id)!.kind, 'lang');
+  // 聚焦族分支（20 動詞；聚焦合法＋uncertain 走文旗分歧）
+  const focusLegal = checkWolfDraft(`建議聚焦P${legal}之處。\n[決定:資訊不足]`, s, wolf.id)!;
+  assert.equal(focusLegal.kind, 'format');
+  assert.equal(focusLegal.hit, '文旗分歧（文本提名／旗標資訊不足）');
+  const focusAlly = checkWolfDraft(`建議聚焦P${ally.id}之處。\n[決定:資訊不足]`, s, wolf.id)!;
+  assert.equal(focusAlly.kind, 'target');
+  assert.equal(checkWolfDraft(`建議聚焦P${legal}之處。\n[決定:殺P${legal}]`, s, wolf.id), null);
 });
 
 test('跨局 t 排序：不依文件序，取 t 最新', () => {
@@ -597,6 +627,7 @@ test('英文表命中：整詞才拒', () => {
   assert.equal(findEnglishWord('今晚需謹慎選 Target，避免冤假錯情'), 'target');
   assert.equal(findEnglishWord('targeting P12 先盯著'), 'targeting');
   assert.equal(findEnglishWord('今晚 kill P15 吧'), 'kill');
+  assert.equal(findEnglishWord('成功 eliminate 村人'), 'eliminate');
   assert.equal(findEnglishWord('目標是P5'), '');
   assert.equal(findEnglishWord('我覺得P5不錯'), '');
   assert.equal(findEnglishWord('沒有英文'), '');

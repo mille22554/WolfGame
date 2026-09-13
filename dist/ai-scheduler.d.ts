@@ -67,7 +67,7 @@ export declare function findFirstNightFabrication(text: string): string;
 export declare function simplifiedRejection(rawRaw: string): string;
 /** 英文短詞檢查：整詞命中回傳該詞，未命中回傳空字串 */
 export declare function findEnglishWord(text: string): string;
-/** 狼草稿全量收集：一稿命中 N 種全收（順序：英文→種子→fab→目標→格式；同 kind+hit 去重），供單次多筆記賬 */
+/** 狼草稿全量收集：一稿命中 N 種全收（順序：英文→種子→fab→目標→文旗分歧→格式；同 kind+hit 去重），供單次多筆記賬 */
 export declare function collectWolfViolations(raw: string, st: GameState, pid: number): {
     kind: string;
     hit: string;

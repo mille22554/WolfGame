@@ -34,7 +34,7 @@ export const MAX_UNCERTAIN_ROUNDS = 50;
 export const DECISION_FLAG_RE = /\[決定[:：](投P\s*\d+|殺P\s*\d+|棄票|資訊不足)\]/g;
 const DECISION_TARGET_RE = /(?:投|殺)P\s*(\d+)/;
 /** 狼目標正則（文本掃描＋漂移＋救回共用；group1 動詞+P、group2 對P下手/動手） */
-const WOLF_TARGET_RE = /(?:殺|殺掉|攻擊|襲擊|針對|目標是|鎖定|盯住|盯著|盯上|盯緊|優先處理|先處理|活捉|該殺|要殺|kill)\s*P\s*(\d+)|對\s*P\s*(\d+)\s*(?:下手|動手)/g;
+const WOLF_TARGET_RE = /(?:殺|殺掉|攻擊|襲擊|針對|目標是|鎖定|盯住|盯著|盯上|盯緊|優先處理|先處理|活捉|該殺|要殺|kill|聚焦|考慮|優先|建議)\s*P\s*(\d+)|對\s*P\s*(\d+)\s*(?:下手|動手)/g;
 /** 寬鬆層：決策語境的投 Pn（動詞＋編號才認，避免討論提及誤判） */
 const LOOSE_VOTE_RES = [
     /我投\s*P?\s*(\d+)/,
@@ -144,7 +144,7 @@ export const GROUNDING_VIOLATION_SEEDS = [
     '不太像村人', '關鍵人物', '行動比較獨立', '都不說話', '單薄', '有點孤獨', '藏有疑點', '異動', '孤僻',
     '提防襲擊', '被襲擊', '小心防守', '守護', '保護同盟', '反應', '有點特別', '沒人說話', '藏有陰謀',
     '提防', '成為攻擊目標', '成為狼人目標', '過於活躍', '關鍵位置',
-    '不太自然', '不自然', '不太對勁', '防備', '被當成目標', '躲躲藏藏',
+    '不太自然', '不自然', '不太對勁', '防備', '被當成目標', '躲躲藏藏', '防範', '潛在威脅', '藏著什麼陰謀', '急躁',
 ];
 /** 黑名單命中：回傳命中的種子，未命中回傳空字串（比對已正規化文本） */
 export function findGroundingViolation(text) {
@@ -216,7 +216,7 @@ export function simplifiedRejection(rawRaw) {
     return buildLangRetryNote(rawRaw);
 }
 /** 英文短詞：ASCII 字母占比啟發式漏網的英文殘留，整詞命中即拒（target/kill 置尾，targeting 優先） */
-const ENGLISH_WORDS = ['anyone', 'maybe', 'members', 'everyone', 'someone', 'ok', 'yes', 'no', 'please', 'thanks', 'targeting', 'behaviour', 'behavior', 'tonight', 'target', 'kill'];
+const ENGLISH_WORDS = ['anyone', 'maybe', 'members', 'everyone', 'someone', 'ok', 'yes', 'no', 'please', 'thanks', 'targeting', 'behaviour', 'behavior', 'tonight', 'target', 'kill', 'eliminate'];
 /** 英文短詞檢查：整詞命中回傳該詞，未命中回傳空字串 */
 export function findEnglishWord(text) {
     for (const w of ENGLISH_WORDS) {
@@ -225,7 +225,7 @@ export function findEnglishWord(text) {
     }
     return '';
 }
-/** 狼草稿全量收集：一稿命中 N 種全收（順序：英文→種子→fab→目標→格式；同 kind+hit 去重），供單次多筆記賬 */
+/** 狼草稿全量收集：一稿命中 N 種全收（順序：英文→種子→fab→目標→文旗分歧→格式；同 kind+hit 去重），供單次多筆記賬 */
 export function collectWolfViolations(raw, st, pid) {
     const out = [];
     const push = (kind, hit) => {
@@ -259,6 +259,12 @@ export function collectWolfViolations(raw, st, pid) {
         const badTarget = illegalWolfTarget(st, pid, parsed.target);
         if (badTarget)
             push('target', badTarget);
+    }
+    // 文旗分歧：文本提名合法目標卻旗標資訊不足（草稿口徑：flag 權威不轉換，只拒收記賬；balanced 句違反證據）
+    if (textTarget && parsed.status === 'uncertain') {
+        const mentionedLegal = illegalWolfTarget(st, pid, parseInt(textTarget[1] ?? textTarget[2], 10)) === '';
+        if (mentionedLegal)
+            push('format', '文旗分歧（文本提名／旗標資訊不足）');
     }
     if (parsed.status === 'uncertain' && !hasExplicitFlag(raw))
         push('format', '缺旗標');
@@ -626,9 +632,18 @@ export class SpeechScheduler {
             const winner = this.selectWinner(cur2, drafts, scores);
             const commitVersion = this.ctx.getState().boardVersion;
             // ---- EXPAND：產出後清洗 flag（廉價保險），再暫存 ----
-            const expandPrompt = isWolfMode
+            let expandPrompt = isWolfMode
                 ? buildWolfExpandPrompt(cur2, winner.playerId, winner.text)
                 : buildExpandPrompt(cur2, winner.playerId, winner.text);
+            // 前科注入：expand 前科（phase='expand'）跨局積累
+            if (isWolfMode) {
+                try {
+                    const expandRecents = findRecentPrecedentsByKind('wolf', 'expand', this.options.ledgerFile);
+                    if (expandRecents.length > 0)
+                        expandPrompt = `${expandPrompt}\n\n${expandRecents.map(buildCrossGameNote).join('\n')}`;
+                }
+                catch { /* 無賬本照舊 */ }
+            }
             let full;
             let decision = winner.decision;
             try {
