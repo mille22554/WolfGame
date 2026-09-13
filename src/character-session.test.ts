@@ -325,8 +325,8 @@ test('expand 潤飾約束：狼/白天 expand 均鎖定草稿目標與理由，�
   transition(s, { type: 'START_GAME' });
   const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
   const wolfExpand = buildWolfExpandPrompt(s, wolf.id, 'P1：「今晚先襲擊P3，直覺。」');
-  assert.ok(wolfExpand.includes('不得新增草稿中沒有的任何內容'), '狼 expand 應禁止新增任何內容');
-  assert.ok(wolfExpand.includes('理由、描述、觀察、感受都不行'), '狼 expand 應明確列舉禁止類型');
+  assert.ok(wolfExpand.includes('不要新增任何內容'), '狼 expand 應禁止新增任何內容');
+  assert.ok(wolfExpand.includes('不要改寫'), '狼 expand 應禁止改寫');
   assert.ok(wolfExpand.includes('直接沿用草稿原文'), '狼 expand 應允許沿用草稿');
   assert.ok(!wolfExpand.includes('說不上為什麼'), '狼 expand 不應含固定句式示例（防照搬）');
   const dayExpand = buildExpandPrompt(s, aliveIds(s)[0], 'P1：「我比較在意P3的說法。」');
@@ -372,7 +372,7 @@ test('狼 expand 首夜後夜皆免旗標', () => {
   transition(s, { type: 'START_GAME' });
   const wolf = s.players.find((p) => p.role === Role.WEREWOLF && p.alive)!;
   const first = buildWolfExpandPrompt(s, wolf.id, 'P1：「今晚先襲擊P3。」');
-  assert.ok(first.includes('【你的預發言草稿】P1：「今晚先襲擊P3。」 如果草稿已經夠自然'), '首夜附加段照抄（空格連接）');
+  assert.ok(first.includes('【你的預發言草稿】P1：「今晚先襲擊P3。」\n直接沿用草稿原文'), '首夜附加段照抄');
   assert.ok(first.includes('本發言不需要附加決策旗標——目標沿用草稿，中控自行判讀。'), '首夜 expand 應免旗標');
   s.wolfDiscussionLog.push({ playerId: wolf.id, text: '先殺P5，直覺', day: s.day });
   const later = buildWolfExpandPrompt(s, wolf.id, 'P1：「先殺P5，直覺。」');

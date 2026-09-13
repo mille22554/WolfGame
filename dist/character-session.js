@@ -379,7 +379,7 @@ export function buildWolfPreSpeechPrompt(state, playerId) {
         dayBlock,
         recent.length === 0
             ? `【輸出】提案目標（例：「我覺得殺P7」）。不要複述規則、不要談論怎麼說話。格式：一句 5-30 字發言；另起一行 [決定:殺P編號] 或 [決定:資訊不足]（指名目標→殺P編號，未指名→資訊不足）。全篇繁體中文，禁止任何英文（tonight/kill/target/maybe）與簡體字。`
-            : `【輸出】回應同伴的提案：同意就說「同意，殺P13」或「跟票P13」，不同意就提出你的目標（例：「我傾向P9」）。不要逐字重複同伴的句式。格式：一句 5-30 字發言；另起一行 [決定:殺P編號] 或 [決定:資訊不足]（指名目標→殺P編號，未指名→資訊不足）。全篇繁體中文，禁止任何英文（tonight/kill/target/maybe）與簡體字。`,
+            : `【輸出】回應同伴：同意→「同意，殺P13」「跟票P13」；目標不同→點出分歧（例：「P10說P12，我選P13」）。措辭必須與上面每句都不同。格式：一句 5-30 字發言；另起一行 [決定:殺P編號] 或 [決定:資訊不足]（指名目標→殺P編號，未指名→資訊不足）。全篇繁體中文，禁止任何英文（tonight/kill/target/maybe）與簡體字。`,
     ];
     let prompt = parts.filter((s) => s !== '').join('\n\n');
     // 超預算：先丟白天最舊，再丟今晚最舊（固定部分保留）
@@ -407,8 +407,8 @@ export function buildWolfExpandPrompt(state, playerId, preSpeech) {
     const boardDecl = isFirstNight ? emptyBoardDeclaration() : nonEmptyBoardDeclaration();
     const targetSeg = `【今晚可襲擊的存活玩家】${wolfValidTargets(state, playerId)}（你的同盟不在其中，襲擊同盟是規則上不可能的行為，不要考慮；守衛保護誰是秘密，不得以任何守衛相關猜測（無論「會保護P編號」或「沒有保護跡象」）作為選擇或排除目標的理由）`;
     // 首夜／後夜附加段：expand 皆免旗標（目標沿用草稿）；後夜其他文字不動
-    const firstAppend = `【你的預發言草稿】${preSpeech} 如果草稿已經夠自然，直接沿用草稿原文即可。若要改寫：10-25 字，只調整語氣（像說話而非書面），不得新增草稿中沒有的任何內容（理由、描述、觀察、感受都不行）。本發言不需要附加決策旗標——目標沿用草稿，中控自行判讀。`;
-    const laterAppend = `【你的預發言草稿】${preSpeech}\n如果草稿已經夠自然，直接沿用草稿原文即可。若要改寫：10-25 字，只調整語氣（像說話而非書面），不得新增草稿中沒有的任何內容（理由、描述、觀察、感受都不行）。本發言不需要附加決策旗標——目標沿用草稿，中控自行判讀。`;
+    const firstAppend = `【你的預發言草稿】${preSpeech}\n直接沿用草稿原文，不要改寫、不要新增任何內容。本發言不需要附加決策旗標——目標沿用草稿，中控自行判讀。`;
+    const laterAppend = `【你的預發言草稿】${preSpeech}\n直接沿用草稿原文，不要改寫、不要新增任何內容。本發言不需要附加決策旗標——目標沿用草稿，中控自行判讀。`;
     return `${base}\n\n${boardDecl}\n\n${targetSeg}\n\n${isFirstNight ? firstAppend : laterAppend}`;
 }
 //# sourceMappingURL=character-session.js.map
