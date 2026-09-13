@@ -52,6 +52,19 @@ const DECISION_TARGET_RE = /(?:投|殺)P\s*(\d+)/;
 /** 狼目標正則（文本掃描＋漂移＋救回共用；group1 動詞+P、group2 對P下手/動手） */
 const WOLF_TARGET_RE = /(?:殺|殺掉|攻擊|襲擊|針對|目標是|鎖定|盯住|盯著|盯上|盯緊|優先處理|先處理|活捉|該殺|要殺|kill|聚焦|考慮|優先|建議)\s*P\s*(\d+)|對\s*P\s*(\d+)\s*(?:下手|動手)/g;
 
+/** negation-aware 文本目標提取：跳過「不/別」修飾的匹配（不同意殺P1 ≠ 提名 P1） */
+function findTextTarget(raw: string): RegExpExecArray | null {
+  WOLF_TARGET_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = WOLF_TARGET_RE.exec(raw)) !== null) {
+    // 向前看 3 字：覆蓋「不殺」「別殺」「不同意殺」「不攻擊」等否定結構
+    const window = raw.slice(Math.max(0, m.index - 3), m.index);
+    if (window.includes('不') || window.includes('別')) continue;
+    return m;
+  }
+  return null;
+}
+
 /** 寬鬆層：決策語境的投 Pn（動詞＋編號才認，避免討論提及誤判） */
 const LOOSE_VOTE_RES: RegExp[] = [
   /我投\s*P?\s*(\d+)/,
@@ -262,9 +275,9 @@ export function collectWolfViolations(raw: string, st: GameState, pid: number): 
     const fab = findFirstNightFabrication(raw);
     if (fab) push('grounding', fab);
   }
-  // 文本層目標掃描：文本點名即驗合法性（旗標之外第二道門；否定修飾低機率誤傷可接受）
-  WOLF_TARGET_RE.lastIndex = 0;
-  const textTarget = WOLF_TARGET_RE.exec(raw);
+  // 文本層目標掃描：文本點名即驗合法性（旗標之外第二道門）
+  // negation-aware：跳過「不/別」修飾的動詞匹配（不同意殺P1 ≠ 提名 P1）
+  const textTarget = findTextTarget(raw);
   if (textTarget) {
     const badMention = illegalWolfTarget(st, pid, parseInt(textTarget[1] ?? textTarget[2], 10));
     if (badMention) push('target', badMention);

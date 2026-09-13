@@ -614,11 +614,84 @@ test('H3/H4 跨天白板：前夜提案今日仍可同意', () => {
   for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
   transition(s, { type: 'START_GAME' });
   const wolf = s.players.find((p) => p.role === Role.WEREWOLF)!;
-  // 前夜（day=0）的白板有 P7
-  s.wolfDiscussionLog.push({ playerId: 5, text: '我覺得殺P7。', day: 0 });
-  // 今日（day=1）同意殺P7 → 跨天放行（prompt 顯示近期白板含前夜）
+  const target = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF && p.id !== wolf.id)!.id;
+  // 前夜（day=0）的白板有目標提案
+  s.wolfDiscussionLog.push({ playerId: wolf.id + 1, text: `我覺得殺P${target}。`, day: 0 });
+  // 今日（day=1）同意殺目標 → 跨天放行（prompt 顯示近期白板含前夜）
   s.day = 1;
-  assert.equal(checkWolfDraft(`同意，殺P7。\n[決定:殺P7]`, s, wolf.id), null);
+  assert.equal(checkWolfDraft(`同意，殺P${target}。\n[決定:殺P${target}]`, s, wolf.id), null);
+});
+
+// ─── 分歧場景：狼之間意見相左 ───
+
+test('分歧：不同意+新提案（我選）→ 放行（非同意框架）', () => {
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF)!;
+  const onBoard = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF && p.id !== wolf.id)!.id;
+  const newTarget = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF && p.id !== wolf.id && p.id !== onBoard)!.id;
+  // 白板有 P{onBoard} 的提案
+  s.wolfDiscussionLog.push({ playerId: onBoard, text: `我覺得殺P${onBoard}。`, day: s.day });
+  // 「不同意殺P{onBoard}，我選P{newTarget}」→ 不 guard 擋掉第一個同意；我選非 marker → 放行
+  assert.equal(checkWolfDraft(`不同意殺P${onBoard}，我選P${newTarget}。\n[決定:殺P${newTarget}]`, s, wolf.id), null);
+});
+
+test('分歧：不同意+跟票未接地目標 → 拒收', () => {
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF)!;
+  const onBoard = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF && p.id !== wolf.id)!.id;
+  const offBoard = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF && p.id !== wolf.id && p.id !== onBoard)!.id;
+  s.wolfDiscussionLog.push({ playerId: onBoard, text: `我覺得殺P${onBoard}。`, day: s.day });
+  // 「不同意殺P{onBoard}，跟票P{offBoard}」→ 跟票P{offBoard} 觸發 marker，offBoard 不在白板 → 拒收
+  const r = checkWolfDraft(`不同意殺P${onBoard}，跟票P${offBoard}。\n[決定:殺P${offBoard}]`, s, wolf.id)!;
+  assert.equal(r.kind, 'coherence');
+});
+
+test('分歧：同句雙目標（不同意P12+同意殺P8），P8未接地 → 拒收', () => {
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF)!;
+  const onBoard = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF && p.id !== wolf.id)!.id;
+  const offBoard = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF && p.id !== wolf.id && p.id !== onBoard)!.id;
+  s.wolfDiscussionLog.push({ playerId: onBoard, text: `我覺得殺P${onBoard}。`, day: s.day });
+  // 「我不同意殺P{onBoard}，我同意殺P{offBoard}」→ 第一個同意被不 guard 擋；第二個同意殺P{offBoard} 觸發 → 拒收
+  const r = checkWolfDraft(`我不同意殺P${onBoard}，我同意殺P${offBoard}。\n[決定:殺P${offBoard}]`, s, wolf.id)!;
+  assert.equal(r.kind, 'coherence');
+});
+
+test('分歧：多輪收斂（P1提P12→P3提P8→P1改口同意P8）', () => {
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  const wolves = s.players.filter((p) => p.role === Role.WEREWOLF);
+  const wolf1 = wolves[0]!;
+  const wolf2 = wolves[1]!;
+  const targetA = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF && p.id !== wolf1.id && p.id !== wolf2.id)!.id;
+  const targetB = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF && p.id !== wolf1.id && p.id !== wolf2.id && p.id !== targetA)!.id;
+  // Round 1: wolf1 提 P{targetA}
+  s.wolfDiscussionLog.push({ playerId: wolf1.id, text: `我選P${targetA}。`, day: s.day });
+  // Round 1: wolf2 提 P{targetB}（分歧）
+  s.wolfDiscussionLog.push({ playerId: wolf2.id, text: `我選P${targetB}。`, day: s.day });
+  // Round 2: wolf1 改口同意 wolf2 的提案 → P{targetB} 已在白板上 → 放行
+  assert.equal(checkWolfDraft(`好吧，我同意殺P${targetB}。\n[決定:殺P${targetB}]`, s, wolf1.id), null);
+  // Round 2: wolf2 堅持自己的 → 我選 非 marker → 放行
+  assert.equal(checkWolfDraft(`我還是覺得P${targetB}最好。\n[決定:殺P${targetB}]`, s, wolf2.id), null);
+});
+
+test('分歧：連詞「跟」不觸發 marker（P3跟P4關係密切+同意殺P2）', () => {
+  const s = createGameState(9);
+  for (let i = 0; i < 9; i++) transition(s, { type: 'CLIENT_JOIN', name: `P${i + 1}` });
+  transition(s, { type: 'START_GAME' });
+  const wolf = s.players.find((p) => p.role === Role.WEREWOLF)!;
+  const onBoard = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF && p.id !== wolf.id)!.id;
+  const unrelated = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF && p.id !== wolf.id && p.id !== onBoard)!.id;
+  s.wolfDiscussionLog.push({ playerId: onBoard, text: `我覺得殺P${onBoard}。`, day: s.day });
+  // 「P${unrelated}跟P${onBoard}關係密切，我同意殺P${onBoard}」→ 連詞跟不觸發；同意殺P{onBoard} 接地 → 放行
+  assert.equal(checkWolfDraft(`P${unrelated}跟P${onBoard}關係密切，我同意殺P${onBoard}。\n[決定:殺P${onBoard}]`, s, wolf.id), null);
 });
 
 test('跨局 t 排序：不依文件序，取 t 最新', () => {
