@@ -287,19 +287,19 @@ export function collectWolfViolations(raw: string, st: GameState, pid: number): 
     }
   }
   if (parsed.status === 'uncertain' && !hasExplicitFlag(raw)) push('format', '缺旗標');
-  // 文旗不一致（文本靜默）：文本（不含旗標行）完全未提目標編號但 flag decided → 隱藏無接地投票
+  // 文旗不一致（文本靜默）：文本（不含旗標）完全未提目標編號但 flag decided → 隱藏無接地投票
   if (parsed.status === 'decided' && parsed.target !== 'abstain') {
-    const textPortion = raw.replace(/\[決定[:：][^\]]*\]/g, '').trim();
-    if (!textPortion.includes(`P${parsed.target}`)) {
+    const textPortion = stripDecisionFlags(raw).trim();
+    if (!new RegExp(`P${parsed.target}(?!\\d)`).test(textPortion)) {
       push('format', `文旗不一致（文本未提P${parsed.target}）`);
     }
   }
   // H3/H4 同意接地：同意/跟票/附議/就 框架的目標必須出現在白板（先有提案才能同意）
-  // 不 guard：「不同意」不視為同意框架
+  // 不 guard：「不同意」不視為同意框架；marker 不含獨立「跟」（連詞高頻，會劫持左起首匹配）
   const AGREEMENT_RE = /(?<!不)(同意|跟票|附議|就P)/;
   if (AGREEMENT_RE.test(raw)) {
     // 從同意標記上下文提取目標（跟票P13/就P13/附議P13 無殺動詞，verb-anchored 抓不到）
-    const markerTarget = raw.match(/(?:同意[，,]?\s*(?:殺|殺掉)?|跟票|跟|附議|就)\s*P\s*(\d+)/);
+    const markerTarget = raw.match(/(?<!不)(?:同意[，,]?\s*(?:殺|殺掉)?|跟票|附議|就)\s*P\s*(\d+)/);
     const mentioned = markerTarget
       ? parseInt(markerTarget[1], 10)
       : textTarget ? parseInt(textTarget[1] ?? textTarget[2], 10) : null;

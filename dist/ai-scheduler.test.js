@@ -63,10 +63,11 @@ class MockLLM {
 }
 /** 狼密談收斂：全存活狼目標一致 → wolfReady → NIGHT_COLLECTING */
 function convergeWolfDiscussion(s) {
-    for (const p of s.players) {
-        if (p.alive && p.role === Role.WEREWOLF) {
-            s.wolfDiscussionLog.push({ playerId: p.id, text: '殺P2', day: s.day });
-        }
+    // 動態選合法目標（非狼、非自己），避免硬編碼 P2 在混合局碰狼
+    const wolves = s.players.filter((p) => p.alive && p.role === Role.WEREWOLF);
+    const target = s.players.find((p) => p.alive && p.role !== Role.WEREWOLF && !wolves.some((w) => w.id === p.id)).id;
+    for (const p of wolves) {
+        s.wolfDiscussionLog.push({ playerId: p.id, text: `殺P${target}`, day: s.day });
     }
     let aiDispatched = false;
     for (const p of s.players) {
