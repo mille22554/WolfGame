@@ -104,13 +104,14 @@ body {
   }
 }
 
+/* 狼的剪影：置底置中，尺寸收小讓整隻狼（含耳朵）落在卡片下方，避免被卡片遮住 */
 .wolf {
   position: absolute;
   bottom: 0;
   left: 50%;
   transform: translateX(-50%);
-  width: min(92vw, 640px);
-  opacity: 0.8;
+  width: min(44vw, 380px);
+  opacity: 0.85;
 }
 .wolf path { fill: #0a0a13; }
 
@@ -266,12 +267,12 @@ body {
   border-radius: 4px;
 }
 
+/* 版本標籤：置於右下角，低調不搶版面
+   用 fixed 相對視窗定位——absolute 會受 #page-home 的 flex 靜態置中影響而跑回中間 */
 .home-footer {
-  position: absolute;
+  position: fixed;
   bottom: 1.25rem;
-  left: 0;
-  width: 100%;
-  text-align: center;
+  right: 1.5rem;
   font-size: 0.78rem;
   letter-spacing: 0.15em;
   color: var(--text-faint);

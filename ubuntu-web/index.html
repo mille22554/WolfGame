@@ -4,7 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>狼人殺 · Werewolf Online</title>
-  <link rel="stylesheet" href="style.css">
+  <!-- v=2：cache-busting，讓 Cloudflare 邊緣快取失效、拿到最新 CSS -->
+  <link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
 
@@ -13,21 +14,31 @@
     <div class="horizon"></div>
     <div class="stars" id="stars"></div>
     <div class="moon"></div>
-    <svg class="wolf" viewBox="0 0 240 160">
-      <path d="M 18 148
-               C 12 138, 14 124, 26 118
-               C 45 108, 70 104, 92 102
-               C 100 101, 106 96, 108 84
-               C 110 72, 110 58, 106 48
-               L 98 14
-               L 116 26
-               L 126 8
-               L 134 34
-               C 138 44, 142 58, 146 72
-               C 150 84, 160 92, 176 98
-               C 196 106, 214 116, 224 128
-               C 230 136, 231 144, 228 148
-               Z"/>
+    <!-- 狼的剪影：側身坐姿，頭朝右（望向月亮），雙耳尖立、長吻、尾巴上揚 -->
+    <svg class="wolf" viewBox="0 0 240 130">
+      <path d="M 226 56
+                C 218 50, 206 46, 196 44
+                C 192 41, 188 36, 186 30
+                L 181 8
+                L 172 28
+                C 170 25, 166 25, 164 28
+                L 157 5
+                L 149 29
+                C 145 35, 141 43, 137 50
+                C 131 59, 123 67, 112 72
+                C 92 79, 70 81, 52 87
+                C 38 79, 20 73, 4 64
+                C 16 75, 29 84, 41 91
+                C 34 101, 30 113, 30 126
+                L 52 126
+                C 56 116, 60 108, 70 104
+                C 88 99, 110 97, 128 99
+                C 137 103, 142 110, 144 126
+                L 164 126
+                C 166 113, 168 101, 170 89
+                C 172 77, 178 68, 188 62
+                C 200 58, 214 57, 226 56
+                Z"/>
     </svg>
   </div>
 
@@ -155,6 +166,6 @@
     </div>
   </div>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=2"></script>
 </body>
 </html>
