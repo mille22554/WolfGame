@@ -143,6 +143,7 @@ body {
   font-size: clamp(3rem, 8vw, 5rem);
   font-weight: 700;
   letter-spacing: 0.15em;
+  text-indent: 0.15em;
   color: #f3f1ea;
   text-shadow: 0 0 32px rgba(139, 124, 246, 0.45), 0 2px 0 rgba(0, 0, 0, 0.4);
 }
@@ -304,6 +305,9 @@ body {
   filter: brightness(1.08);
   box-shadow: 0 10px 26px rgba(108, 92, 231, 0.5);
 }
+
+/* create-room button: pin to card bottom to align with join-room button */
+#btn-create { margin-top: auto; }
 
 .btn-ghost {
   border: 1px solid var(--border);
