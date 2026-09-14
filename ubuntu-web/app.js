@@ -24,12 +24,11 @@ const DEMO_PLAYERS = [
   { nick: '夜行者' },
 ];
 
-// 生成 6 位房間代碼（排除易混淆字元）
+// 生成 4 位數字房間代碼（與加入房間的格式一致；首位不為 0）
 function genCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let code = '';
-  for (let i = 0; i < 6; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)];
+  let code = String(1 + Math.floor(Math.random() * 9));
+  for (let i = 1; i < 4; i++) {
+    code += Math.floor(Math.random() * 10);
   }
   return code;
 }
@@ -59,6 +58,17 @@ function showPage(name) {
   document.querySelectorAll('.page').forEach((p) => p.classList.remove('active'));
   const page = $('#page-' + name);
   if (page) page.classList.add('active');
+}
+
+// 「加入房間」流程是否已展開（第一次點擊展開代碼欄，第二次點擊才送出）
+let joinOpen = false;
+
+// 回首頁時重置為乾淨的初始狀態：顯示建立按鈕、隱藏並清空代碼欄
+function resetHome() {
+  joinOpen = false;
+  $('#btn-create').hidden = false;
+  $('#join-code-slot').hidden = true;
+  $('#join-code').value = '';
 }
 
 // ---------- Loading 過渡 ----------
@@ -206,10 +216,10 @@ function init() {
   createStars();
   showPage('home');
 
-  // 建立房間 → 自己是房主
+  // 建立房間 → 自己是房主（讀取統一的暱稱欄）
   $('#btn-create').addEventListener('click', () => {
-    const nick = $('#create-nick').value.trim();
-    if (!nick) { alert('請先輸入暱稱'); return; }
+    const nick = $('#nick').value.trim();
+    if (!nick) { alert('請先輸入暱稱'); $('#nick').focus(); return; }
     state.nickname = nick;
     state.isHost = true;
     state.isSpectating = false;
@@ -218,18 +228,25 @@ function init() {
     enterRoom();
   });
 
-  // 加入房間
+  // 加入房間：第一次點擊 → 在「建立房間」按鈕的位置展開代碼欄；第二次點擊 → 驗證並送出
   $('#btn-join').addEventListener('click', () => {
-    const code = $('#join-code').value.trim().toUpperCase();
-    const nick = $('#join-nick').value.trim();
-    if (!/^[A-Z0-9]{6}$/.test(code)) { alert('房間代碼需為 6 位（字母或數字）'); return; }
-    if (!nick) { alert('請先輸入暱稱'); return; }
+    if (!joinOpen) {
+      joinOpen = true;
+      $('#btn-create').hidden = true;
+      $('#join-code-slot').hidden = false;
+      $('#join-code').focus();
+      return;
+    }
+    const code = $('#join-code').value.trim();
+    const nick = $('#nick').value.trim();
+    if (!/^\d{4}$/.test(code)) { alert('房間代碼需為 4 位數字'); return; }
+    if (!nick) { alert('請先輸入暱稱'); $('#nick').focus(); return; }
     state.nickname = nick;
     state.isHost = false;
     state.isSpectating = false;
     state.roomCode = code;
     state.maxPlayers = 15;
-    if (code === '999999') {
+    if (code === '9999') {
       // 演示：房間已滿 → 詢問是否以觀戰進入
       showLoading(() => { $('#overlay-full').hidden = false; });
     } else {
@@ -237,9 +254,16 @@ function init() {
     }
   });
 
-  // 離開房間 → 回首頁
+  // 房間代碼：只保留數字，最多 4 位
+  $('#join-code').addEventListener('input', (e) => {
+    const clean = e.target.value.replace(/\D/g, '').slice(0, 4);
+    if (clean !== e.target.value) e.target.value = clean;
+  });
+
+  // 離開房間 → 回首頁（重置加入流程）
   $('#btn-leave').addEventListener('click', () => {
     state.isSpectating = false;
+    resetHome();
     showPage('home');
   });
 
@@ -251,9 +275,10 @@ function init() {
     renderRoom();
   });
 
-  // 房間已滿 → 取消
+  // 房間已滿 → 取消（重置加入流程）
   $('#btn-cancel').addEventListener('click', () => {
     $('#overlay-full').hidden = true;
+    resetHome();
     showPage('home');
   });
 

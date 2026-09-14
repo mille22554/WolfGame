@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>狼人殺 · Werewolf Online</title>
-  <!-- v=2：cache-busting，讓 Cloudflare 邊緣快取失效、拿到最新 CSS -->
-  <link rel="stylesheet" href="style.css?v=2">
+  <!-- v=4：cache-busting，讓 Cloudflare 邊緣快取失效、拿到最新 CSS/JS -->
+  <link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
 
@@ -51,32 +51,26 @@
     </header>
 
     <div class="home-cards">
-      <!-- 建立房間 -->
+      <!-- 進入房間：統一暱稱＋建立／加入按鈕。
+           「加入房間」第一次點擊時，4 位代碼輸入框會取代「建立房間」按鈕的位置出現，
+           第二次點擊「加入房間」才送出 -->
       <section class="card">
-        <h2>建立房間</h2>
+        <h2>進入房間</h2>
         <div class="field">
-          <label for="create-nick">暱稱</label>
-          <input type="text" id="create-nick" maxlength="12"
+          <label for="nick">暱稱</label>
+          <input type="text" id="nick" maxlength="12"
                  placeholder="輸入你的暱稱" autocomplete="off">
         </div>
-        <button class="btn btn-primary" id="btn-create">建立房間</button>
-      </section>
-
-      <!-- 加入房間 -->
-      <section class="card">
-        <h2>加入房間</h2>
-        <div class="field">
-          <label for="join-code">房間代碼</label>
-          <input type="text" id="join-code" maxlength="6"
-                 placeholder="6 位代碼" class="code-input" autocomplete="off">
+        <div class="entry-actions">
+          <button class="btn btn-primary" id="btn-create">建立房間</button>
+          <div class="join-code-slot" id="join-code-slot" hidden>
+            <input type="text" id="join-code" maxlength="4" inputmode="numeric"
+                   placeholder="4 位代碼" class="code-input"
+                   autocomplete="off" aria-label="房間代碼">
+          </div>
+          <button class="btn btn-primary" id="btn-join">加入房間</button>
         </div>
-        <div class="field">
-          <label for="join-nick">暱稱</label>
-          <input type="text" id="join-nick" maxlength="12"
-                 placeholder="輸入你的暱稱" autocomplete="off">
-        </div>
-        <button class="btn btn-primary" id="btn-join">加入房間</button>
-        <p class="demo-hint">小密語：代碼 <code>999999</code> 可體驗「房間已滿」</p>
+        <p class="demo-hint">小密語：代碼 <code>9999</code> 可體驗「房間已滿」</p>
       </section>
     </div>
 
@@ -166,6 +160,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=2"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>
