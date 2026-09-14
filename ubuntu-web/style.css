@@ -337,6 +337,32 @@ body {
   box-shadow: 0 0 0 3px rgba(139, 124, 246, 0.2);
 }
 
+/* 取消加入：代碼框右緣的小 ✕（absolute 定位，出現／消失不佔版面、零位移） */
+.join-code-slot { position: relative; }
+#btn-cancel-join {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: rgba(139, 124, 246, 0.08);
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  line-height: 1;
+  transition: color 0.18s, border-color 0.18s, background 0.18s;
+}
+#btn-cancel-join:hover {
+  color: var(--text);
+  border-color: var(--accent);
+  background: rgba(139, 124, 246, 0.18);
+}
+
 /* 代碼輸入框出現／建立按鈕回來：輕微滑入過渡 */
 @keyframes slotIn {
   from { opacity: 0; transform: translateX(-8px); }

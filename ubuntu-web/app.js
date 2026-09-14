@@ -63,11 +63,12 @@ function showPage(name) {
 // 「加入房間」流程是否已展開（第一次點擊展開代碼欄，第二次點擊才送出）
 let joinOpen = false;
 
-// 回首頁時重置為乾淨的初始狀態：顯示建立按鈕、隱藏並清空代碼欄
+// 回首頁時重置為乾淨的初始狀態：顯示建立按鈕、隱藏並清空代碼欄、隱藏取消按鈕
 function resetHome() {
   joinOpen = false;
   $('#btn-create').hidden = false;
   $('#join-code-slot').hidden = true;
+  $('#btn-cancel-join').hidden = true;
   $('#join-code').value = '';
 }
 
@@ -234,6 +235,7 @@ function init() {
       joinOpen = true;
       $('#btn-create').hidden = true;
       $('#join-code-slot').hidden = false;
+      $('#btn-cancel-join').hidden = false;
       $('#join-code').focus();
       return;
     }
@@ -259,6 +261,9 @@ function init() {
     const clean = e.target.value.replace(/\D/g, '').slice(0, 4);
     if (clean !== e.target.value) e.target.value = clean;
   });
+
+  // 取消加入流程 → 返回初始畫面
+  $('#btn-cancel-join').addEventListener('click', resetHome);
 
   // 離開房間 → 回首頁（重置加入流程）
   $('#btn-leave').addEventListener('click', () => {

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>狼人殺 · Werewolf Online</title>
   <!-- v=4：cache-busting，讓 Cloudflare 邊緣快取失效、拿到最新 CSS/JS -->
-  <link rel="stylesheet" href="style.css?v=6">
+  <link rel="stylesheet" href="style.css?v=8">
 </head>
 <body>
 
@@ -67,6 +67,9 @@
             <input type="text" id="join-code" maxlength="4" inputmode="numeric"
                    placeholder="4 位代碼" class="code-input"
                    autocomplete="off" aria-label="房間代碼">
+            <!-- 取消加入：代碼框右側的小 ✕，點擊返回初始畫面 -->
+            <button type="button" class="btn btn-ghost" id="btn-cancel-join" hidden
+                    title="取消" aria-label="取消加入，返回初始畫面">✕</button>
           </div>
           <button class="btn btn-primary" id="btn-join">加入房間</button>
         </div>
@@ -160,6 +163,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=6"></script>
+  <script src="app.js?v=8"></script>
 </body>
 </html>
