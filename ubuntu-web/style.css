@@ -35,10 +35,8 @@ body {
   color: var(--text);
   min-height: 100vh;
   overflow-x: hidden;
-  background:
-    radial-gradient(1100px 560px at 82% -10%, rgba(108, 92, 231, 0.16), transparent 60%),
-    radial-gradient(900px 480px at 50% 112%, rgba(108, 92, 231, 0.14), transparent 65%),
-    linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
+  /* v6 村莊夜景：深藍夜空漸層（上深下淺，地平線帶紫） */
+  background: linear-gradient(180deg, #070b16 0%, #0e1330 38%, #1b2145 62%, #2a2350 74%, #0c1020 100%);
 }
 
 /* ---------- 背景裝飾層 ---------- */
@@ -50,13 +48,15 @@ body {
   overflow: hidden;
 }
 
-.horizon {
+/* 地平線紫暈（v6） */
+.sky::before {
+  content: '';
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 0;
-  height: 42%;
-  background: radial-gradient(ellipse at 50% 100%, rgba(108, 92, 231, 0.20), transparent 70%);
+  bottom: 18%;
+  height: 220px;
+  background: radial-gradient(ellipse 70% 100% at 50% 100%, rgba(150, 110, 200, 0.14) 0%, transparent 70%);
 }
 
 .stars { position: absolute; inset: 0; }
@@ -75,45 +75,56 @@ body {
   50%      { opacity: 0.9; }
 }
 
+/* 月亮（v6：暖金、右上、靜態光暈） */
 .moon {
   position: absolute;
-  top: 8%;
-  right: 10%;
+  top: 46px;
+  right: 110px;
   width: 110px;
   height: 110px;
   border-radius: 50%;
-  background:
-    radial-gradient(circle at 32% 34%, rgba(255, 255, 255, 0.30), transparent 24%),
-    radial-gradient(circle at 66% 62%, rgba(170, 150, 110, 0.35), transparent 17%),
-    radial-gradient(circle at 48% 78%, rgba(170, 150, 110, 0.25), transparent 12%),
-    radial-gradient(circle at 50% 50%, #f7ecd0 0%, #e8d5a8 70%, #d9c48f 100%);
+  background: radial-gradient(circle at 40% 35%, #fdf6e3 0%, #f5e6bd 45%, #d9c48f 75%, #c9b382 100%);
   box-shadow:
-    0 0 40px 10px rgba(240, 214, 150, 0.25),
-    0 0 120px 40px rgba(240, 214, 150, 0.12);
-  animation: moonGlow 6s ease-in-out infinite;
+    0 0 50px 20px rgba(255, 250, 200, 0.3),
+    0 0 100px 50px rgba(255, 250, 200, 0.12),
+    0 0 160px 80px rgba(255, 250, 200, 0.06);
 }
 
-@keyframes moonGlow {
-  0%, 100% {
-    box-shadow: 0 0 40px 10px rgba(240, 214, 150, 0.25),
-                0 0 120px 40px rgba(240, 214, 150, 0.12);
-  }
-  50% {
-    box-shadow: 0 0 55px 16px rgba(240, 214, 150, 0.32),
-                0 0 150px 60px rgba(240, 214, 150, 0.16);
-  }
-}
-
-/* 狼的剪影：置底置中，尺寸收小讓整隻狼（含耳朵）落在卡片下方，避免被卡片遮住 */
-.wolf {
+/* 村莊夜景 SVG（v6：底部錨定，寬 100%） */
+.village-svg {
   position: absolute;
   bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(44vw, 380px);
-  opacity: 0.85;
+  left: 0;
+  right: 0;
+  width: 100%;
+  pointer-events: none;
 }
-.wolf path { fill: #0a0a13; }
+
+/* 飄雲（v6） */
+.cloud {
+  position: absolute;
+  pointer-events: none;
+  background: radial-gradient(ellipse, rgba(200, 205, 230, 0.14) 0%, transparent 70%);
+  filter: blur(6px);
+  animation: cloud-drift linear infinite;
+}
+.cloud-1 { top: 60px; width: 420px; height: 70px; animation-duration: 75s; }
+.cloud-2 { top: 130px; width: 300px; height: 50px; animation-duration: 105s; animation-delay: -40s; }
+@keyframes cloud-drift {
+  0% { left: -450px; }
+  100% { left: 100%; }
+}
+
+/* 蝙蝠（v6：村莊 SVG 內，緩慢飄動） */
+.bat {
+  animation: bat-fly 9s ease-in-out infinite;
+}
+@keyframes bat-fly {
+  0%, 100% { transform: translate(0, 0); }
+  25% { transform: translate(26px, -12px); }
+  50% { transform: translate(52px, 4px); }
+  75% { transform: translate(26px, 10px); }
+}
 
 /* ---------- 頁面切換 ---------- */
 .page { display: none; position: relative; z-index: 1; }

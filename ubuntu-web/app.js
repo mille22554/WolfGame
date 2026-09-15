@@ -33,8 +33,8 @@ function genCode() {
   return code;
 }
 
-// ---------- 裝飾：隨機星星 ----------
-function createStars(count = 90) {
+// ---------- 裝飾：隨機星星（v6：180 顆、集中在上半部，避開村莊） ----------
+function createStars(count = 180) {
   const sky = $('.stars');
   if (!sky) return;
   const frag = document.createDocumentFragment();
@@ -45,7 +45,7 @@ function createStars(count = 90) {
     s.style.width = size + 'px';
     s.style.height = size + 'px';
     s.style.left = (Math.random() * 100).toFixed(2) + '%';
-    s.style.top = (Math.random() * 100).toFixed(2) + '%';
+    s.style.top = (Math.random() * 60).toFixed(2) + '%';
     s.style.setProperty('--d', (Math.random() * 3 + 2).toFixed(2) + 's');
     s.style.animationDelay = (Math.random() * 4).toFixed(2) + 's';
     frag.appendChild(s);
