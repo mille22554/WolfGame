@@ -83,9 +83,10 @@ function renderRoom() {
   // 身分切換：高亮目前身分
   $('#mode-play').classList.toggle('active', !state.isSpectating);
   $('#mode-spec').classList.toggle('active', state.isSpectating);
-  $('#host-tools').hidden = !state.isHost || state.isSpectating;
+  // 房主無論參戰／觀戰都保留房主工具（含開始遊戲）；觀戰提示只給非房主
+  $('#host-tools').hidden = !state.isHost;
   $('#waiting-note').hidden = state.isHost || state.isSpectating;
-  $('#spectate-note').hidden = !state.isSpectating;
+  $('#spectate-note').hidden = !state.isSpectating || state.isHost;
   // 觀戰中無法發言
   $('#chat-text').value = '';
   $('#chat-text').disabled = state.isSpectating;
