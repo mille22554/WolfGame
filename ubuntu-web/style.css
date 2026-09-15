@@ -464,16 +464,28 @@ body {
   gap: 0.75rem;
 }
 
-.badge {
+/* 身分切換：參戰／觀戰（分段按鈕，高亮目前身分） */
+.mode-toggle {
   display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.35rem 0.8rem;
-  background: rgba(240, 198, 116, 0.12);
-  border: 1px solid rgba(240, 198, 116, 0.4);
+  border: 1px solid var(--border);
   border-radius: 999px;
-  color: var(--gold);
+  overflow: hidden;
+  background: var(--panel-2);
+}
+.mode-btn {
+  padding: 0.35rem 0.85rem;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
   font-size: 0.85rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+.mode-btn:hover { color: var(--text); }
+.mode-btn.active {
+  background: var(--accent);
+  color: #fff;
 }
 
 .player-count {
@@ -735,6 +747,38 @@ input[type="range"]::-moz-range-thumb {
   font-size: 0.8rem;
   line-height: 1.5;
   color: #6b6890;
+}
+
+/* 隨機人數按鈕（滑桿旁的骰子） */
+.btn-dice {
+  padding: 0.35rem 0.7rem;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+/* 空狀態（不塞假資料，只顯示中性提示） */
+.chat-empty {
+  padding: 0.5rem 0.25rem;
+  color: var(--text-faint);
+  font-size: 0.85rem;
+}
+.player-empty {
+  color: var(--text-faint);
+  font-size: 0.9rem;
+}
+
+/* 停用狀態（觀戰中的聊天輸入） */
+.chat-input input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn:disabled:hover {
+  transform: none;
+  filter: none;
 }
 
 .note-box {

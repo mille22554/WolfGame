@@ -18,12 +18,6 @@ const state = {
   maxPlayers: 15,
 };
 
-// 演示用：房間裡的其他玩家
-const DEMO_PLAYERS = [
-  { nick: '月下影' },
-  { nick: '夜行者' },
-];
-
 // 生成 4 位數字房間代碼（與加入房間的格式一致；首位不為 0）
 function genCode() {
   let code = String(1 + Math.floor(Math.random() * 9));
@@ -85,11 +79,16 @@ function showLoading(done) {
 // ---------- 房間渲染 ----------
 function renderRoom() {
   $('#room-code').textContent = state.roomCode;
-  $('#spectate-badge').hidden = !state.isSpectating;
-  $('#host-tools').hidden = !state.isHost;
+  // 身分切換：高亮目前身分
+  $('#mode-play').classList.toggle('active', !state.isSpectating);
+  $('#mode-spec').classList.toggle('active', state.isSpectating);
+  $('#host-tools').hidden = !state.isHost || state.isSpectating;
   $('#waiting-note').hidden = state.isHost || state.isSpectating;
   $('#spectate-note').hidden = !state.isSpectating;
+  // 觀戰中無法發言
   $('#chat-text').value = '';
+  $('#chat-text').disabled = state.isSpectating;
+  $('#btn-send').disabled = state.isSpectating;
   renderPlayers();
   renderChat();
   syncMaxPlayers(state.maxPlayers);
@@ -104,9 +103,14 @@ function renderPlayers() {
   if (!state.isSpectating) {
     players.push({ nick: state.nickname || '你', host: state.isHost, you: true });
   }
-  DEMO_PLAYERS.forEach((p, i) => {
-    players.push({ nick: p.nick, host: !state.isHost && i === 0, you: false });
-  });
+
+  // 空狀態：目前沒有玩家（觀戰中，或新房間還沒其他人加入）
+  if (players.length === 0) {
+    const li = document.createElement('li');
+    li.className = 'player-empty';
+    li.textContent = '（目前沒有玩家）';
+    list.appendChild(li);
+  }
 
   players.forEach((p, i) => {
     const li = document.createElement('li');
@@ -150,6 +154,8 @@ function renderPlayers() {
 // ---------- 聊天 ----------
 function addMessage(nick, text, time, isYou) {
   const box = $('#chat-messages');
+  const empty = box.querySelector('.chat-empty');
+  if (empty) empty.remove();
 
   const div = document.createElement('div');
   div.className = 'msg' + (isYou ? ' msg-you' : '');
@@ -176,15 +182,16 @@ function addMessage(nick, text, time, isYou) {
 function renderChat() {
   const box = $('#chat-messages');
   box.innerHTML = '';
-  addMessage('月下影', '大家好，準備好了嗎？', '21:03', false);
-  addMessage('夜行者', '我來了，今晚月色不錯 🌙', '21:04', false);
-  if (!state.isSpectating) {
-    addMessage(state.nickname || '你', '人齊了，準備開局！', '21:05', true);
-  }
+  // 空狀態：不塞假訊息
+  const empty = document.createElement('div');
+  empty.className = 'chat-empty';
+  empty.textContent = state.isSpectating ? '（觀戰中，無法發言）' : '（還沒有訊息）';
+  box.appendChild(empty);
 }
 
 // 發送訊息（純前端本地顯示，無後端）
 function sendChat() {
+  if (state.isSpectating) return; // 觀戰中無法發言
   const input = $('#chat-text');
   const text = input.value.trim();
   if (!text) return;
@@ -200,7 +207,7 @@ function syncMaxPlayers(v) {
   $('#max-players').value = v;
   $('#max-players-value').textContent = v;
   $('#player-max').textContent = v;
-  const pct = ((v - 2) / (18 - 2)) * 100;
+  const pct = ((v - 6) / (15 - 6)) * 100;
   $('#max-players').style.setProperty('--fill', pct + '%');
 }
 
@@ -303,6 +310,21 @@ function init() {
 
   // 人數上限滑桿
   $('#max-players').addEventListener('input', (e) => syncMaxPlayers(+e.target.value));
+
+  // 隨機人數（6–15）
+  $('#btn-random-players').addEventListener('click', () => {
+    syncMaxPlayers(6 + Math.floor(Math.random() * 10));
+  });
+
+  // 身分切換：參戰／觀戰
+  $('#mode-play').addEventListener('click', () => {
+    state.isSpectating = false;
+    renderRoom();
+  });
+  $('#mode-spec').addEventListener('click', () => {
+    state.isSpectating = true;
+    renderRoom();
+  });
 }
 
 document.addEventListener('DOMContentLoaded', init);

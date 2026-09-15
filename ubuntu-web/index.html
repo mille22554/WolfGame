@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>狼人殺 · Werewolf Online</title>
   <!-- v=4：cache-busting，讓 Cloudflare 邊緣快取失效、拿到最新 CSS/JS -->
-  <link rel="stylesheet" href="style.css?v=9">
+  <link rel="stylesheet" href="style.css?v=10">
 </head>
 <body>
 
@@ -213,7 +213,11 @@
         <span class="code" id="room-code">------</span>
       </div>
       <div class="room-meta">
-        <span class="badge" id="spectate-badge" hidden>👁 觀戰中</span>
+        <!-- 身分切換：參戰／觀戰 -->
+        <div class="mode-toggle" role="group" aria-label="身分切換">
+          <button type="button" class="mode-btn" id="mode-play">⚔ 參戰</button>
+          <button type="button" class="mode-btn" id="mode-spec">👀 觀戰</button>
+        </div>
         <span class="player-count"><b id="player-count">0</b> / <span id="player-max">15</span></span>
         <button class="btn btn-ghost btn-leave" id="btn-leave">離開</button>
       </div>
@@ -246,8 +250,10 @@
           <div class="setting">
             <label for="max-players">玩家人數上限</label>
             <div class="setting-row">
-              <input type="range" id="max-players" min="2" max="18" step="1" value="15">
+              <input type="range" id="max-players" min="6" max="15" step="1" value="15">
               <span class="range-value" id="max-players-value">15</span>
+              <button type="button" class="btn btn-ghost btn-dice" id="btn-random-players"
+                      title="隨機人數（6–15）">🎲 隨機</button>
             </div>
           </div>
           <button class="btn btn-start" id="btn-start">開始遊戲</button>
@@ -287,6 +293,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=9"></script>
+  <script src="app.js?v=10"></script>
 </body>
 </html>
