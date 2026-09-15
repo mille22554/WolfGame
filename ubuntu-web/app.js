@@ -16,6 +16,7 @@ const state = {
   isHost: false,
   isSpectating: false,
   maxPlayers: 15,
+  randomCount: false,
 };
 
 // 生成 4 位數字房間代碼（與加入房間的格式一致；首位不為 0）
@@ -92,6 +93,7 @@ function renderRoom() {
   renderPlayers();
   renderChat();
   syncMaxPlayers(state.maxPlayers);
+  syncRandomCount(state.randomCount);
 }
 
 // 玩家列表：角色圖示先用「?」佔位；房主有 👑；房主可看到踢人按鈕
@@ -201,14 +203,30 @@ function sendChat() {
   input.focus();
 }
 
-// ---------- 人數上限 ----------
+// ---------- 人數設定 ----------
+// 滑桿值＝座位格數；隨機開啟時視為上限，實際人數開局才擲出
 function syncMaxPlayers(v) {
   state.maxPlayers = v;
   $('#max-players').value = v;
-  $('#max-players-value').textContent = v;
   $('#player-max').textContent = v;
   const pct = ((v - 6) / (15 - 6)) * 100;
   $('#max-players').style.setProperty('--fill', pct + '%');
+  updateCountValue();
+}
+
+// 隨機人數 toggle：開啟→滑桿禁用（上限保留），關閉→啟用
+// （原型純本地狀態；接後端時此處送 SET_RANDOM_COUNT {enabled}）
+function syncRandomCount(v) {
+  state.randomCount = v;
+  $('#random-count').checked = v;
+  $('#max-players').disabled = v;
+  $('#random-hint').hidden = !v;
+  updateCountValue();
+}
+
+// 數值顯示：隨機關閉＝定值，開啟＝上限（≤N，實際人數開局才知道）
+function updateCountValue() {
+  $('#max-players-value').textContent = state.randomCount ? '≤' + state.maxPlayers : String(state.maxPlayers);
 }
 
 // ---------- 進入房間（先走 loading 過渡） ----------
@@ -233,6 +251,7 @@ function init() {
     state.isSpectating = false;
     state.roomCode = genCode();
     state.maxPlayers = 15;
+    state.randomCount = false;
     enterRoom();
   });
 
@@ -255,6 +274,7 @@ function init() {
     state.isSpectating = false;
     state.roomCode = code;
     state.maxPlayers = 15;
+    state.randomCount = false;
     if (code === '9999') {
       // 演示：房間已滿 → 詢問是否以觀戰進入
       showLoading(() => { $('#overlay-full').hidden = false; });
@@ -308,12 +328,12 @@ function init() {
     if (e.key === 'Enter') sendChat();
   });
 
-  // 人數上限滑桿
+  // 人數滑桿（隨機開啟時已禁用，不會觸發）
   $('#max-players').addEventListener('input', (e) => syncMaxPlayers(+e.target.value));
 
-  // 隨機人數（6–15）
-  $('#btn-random-players').addEventListener('click', () => {
-    syncMaxPlayers(6 + Math.floor(Math.random() * 10));
+  // 隨機人數 toggle：開啟→滑桿禁用（上限保留），實際人數開局才擲出
+  $('#random-count').addEventListener('change', (e) => {
+    syncRandomCount(e.target.checked);
   });
 
   // 身分切換：參戰／觀戰

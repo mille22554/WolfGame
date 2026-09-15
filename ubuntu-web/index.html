@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>狼人殺 · Werewolf Online</title>
   <!-- v=4：cache-busting，讓 Cloudflare 邊緣快取失效、拿到最新 CSS/JS -->
-  <link rel="stylesheet" href="style.css?v=10">
+  <link rel="stylesheet" href="style.css?v=11">
 </head>
 <body>
 
@@ -248,13 +248,19 @@
         <!-- 房主工具（只有房主看到） -->
         <div class="settings-body" id="host-tools">
           <div class="setting">
-            <label for="max-players">玩家人數上限</label>
+            <label for="max-players">玩家人數</label>
             <div class="setting-row">
               <input type="range" id="max-players" min="6" max="15" step="1" value="15">
               <span class="range-value" id="max-players-value">15</span>
-              <button type="button" class="btn btn-ghost btn-dice" id="btn-random-players"
-                      title="隨機人數（6–15）">🎲 隨機</button>
             </div>
+            <div class="setting-row">
+              <label class="switch">
+                <input type="checkbox" id="random-count">
+                <span class="switch-track" aria-hidden="true"></span>
+                <span class="switch-text">隨機</span>
+              </label>
+            </div>
+            <p class="random-hint" id="random-hint" hidden>開局時在 6–上限 間隨機決定實際人數</p>
           </div>
           <button class="btn btn-start" id="btn-start">開始遊戲</button>
           <p class="hint">只有房主可以調整人數上限、開始遊戲與移出玩家。</p>
@@ -293,6 +299,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=10"></script>
+  <script src="app.js?v=11"></script>
 </body>
 </html>
