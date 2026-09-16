@@ -396,7 +396,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 
 - `aiCount = actualPlayerCount - humanPlayerCount`（開局時計算）
 - 下限 0（全真人參戰）；上限 `maxPlayers`（純 AI 局，真人全部觀戰）
-- AI 玩家在 `ROLE_REVEAL` 前生成：隨機 persona + 隨機暱稱（「AI-村夫」「AI-旅人」等）
+- AI 玩家在 `ROLE_REVEAL` 前從角色設定檔載入（`character/` 目錄的 persona + memory），非隨機生成
 
 ### 13.4 AI 行動生成
 
