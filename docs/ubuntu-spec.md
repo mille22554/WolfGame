@@ -79,7 +79,7 @@
 
 ### 與 main 分支的關係
 - **共用**：遊戲規則常數（角色定義、勝利條件）、類型定義（`Role`、`PlayerState`）、LLM client 模式（OpenAI-compatible API 呼叫）
-- **獨立**：伺服器架構（main 是單人本地，ubuntu 是多房多人）、前端（main 是 Electron 桌面，ubuntu 是網頁）、房間管理、AI 排程（ubuntu 用錯峰 timer，main 用 event queue）
+- **獨立**：伺服器架構（main 是單人本地，ubuntu 是多房多人）、前端（main 是 Electron 桌面，ubuntu 是網頁）、房間管理
 - 若共用代碼維護成本 > 獨立，則完全分開，只 sync 規則常數
 
 ## 5. 房間生命週期
@@ -149,7 +149,7 @@
 | M4 | 遊戲設定面板（房主調人數等）+ START_GAME 事件 | 房主可設參數、觸發開始 | ✅ |
 | M5 | 遊戲核心：角色分配 + 夜間行動 + 白天投票 + 勝利判定（server-side） | 完整一局可跑完（6 人局）；夜間行動等待制正常；投票平票處理正確 | ✅ |
 | M6 | 前端遊戲 UI：角色揭示 + 夜間操作面板 + 投票面板 + phase 指示 + 死亡公告 + 結算畫面 | 真人可完整操作一局；各角色看到正確資訊 | ⬜ |
-| M7 | AI 補位：LLM client + AI 玩家行動生成（發言/投票/夜間行動）+ 錯峰排程 | 1 真人 + 5 AI 可跑完整局；AI 發言自然、投票有邏輯、夜間行動合法；LLM timeout 不卡死遊戲 | ⬜ |
+| M7 | AI 補位：LLM client + AI 玩家行動生成（發言/投票/夜間行動）+ SpeechScheduler 管線 | 1 真人 + 5 AI 可跑完整局；AI 發言自然、投票有邏輯、夜間行動合法；LLM 失敗 fallback 不卡死遊戲 | ⬜ |
 
 ## 10. 部署現狀
 
@@ -202,7 +202,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
          │                                        │
          │         ┌──────────────────────────────┘
          │         ▼
-         │    DAY_VOTING ◄──(host ends discussion)── DAY_DISCUSSION
+         │    DAY_VOTING ◄──(all players toggle ready)── DAY_DISCUSSION
          │         │
          └─────────┘  (next night)
 ```
@@ -212,7 +212,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | `ROLE_REVEAL` | 各玩家看到自己的角色（私發）；人狼互見、共有者互見 | 10 秒（固定） |
 | `NIGHT` | 收集夜間行動：人狼刀人、占い師查人、守衛護人 | 所有有行動的玩家皆已提交 |
 | `NIGHT_RESULT` | 公布昨晚結果（死者/平安夜）；霊能者收到黎明資訊 | 10 秒（固定） |
-| `DAY_DISCUSSION` | 全存活玩家自由發言（复用 lobby chat） | 房主手動結束 |
+| `DAY_DISCUSSION` | 全存活玩家自由發言（复用 lobby chat） | 所有存活玩家 toggle「準備投票」ON |
 | `DAY_VOTING` | 全存活玩家投票（含棄票） | 所有存活玩家皆已投票 |
 | `DAY_RESULT` | 公布投票結果（死者身分不公開）；霊能者得知票死者身分 | 10 秒（固定） |
 | `GAME_OVER` | 公布所有角色、勝負結果 | 永久（直到房間解散/重開） |
@@ -345,16 +345,16 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 - `ROLE_CONFIG`、`Role`、`Team`、`ROLE_TEAM`、`seerSeesAs()` 等常數/函式 → 直接 import 或 copy
 - `assignRoles()`、`checkWinCondition()` 邏輯 → 可复用（需確認 import path）
 - `night.ts` 的結算邏輯 → 可复用（需改為 async/timeout 模式）
-- **不共用**：`engine.ts`（事件佇列太複雜）、`ai-scheduler.ts`（排程模式不同）
-- **部分共用**：`character-session.ts` 的 prompt 結構可參考，但 ubuntu 版簡化為單一 `ai-player.ts`
-- ubuntu 版用更簡單的 **phase timer + 直接 state mutation** 模式（不需 event queue）
+- **不共用**：`engine.ts`（事件佇列太複雜）
+- **部分共用**：`ai-scheduler.ts` 的 SpeechScheduler 管線邏輯（PRE_SPEECH→JUDGE→SELECT→EXPAND→BROADCAST）；`character-session.ts` 的 prompt 結構可參考，但 ubuntu 版簡化為單一 `ai-player.ts`
+- ubuntu 版用更簡單的 **phase 狀態機 + 直接 state mutation** 模式（不需 event queue）
 
 ### 12.11 私頻頻道
 
 | 頻道 | 可用 phase | 可見範圍 | 功能定位 |
 |---|---|---|---|
-| 狼會議（`WOLF_CHAT`） | `NIGHT` + `DAY_DISCUSSION` | 所有存活人狼 | 夜間：協調刀人目標（「我們刀 3 號吧」）；白天：協調投票策略、交換觀察 |
-| 共有者交談（`MASON_CHAT`） | `NIGHT` + `DAY_DISCUSSION` | 僅共有者雙方 | 確認彼此身份（開局後首次）、交換情報、協調投票 |
+| 狼會議（`WOLF_CHAT`） | `NIGHT` | 所有存活人狼 | 協調刀人目標（「我們刀 3 號吧」） |
+| 共有者交談（`MASON_CHAT`） | `NIGHT` | 僅共有者雙方 | 確認彼此身份、交換情報 |
 
 **規則：**
 - 已死亡玩家不能發送任何私頻訊息（含狼、共有者）
@@ -388,7 +388,6 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | 位址 | `http://127.0.0.1:2064`（同機 localhost） |
 | API 格式 | OpenAI-compatible（`POST /v1/chat/completions`） |
 | 環境變數 | `LLAMA_SERVER_PORT`（預設 2064）、`LLM_MODEL`（model tag，預設空＝server 唯一模型） |
-| 超时 | 單次呼叫 30 秒（CPU 27B 推論 60 token ≈ 15-30 秒） |
 | 呼叫 timeout | 單次 HTTP 請求 30 秒（CPU 27B 推論 60 token ≈ 15-30 秒） |
 | Fallback | LLM 呼叫失敗（timeout / 5xx / parse error）→ server 自動替該 AI 提交預設行動（狼→隨機刀一人；占い→隨機查一人；守衛→隨機護一人；投票→棄票；發言→跳過）。**必須自動提交**，因為 phase 無 timeout，若 AI 永遠不提交則遊戲卡死 |
 
@@ -490,8 +489,8 @@ IDLE →（60s 無訊息 或 全真人跳過）→ PRE_SPEECH → JUDGE → SELE
 
 ### 13.8 GameEngine 整合點
 
-- `start()`：分配角色後，為 AI 玩家生成 persona + 暱稱；AI 玩家不發 `ROLE_REVEALED`（無 WS 連線）
-- `transitionTo('NIGHT')`：啟動 AI 夜間行動排程（錯峰 timer）
+- `start()`：分配角色後，為 AI 玩家從角色設定檔載入 persona；AI 玩家不發 `ROLE_REVEALED`（無 WS 連線）
+- `transitionTo('NIGHT')`：啟動 AI 夜間行動（直接 LLM 呼叫）
 - `transitionTo('DAY_DISCUSSION')`：啟動 AI 發言排程
 - `transitionTo('DAY_VOTING')`：啟動 AI 投票排程
 - AI 行動走同一個 `handleNightAction()` / `handleVote()` 路徑（engine 不區分真人/AI）
