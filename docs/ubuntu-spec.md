@@ -447,15 +447,37 @@ User（夜間行動）:
 - `privateInfo`：依角色不同——占い師看到過去查驗結果；人狼知道同夥+狂人；共有者知道夥伴；村民/狂人/霊能者（僅票死資訊）
 - `roleSpecificInstruction`：狼→「選一個你要刀的人（不可選自己或狂人）」；占い→「選一個你要查驗的人」；守衛→「選一個你要守護的人（不可選自己）」
 
-### 13.6 錯峰排程
+### 13.6 AI 排程（沿用 main 分支 SpeechScheduler 管線）
 
-避免所有 AI 同時轟擊 LLM（CPU 競爭 → 全部 timeout）：
+#### 白天討論發言（SpeechScheduler 管線）
 
-- AI 行動間隔 **3–5 秒**（隨機）
-- 同一 phase 內，AI 依 `joinSeq` 順序依次行動
-- 例：5 個 AI 的夜間行動 → AI1 在 t+0s、AI2 在 t+4s、AI3 在 t+7s、AI4 在 t+11s、AI5 在 t+14s 提交
-- 討論發言：AI 在 phase 開始後 5s、15s、30s... 隨機時間發言（模擬真人節奏）
-- 若遊戲被解散（room destroy）時 AI 的 LLM 呼叫仍在進行中 → abort 該呼叫
+```
+IDLE →（20s 無訊息 或 全真人跳過）→ PRE_SPEECH → JUDGE → SELECT → EXPAND → BROADCAST → IDLE
+```
+
+| 階段 | 說明 | 參數 |
+|---|---|---|
+| IDLE | 每 1s 檢查一次；等待觸發條件 | `checkIntervalMs=1000` |
+| 觸發 | 公頻 20 秒無新訊息（quiet）；或所有存活真人皆跳過 | `quietMs=20000` |
+| PRE_SPEECH | 所有存活 AI 分批次（每批 3 個）平行生成草稿（≤100 token） | `preSpeechBatch=3`, `temp=0.7` |
+| JUDGE | 單次 LLM 呼叫，全盲評分所有草稿（不告知哪個 AI 寫哪段） | `temp=0.3`, `maxTokens=300` |
+| SELECT | 新穎性懲罰（與最近 3 則訊息比較）+ top3 中隨機選一 | `topK=3`, `recentCompareCount=3` |
+| EXPAND | 將選中的草稿展開為完整發言（commit 點，之後不中斷） | `temp=0.8` |
+| BROADCAST | 等待 CD 間隔（距最後一則訊息 ≥ 60s）→ broadcast | `cdMs=60000` |
+
+- **存活 AI ≤ 2**：跳過管線，直接隨機選一個 AI 生成發言
+- **版本無效化**：管線執行中若 board 版本變更（有人發言/phase 切換）→ 作廢回 IDLE
+- **CD 豁免**：全真人跳過時 CD 歸零（立即 broadcast）
+
+#### 夜間行動 / 投票（直接呼叫）
+
+- 非發言類行動（刀人、查人、護人、投票）不需管線，直接單一 LLM 呼叫
+- 各 AI 玩家獨立呼叫（無平行需求，因為每個 AI 只有一個決定要做）
+- 若 LLM 呼叫失敗 → fallback 預設行動（見 §13.2）
+
+#### 清理
+
+- 遊戲解散（room destroy）時：cancel 管線 + abort 進行中的 LLM 呼叫
 
 ### 13.7 新增模組
 
