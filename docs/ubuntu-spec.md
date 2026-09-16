@@ -269,25 +269,25 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 ### 12.4 白天討論（DAY_DISCUSSION）
 
 - 复用 lobby 的 `SEND_MESSAGE` / `MESSAGE`（公頻）
-- 額外頻道：
-  - `WOLF_CHAT` / `WOLF_MESSAGE`：僅存活人狼可見
-  - `MASON_CHAT` / `MASON_MESSAGE`：僅共有者雙方可見
-- 房主發 `END_DISCUSSION` 進入投票（唯一結束方式）
-- 已死亡玩家不能發言（任何頻道）
+- **無私頻**：WOLF_CHAT / MASON_CHAT 僅 NIGHT 可用，白天只有公頻
+- 結束方式：所有存活玩家 toggle「準備投票」ON → 進入投票（同狼會議模式，可隨時 toggle 開/關）
+- 已死亡玩家不能發言
 
 ### 12.5 投票（DAY_VOTING）
 
 - 全存活玩家各投 1 票：`CAST_VOTE { targetId }` 或 `CAST_VOTE { targetId: null }`（棄票）
 - 不可投自己
 - 等待所有存活玩家皆已投票（含棄票）→ 立即結算
-- 結算：票最高者出局；平票→隨機選一位（或無人出局，取「隨機」）
+- 結算：票最高者出局；**平票→無人出局**（不隨機）
 - 被票死者身分不公開（僅霊能者得知）
 
 ### 12.6 勝利判定
 
 每輪 DAY_RESULT 後檢查：
-- **村勝**：存活人狼數 == 0
-- **狼勝**：存活人狼數 ≥ 存活村人陣營數（含狂人、共有者、村民、占い師、守衛、霊能者）
+- **狼數** = 存活人狼 + 存活狂人
+- **村數** = 存活村民 + 占い師 + 守衛 + 霊能者 + 共有者（不含狂人）
+- **村勝**：狼數 == 0（所有狼＋狂人都死）
+- **狼勝**：狼數 ≥ 村數
 - 平局不可能（狼 ≥ 村 時狼已勝）
 
 ### 12.7 死亡規則
@@ -296,7 +296,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 - 票死：身分不公開（僅霊能者得知）
 - 死者不發言、不投票、不操作（前端灰化）
 - 死者可看公頻聊天（觀戰）
-- 狂人死 → 人狼陣營少一人（但狂人算村人陣營，所以狼數不變）
+- 狂人死 → 狼數 -1（狂人算狼）
 
 ### 12.8 新增 WS 協議
 
@@ -305,15 +305,16 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | C→S | `NIGHT_ACTION` | `{ type: 'WOLF_KILL'\|'SEER_CHECK'\|'GUARD_PROTECT', targetId }` | 提交夜間行動 |
 | C→S | `TOGGLE_MASON_END_TURN` | — | 共有者 toggle 回合結束（開/關） |
 | C→S | `TOGGLE_WOLF_READY` | — | 人狼 toggle「準備投票」（開/關） |
+| C→S | `TOGGLE_VOTE_READY` | — | 存活玩家 toggle「準備投票」（開/關），全部 ON → 進投票 |
 | C→S | `CAST_VOTE` | `{ targetId: number \| null }` | 投票（null=棄票） |
-| C→S | `END_DISCUSSION` | — | 房主結束討論 |
-| C→S | `WOLF_CHAT` | `{ text }` | 人狼私頻發言 |
+| C→S | `WOLF_CHAT` | `{ text }` | 人狼私頻發言（僅 NIGHT） |
 | C→S | `MASON_CHAT` | `{ text }` | 共有者私頻發言 |
 | S→C | `PHASE_CHANGED` | `{ phase, day }` | phase 切換通知（broadcast 全房） |
 | S→C | `NIGHT_STEP_CHANGED` | `{ step: 'guard'\|'mason'\|'wolf'\|'seer' }` | NIGHT 內部子步驟切換（broadcast） |
 | S→C | `MASON_END_TURN_STATUS` | `{ ended: [{ id, nickname }] }` | 哪些共有者已 toggle ON（僅發給共有者） |
 | S→C | `WOLF_READY_STATUS` | `{ ready: [{ id, nickname }], voting: bool }` | 哪些狼已準備投票 + 是否進入投票環節（僅發給狼） |
 | S→C | `WOLF_VOTE_SPLIT` | `{ votes: Record<number, number> }` | 狼投票平票→回討論（僅發給狼） |
+| S→C | `DAY_READY_STATUS` | `{ ready: [{ id, nickname }], total: number }` | 哪些玩家已準備投票（broadcast 存活玩家） |
 | S→C | `ROLE_REVEALED` | `{ role, displayName, description, partners? }` | 私發各玩家自己的角色 |
 | S→C | `NIGHT_RESULT` | `{ peacefulNight: bool, deaths: [{ id, nickname }] }` | 夜間結果（broadcast） |
 | S→C | `SEER_RESULT` | `{ targetId, nickname, result: 'villager'\|'werewolf' }` | 私發占い師 |
