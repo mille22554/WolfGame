@@ -457,17 +457,20 @@ IDLE →（20s 無訊息 或 全真人跳過）→ PRE_SPEECH → JUDGE → SELE
 
 | 階段 | 說明 | 參數 |
 |---|---|---|
-| IDLE | 每 1s 檢查一次；等待觸發條件 | `checkIntervalMs=1000` |
-| 觸發 | 公頻 20 秒無新訊息（quiet）；或所有存活真人皆跳過 | `quietMs=20000` |
+| IDLE | 每 1s 檢查；等待 60s 無新訊息（或全真人跳過） | `cdMs=60000`, `checkIntervalMs=1000` |
 | PRE_SPEECH | 所有存活 AI 分批次（每批 3 個）平行生成草稿（≤100 token） | `preSpeechBatch=3`, `temp=0.7` |
 | JUDGE | 單次 LLM 呼叫，全盲評分所有草稿（不告知哪個 AI 寫哪段） | `temp=0.3`, `maxTokens=300` |
 | SELECT | 新穎性懲罰（與最近 3 則訊息比較）+ top3 中隨機選一 | `topK=3`, `recentCompareCount=3` |
 | EXPAND | 將選中的草稿展開為完整發言（commit 點，之後不中斷） | `temp=0.8` |
-| BROADCAST | 等待 CD 間隔（距最後一則訊息 ≥ 60s）→ broadcast | `cdMs=60000` |
+| BROADCAST | 見下方邏輯 | — |
+
+**BROADCAST 邏輯**（60s 靜默到期時）：
+1. 若 AI 發言已選出（管線完成）→ 立即 broadcast
+2. 若尚未選出 → 等待管線完成；但等待期間若有任何新訊息進入 → 視同 CD 中斷（重置 60s 計時、作廢當前管線、回 IDLE）
 
 - **存活 AI ≤ 2**：跳過管線，直接隨機選一個 AI 生成發言
 - **版本無效化**：管線執行中若 board 版本變更（有人發言/phase 切換）→ 作廢回 IDLE
-- **CD 豁免**：全真人跳過時 CD 歸零（立即 broadcast）
+- **全真人跳過**：CD 歸零（立即觸發管線 + broadcast）
 
 #### 夜間行動 / 投票（直接呼叫）
 
