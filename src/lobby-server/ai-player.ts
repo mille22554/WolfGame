@@ -252,7 +252,7 @@ export async function runWolfMeetingPipeline(
         const profile = profiles.get(wolf.personality);
         if (!profile) return { wolf, prompts: [] as ChatMessage[], response: null, parsed: null };
         const prompts = buildPreSpeechPrompt(wolf, profile, gameState);
-        const response = await chat(prompts, { temperature: 1.0, maxTokens: 100 });
+        const response = await chat(prompts, { temperature: 1.0 });
         const parsed = parseJsonResponse(response);
         return { wolf, prompts, response, parsed };
       }),
@@ -303,7 +303,7 @@ export async function runWolfMeetingPipeline(
 
   if (selectedProfile) {
     const expandPrompts = buildExpandPrompt(selectedWolf, selectedProfile, drafts[selectedDraftIndex], gameState);
-    const expandResponse = await chat(expandPrompts, { temperature: 1.0, maxTokens: 200 });
+    const expandResponse = await chat(expandPrompts, { temperature: 1.0 });
     const expandParsed = parseJsonResponse(expandResponse);
     const expandStep: PipelineStep = {
       name: `EXPAND[${selectedWolf.name}]`,

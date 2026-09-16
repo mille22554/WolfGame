@@ -27,24 +27,28 @@ export interface ChatOptions {
  * 失敗回 null。
  */
 export async function chat(messages: ChatMessage[], options: ChatOptions = {}): Promise<string | null> {
-  const { temperature = 1.0, maxTokens = 200, timeoutMs = LLM_TIMEOUT_MS } = options;
+  const { temperature = 1.0, maxTokens, timeoutMs = LLM_TIMEOUT_MS } = options;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    const body: Record<string, any> = {
+      model: LLM_MODEL,
+      messages,
+      temperature,
+    };
+    if (maxTokens && maxTokens > 0) {
+      body.max_tokens = maxTokens;
+    }
+
     const res = await fetch(`http://${SGLANG_HOST}:${SGLANG_PORT}/v1/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${SGLANG_API_KEY}`,
       },
-      body: JSON.stringify({
-        model: LLM_MODEL,
-        messages,
-        temperature,
-        max_tokens: maxTokens,
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
 
