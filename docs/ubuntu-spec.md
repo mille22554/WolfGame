@@ -149,7 +149,7 @@
 | M4 | 遊戲設定面板（房主調人數等）+ START_GAME 事件 | 房主可設參數、觸發開始 | ✅ |
 | M5 | 遊戲核心：角色分配 + 夜間行動 + 白天投票 + 勝利判定（server-side） | 完整一局可跑完（6 人局）；夜間行動等待制正常；投票平票處理正確 | ✅ |
 | M6 | 前端遊戲 UI：角色揭示 + 夜間操作面板 + 投票面板 + phase 指示 + 死亡公告 + 結算畫面 | 真人可完整操作一局；各角色看到正確資訊 | ⬜ |
-| M7 | AI 補位：LLM client + AI 玩家行動生成（發言/投票/夜間行動）+ SpeechScheduler 管線 | 1 真人 + 5 AI 可跑完整局；AI 發言自然、投票有邏輯、夜間行動合法；LLM 失敗 fallback 不卡死遊戲 | ⬜ |
+| M7 | AI 補位：LLM client + AI 玩家行動生成（發言/投票/夜間行動）+ SpeechScheduler 管線 | 1 真人 + 5 AI 可跑完整局；AI 發言自然、投票有邏輯、夜間行動合法；LLM 失敗以重試處理，server 掛 → 開新局 | ⬜ |
 
 ## 10. 部署現狀
 
@@ -391,7 +391,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | 環境變數 | `SGLANG_API_KEY`、`LLM_MODEL`（model name，預設 `qwen3.8-27b`） |
 | 併發限制 | `--max-running-requests 2`（與 PRE_SPEECH 每批 2 個吻合，不需排隊） |
 | 呼叫 timeout | 單次 HTTP 請求 60 秒（GPU 27B + DSpark，100 token ≈ 3-8 秒） |
-| Fallback | LLM 呼叫失敗（timeout / 5xx / parse error）→ server 自動替該 AI 提交預設行動（狼→隨機刀一人；占い→隨機查一人；守衛→隨機護一人；投票→棄票；發言→跳過）。**必須自動提交**，因為 phase 無 timeout，若 AI 永遠不提交則遊戲卡死 |
+| 失敗處理 | LLM 呼叫失敗（timeout / 5xx / parse error）→ **重試**取得回覆（記錄重試次數）。若 SGLang server 本身掛掉，遊戲無法繼續（所有 AI 呼叫都會失敗）→ 開新局 |
 
 ### 13.3 AI 玩家數量
 
@@ -476,7 +476,7 @@ IDLE →（60s 無訊息 或 全真人跳過）→ PRE_SPEECH → JUDGE → SELE
 
 - 非發言類行動（刀人、查人、護人、投票）不需管線，直接單一 LLM 呼叫
 - 各 AI 玩家獨立呼叫（無平行需求，因為每個 AI 只有一個決定要做）
-- 若 LLM 呼叫失敗 → fallback 預設行動（見 §13.2）
+- 若 LLM 呼叫失敗 → 重試取得回覆（見 §13.2）
 
 #### 清理
 
