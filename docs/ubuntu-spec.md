@@ -1,11 +1,11 @@
 # Ubuntu 版規格書：多人實時狼人殺伺服器
 
 分支：`ubuntu`
-狀態：M1–M4 已完成並部署上線；M5（遊戲核心）進行中
+狀態：M1–M5 已完成並部署上線；M6（前端遊戲 UI）+ M7（AI 補位）待實作
 
 ## 1. 定位
 
-外部真人玩家的線上狼人殺入口。全真人對戰（無 AI），支援 6–15 人房間，含完整遊戲流程（角色分配、夜間行動、白天討論投票、勝利判定）。
+外部真人玩家的線上狼人殺入口。支援 6–15 人房間，含完整遊戲流程（角色分配、夜間行動、白天討論投票、勝利判定）。真人不足時由 AI 補位（同機 llama.cpp 跑 Qwen3.8 27B）。
 
 ## 2. 核心功能
 
@@ -38,17 +38,25 @@
 ## 3. 架構
 
 ```
-┌─────────────────────────────────────────────┐
-│  Ubuntu 伺服器                                │
-│                                              │
-│  ┌──────────┐    ┌──────────────────────┐   │
-│  │ 前端靜態  │    │  Node.js 伺服器       │   │
-│  │ (SPA)    │◄──►│  - WebSocket 路由     │   │
-│  │          │    │  - 房間管理器          │   │
-│  │          │    │  - 遊戲引擎（phase    │   │
-│  │          │    │    狀態機 + 結算）    │   │
-│  └──────────┘    └──────────────────────┘   │
-└─────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│  Ubuntu 伺服器（192.168.0.94）                       │
+│                                                      │
+│  ┌──────────┐    ┌──────────────────────┐           │
+│  │ 前端靜態  │    │  Node.js 伺服器       │           │
+│  │ (SPA)    │◄──►│  - WebSocket 路由     │           │
+│  │          │    │  - 房間管理器          │           │
+│  │          │    │  - 遊戲引擎（phase    │──┐       │
+│  │          │    │    狀態機 + 結算）    │  │       │
+│  └──────────┘    └──────────────────────┘  │       │
+│                                       │  │       │
+│                                       ▼  │       │
+│                              ┌──────────────────┐ │
+│                              │ llama-server      │ │
+│                              │ (Qwen3.8 27B)    │ │
+│                              │ port 2064        │ │
+│                              │ OpenAI-compat API │ │
+│                              └──────────────────┘ │
+└─────────────────────────────────────────────────────┘
          ▲ WebSocket (wss://)
          │
    玩家瀏覽器（多人）
@@ -70,8 +78,8 @@
 | 部署 | nginx（靜態）+ cloudflared tunnel | 前端已上線；後端 WebSocket 待實作後改用 pm2/systemd |
 
 ### 與 main 分支的關係
-- **共用**：遊戲規則常數（角色定義、勝利條件）、類型定義（`Role`、`PlayerState`）、可能的 prompt 模板
-- **獨立**：伺服器架構（main 是單人本地，ubuntu 是多房多人）、前端（main 是 Electron 桌面，ubuntu 是網頁）、房間管理
+- **共用**：遊戲規則常數（角色定義、勝利條件）、類型定義（`Role`、`PlayerState`）、LLM client 模式（OpenAI-compatible API 呼叫）
+- **獨立**：伺服器架構（main 是單人本地，ubuntu 是多房多人）、前端（main 是 Electron 桌面，ubuntu 是網頁）、房間管理、AI 排程（ubuntu 用錯峰 timer，main 用 event queue）
 - 若共用代碼維護成本 > 獨立，則完全分開，只 sync 規則常數
 
 ## 5. 房間生命週期
@@ -125,11 +133,11 @@
 
 ## 8. 不做（排除）
 
-- AI / LLM 推理（全真人對戰）
 - 帳號系統
 - 持久化（重啟即清空）
 - 跨房間通訊
 - 語音
+- 多模型切換（固定 Qwen3.8 27B）
 
 ## 9. 里程碑
 
@@ -139,8 +147,9 @@
 | M2 | 房間內打字 broadcast + 玩家列表 + 房主操作 | 多人同時打字、踢人正常 | ✅ |
 | M3 | 觀戰模式 + 房間回收（清空立即 / 超時 30 分鐘）| 加入已開始房間 → 只讀；空房立即回收、無活動 30 分鐘自動清理 | ✅ |
 | M4 | 遊戲設定面板（房主調人數等）+ START_GAME 事件 | 房主可設參數、觸發開始 | ✅ |
-| M5 | 遊戲核心：角色分配 + 夜間行動 + 白天投票 + 勝利判定（server-side） | 完整一局可跑完（6 人局）；夜間行動 timeout 正常；投票平票處理正確 | ⬜ |
+| M5 | 遊戲核心：角色分配 + 夜間行動 + 白天投票 + 勝利判定（server-side） | 完整一局可跑完（6 人局）；夜間行動 timeout 正常；投票平票處理正確 | ✅ |
 | M6 | 前端遊戲 UI：角色揭示 + 夜間操作面板 + 投票面板 + phase 指示 + 死亡公告 + 結算畫面 | 真人可完整操作一局；各角色看到正確資訊 | ⬜ |
+| M7 | AI 補位：LLM client + AI 玩家行動生成（發言/投票/夜間行動）+ 錯峰排程 | 1 真人 + 5 AI 可跑完整局；AI 發言自然、投票有邏輯、夜間行動合法；LLM timeout 不卡死遊戲 | ⬜ |
 
 ## 10. 部署現狀
 
@@ -317,5 +326,143 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 - `ROLE_CONFIG`、`Role`、`Team`、`ROLE_TEAM`、`seerSeesAs()` 等常數/函式 → 直接 import 或 copy
 - `assignRoles()`、`checkWinCondition()` 邏輯 → 可复用（需確認 import path）
 - `night.ts` 的結算邏輯 → 可复用（需改為 async/timeout 模式）
-- **不共用**：`engine.ts`（事件佇列 + LLM dispatch 太複雜）、`character-session.ts`（LLM prompt）、`ai-scheduler.ts`（AI 排程）
+- **不共用**：`engine.ts`（事件佇列太複雜）、`ai-scheduler.ts`（排程模式不同）
+- **部分共用**：`character-session.ts` 的 prompt 結構可參考，但 ubuntu 版簡化為單一 `ai-player.ts`
 - ubuntu 版用更簡單的 **phase timer + 直接 state mutation** 模式（不需 event queue）
+
+## 13. AI 補位（M7）
+
+### 13.1 定位
+
+- 真人參戰者 < 實際開局人數時，AI 補滿剩餘席位
+- AI 玩家與真人玩家完全同權：发言、投票、夜間行動、私頻聊天
+- 前端視角：AI 玩家顯示為普通玩家（暱稱前加 🤖），無特殊標記（不暴露「這是 AI」給其他真人）
+- 房主可純 AI 局（1 真人 + N AI）也可全真人局（0 AI）
+
+### 13.2 LLM 端點
+
+| 項目 | 值 |
+|---|---|
+| 模型 | Qwen3.8 27B（GGUF Q4_K_M 量化） |
+| 推理引擎 | llama.cpp server（`llama-server`） |
+| 位址 | `http://127.0.0.1:2064`（同機 localhost） |
+| API 格式 | OpenAI-compatible（`POST /v1/chat/completions`） |
+| 環境變數 | `LLAMA_SERVER_PORT`（預設 2064）、`LLM_MODEL`（model tag，預設空＝server 唯一模型） |
+| 超时 | 單次呼叫 30 秒（CPU 27B 推論 60 token ≈ 15-30 秒） |
+| Fallback | timeout / 5xx → 該行動視為「跳過」（夜間不刀/不查/不護；投票棄票；發言跳過） |
+
+### 13.3 AI 玩家數量
+
+- `aiCount = actualPlayerCount - humanPlayerCount`（開局時計算）
+- 下限 0（全真人）；上限 `maxPlayers - 1`（至少 1 真人房主）
+- AI 玩家在 `ROLE_REVEAL` 前生成：隨機 persona + 隨機暱稱（「AI-村夫」「AI-旅人」等）
+
+### 13.4 AI 行動生成
+
+AI 玩家在以下節點由 LLM 決定行動：
+
+| 節點 | Prompt 輸入 | 期望輸出 | 限制 |
+|---|---|---|---|
+| 討論發言 | 角色 persona + 當天討論記錄（最近 N 條）+ 存活玩家 + 自己的情報 | 一句發言（自然語言） | ≤ 100 token；每輪最多發言 2 次 |
+| 投票 | 角色 + 討論記錄摘要 + 存活玩家列表 + 自己的情報 | `targetClientId`（或 null 棄票） | 不可投自己 |
+| 夜間行動（狼） | 狼隊成員 + 存活玩家 + 討論觀察 | `targetClientId` | 不可選自己/狂人 |
+| 夜間行動（占い） | 角色 + 存活玩家 + 過去查驗記錄 | `targetClientId` | 不可選自己 |
+| 夜間行動（守衛） | 角色 + 存活玩家 + 過去守護記錄 | `targetClientId` | 不可自護；Day1 不行動 |
+
+### 13.5 Prompt 結構
+
+```
+System:
+  你是「{nickname}」，在狼人殺遊戲中扮演「{roleDisplayName}」。
+  {roleDescription}
+  你的性格：{personality}
+  規則：你只能回覆 JSON，不要多餘文字。
+
+User（討論發言）:
+  當前：第 {day} 天 白天討論。
+  存活玩家：{playerList}
+  你的情報：{privateInfo}（占い結果/狼隊身份/共有者夥伴/無）
+  最近討論：
+    {recentMessages}
+  請發表你的看法（一句話，≤50字）。
+  回覆格式：{"speech": "..."}
+
+User（投票）:
+  當前：第 {day} 天 投票階段。
+  存活玩家：{playerList}
+  你的情報：{privateInfo}
+  討論摘要：{discussionSummary}
+  請選一個你要投票淘汰的玩家。
+  回覆格式：{"target": "clientId"} 或 {"target": null}
+
+User（夜間行動）:
+  當前：第 {day} 夜。你是 {roleDisplayName}。
+  存活玩家：{playerList}
+  你的情報：{privateInfo}
+  {roleSpecificInstruction}
+  回覆格式：{"target": "clientId"}
+```
+
+- `privateInfo`：依角色不同——占い師看到過去查驗結果；人狼知道同夥+狂人；共有者知道夥伴；村民/狂人/霊能者（僅票死資訊）
+- `roleSpecificInstruction`：狼→「選一個你要刀的人（不可選自己或狂人）」；占い→「選一個你要查驗的人」；守衛→「選一個你要守護的人（不可選自己）」
+
+### 13.6 錯峰排程
+
+避免所有 AI 同時轟擊 LLM（CPU 競爭 → 全部 timeout）：
+
+- AI 行動間隔 **3–5 秒**（隨機）
+- 同一 phase 內，AI 依 `joinSeq` 順序依次行動
+- 例：5 個 AI 的夜間行動 → AI1 在 t+0s、AI2 在 t+4s、AI3 在 t+7s、AI4 在 t+11s、AI5 在 t+14s 提交
+- 討論發言：AI 在 phase 開始後 5s、15s、30s... 隨機時間發言（模擬真人節奏）
+- 若 AI 的 LLM 呼叫仍在進行中且 phase 已 timeout → 放棄該呼叫（AbortController）
+
+### 13.7 新增模組
+
+| 檔案 | 說明 |
+|---|---|
+| `src/lobby-server/llm.ts` | LLM client：`chat(messages, { timeout, maxTokens })` → `fetch(localhost:2064/v1/chat/completions)`；回傳 `string \| null` |
+| `src/lobby-server/ai-player.ts` | AI 玩家邏輯：`generateSpeech()`、`generateVote()`、`generateNightAction()` → 組裝 prompt → 呼叫 llm → parse JSON → 回傳行動 |
+
+### 13.8 GameEngine 整合點
+
+- `start()`：分配角色後，為 AI 玩家生成 persona + 暱稱；AI 玩家不發 `ROLE_REVEALED`（無 WS 連線）
+- `transitionTo('NIGHT')`：啟動 AI 夜間行動排程（錯峰 timer）
+- `transitionTo('DAY_DISCUSSION')`：啟動 AI 發言排程
+- `transitionTo('DAY_VOTING')`：啟動 AI 投票排程
+- AI 行動走同一個 `handleNightAction()` / `handleVote()` 路徑（engine 不區分真人/AI）
+- `destroy()`：clear 所有 AI 排程 timer + abort 進行中的 LLM 呼叫
+
+### 13.9 環境變數
+
+| 變數 | 預設 | 說明 |
+|---|---|---|
+| `LLAMA_SERVER_PORT` | `2064` | llama-server 埠 |
+| `LLAMA_SERVER_HOST` | `127.0.0.1` | llama-server host（同機） |
+| `LLM_MODEL` | `''`（空＝server 唯一模型） | 多模型時指定 model tag |
+| `LLM_TIMEOUT_MS` | `30000` | 單次 LLM 呼叫 timeout |
+| `LLM_MAX_TOKENS` | `200` | 單次回應 max tokens |
+| `AI_ENABLED` | `true` | 設 `false` 可停用 AI 補位（純真人模式） |
+
+### 13.10 systemd 部署
+
+llama-server 需獨立 systemd service（或與 wolfgame 同一 unit 的 ExecStartPre）：
+
+```ini
+# /etc/systemd/system/llama-server.service
+[Unit]
+Description=llama.cpp server (Qwen3.8 27B)
+Before=wolfgame.service
+
+[Service]
+User=morowin
+WorkingDirectory=/opt/llama
+ExecStart=/opt/llama/llama-server -m /opt/llama/models/qwen3.8-27b-q4.gguf --port 2064 --host 127.0.0.1 -c 4096
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+- `wolfgame.service` 加 `After=llama-server.service`（確保 LLM 先啟動）
+- 模型檔案：`/opt/llama/models/`（~16GB Q4_K_M，git 外管理）
