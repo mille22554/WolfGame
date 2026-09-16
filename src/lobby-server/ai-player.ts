@@ -79,10 +79,10 @@ function extractPersonaSummary(profile: CharacterProfile): string {
   for (const line of lines) {
     if (line.startsWith('## ')) {
       section = line.replace('## ', '').trim();
-      if (section === '基本資料' || section === '語言風格') summary.push(line);
+      if (section === '基本資料' || section === '性格與說話方式' || section === '說話範例') summary.push(line);
       continue;
     }
-    if (section === '基本資料' || section === '語言風格') {
+    if (section === '基本資料' || section === '性格與說話方式' || section === '說話範例') {
       summary.push(line);
     }
   }
