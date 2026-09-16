@@ -5,7 +5,7 @@
 
 ## 1. 定位
 
-外部真人玩家的線上狼人殺入口。支援 6–15 人房間，含完整遊戲流程（角色分配、夜間行動、白天討論投票、勝利判定）。真人不足時由 AI 補位（同機 llama.cpp 跑 Qwen3.8 27B）。
+外部真人玩家的線上狼人殺入口。支援 6–15 人房間，含完整遊戲流程（角色分配、夜間行動、白天討論投票、勝利判定）。真人不足時由 AI 補位（同機 SGLang 跑 Qwen3.8-27B）。
 
 ## 2. 核心功能
 
@@ -51,9 +51,9 @@
 │                                       │  │       │
 │                                       ▼  │       │
 │                              ┌──────────────────┐ │
-│                              │ llama-server      │ │
-│                              │ (Qwen3.8 27B)    │ │
-│                              │ port 2064        │ │
+│                              │ SGLang            │ │
+│                              │ (Qwen3.8-27B)    │ │
+│                              │ port 9090         │ │
 │                              │ OpenAI-compat API │ │
 │                              └──────────────────┘ │
 └─────────────────────────────────────────────────────┘
@@ -459,8 +459,8 @@ IDLE →（60s 無訊息 或 全真人跳過）→ PRE_SPEECH → JUDGE → SELE
 | 階段 | 說明 | 參數 |
 |---|---|---|
 | IDLE | 每 1s 檢查；等待 60s 無新訊息（或全真人跳過） | `cdMs=60000`, `checkIntervalMs=1000` |
-| PRE_SPEECH | 所有存活 AI 分批次（每批 2 個）平行生成草稿（≤100 token） | `preSpeechBatch=2`, `temp=1.0` |
-| JUDGE | 單次 LLM 呼叫，全盲評分所有草稿（不告知哪個 AI 寫哪段） | `temp=0.7`（不限 token） |
+| PRE_SPEECH | 所有存活 AI 分批（每批 2 個）依序平行生成草稿（≤100 token）；**等全部 batch 完成才進 JUDGE** | `preSpeechBatch=2`, `temp=1.0` |
+| JUDGE | 全部草稿到齊後，單次 LLM 呼叫全盲評分所有草稿（不告知哪個 AI 寫哪段） | `temp=0.7`（不限 token） |
 | SELECT | 新穎性懲罰（與最近 3 則訊息比較）+ top3 中隨機選一 | `topK=3`, `recentCompareCount=3` |
 | EXPAND | 將選中的草稿展開為完整發言（commit 點，之後不中斷） | `temp=1.0` |
 | BROADCAST | 見下方邏輯 | — |
@@ -486,7 +486,7 @@ IDLE →（60s 無訊息 或 全真人跳過）→ PRE_SPEECH → JUDGE → SELE
 
 | 檔案 | 說明 |
 |---|---|
-| `src/lobby-server/llm.ts` | LLM client：`chat(messages, { timeout, maxTokens })` → `fetch(localhost:2064/v1/chat/completions)`；回傳 `string \| null` |
+| `src/lobby-server/llm.ts` | LLM client：`chat(messages, { timeout, maxTokens })` → `fetch(localhost:9090/v1/chat/completions)`（Bearer auth）；回傳 `string \| null` |
 | `src/lobby-server/ai-player.ts` | AI 玩家邏輯：`generateSpeech()`、`generateVote()`、`generateNightAction()` → 組裝 prompt → 呼叫 llm → parse JSON → 回傳行動 |
 
 ### 13.8 GameEngine 整合點
@@ -502,33 +502,24 @@ IDLE →（60s 無訊息 或 全真人跳過）→ PRE_SPEECH → JUDGE → SELE
 
 | 變數 | 預設 | 說明 |
 |---|---|---|
-| `LLAMA_SERVER_PORT` | `2064` | llama-server 埠 |
-| `LLAMA_SERVER_HOST` | `127.0.0.1` | llama-server host（同機） |
-| `LLM_MODEL` | `''`（空＝server 唯一模型） | 多模型時指定 model tag |
-| `LLM_TIMEOUT_MS` | `30000` | 單次 LLM 呼叫 timeout |
+| `SGLANG_PORT` | `9090` | SGLang server 埠 |
+| `SGLANG_HOST` | `127.0.0.1` | SGLang host（同機） |
+| `SGLANG_API_KEY` | —（部署時注入） | Bearer token |
+| `LLM_MODEL` | `qwen3.8-27b` | model name（`--served-model-name`） |
+| `LLM_TIMEOUT_MS` | `60000` | 單次 LLM 呼叫 timeout |
 | `LLM_MAX_TOKENS` | `200` | 單次回應 max tokens |
 | `AI_ENABLED` | `true` | 設 `false` 可停用 AI 補位（純真人模式） |
 
 ### 13.10 systemd 部署
 
-llama-server 需獨立 systemd service（或與 wolfgame 同一 unit 的 ExecStartPre）：
+SGLang 已有獨立 systemd service（`sglang-server.service`），wolfgame 只需在 `After=` 依賴它：
 
 ```ini
-# /etc/systemd/system/llama-server.service
+# /etc/systemd/system/wolfgame.service（相關欄位）
 [Unit]
-Description=llama.cpp server (Qwen3.8 27B)
-Before=wolfgame.service
-
-[Service]
-User=morowin
-WorkingDirectory=/opt/llama
-ExecStart=/opt/llama/llama-server -m /opt/llama/models/qwen3.8-27b-q4.gguf --port 2064 --host 127.0.0.1 -c 4096
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
+After=network-online.target sglang-server.service
+Wants=sglang-server.service
 ```
 
-- `wolfgame.service` 加 `After=llama-server.service`（確保 LLM 先啟動）
-- 模型檔案：`/opt/llama/models/`（~16GB Q4_K_M，git 外管理）
+- `wolfgame.service` 加 `After=sglang-server.service`（確保 LLM 先啟動）
+- 模型檔案：`/home/morowin/models/Qwen3.8-27B-AWQ`（~18.7GB，git 外管理）
