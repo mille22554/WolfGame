@@ -11,6 +11,7 @@
 
 - **公開網址：`http://morowin.win/wolfgame/`**（Cloudflare Tunnel → Ubuntu server nginx :80 → `/var/www/wolf`）。
 - **該網址目前部署的是前端原型 v0.1**（靜態 HTML/CSS/JS，頁面標題「狼人殺 · Werewolf Online」，含建立／加入房間＋大廳畫面）——**不是本 repo 的 server build**；本 repo 的頁面（menu/index/models/download）不在那站上。
+- 該原型在 repo 的 **`ubuntu-web/`**（`index.html`／`app.js`／`style.css`，共 3 檔）。**純靜態 mock：`app.js` 沒有 WS／fetch，不連任何 server**，房間／大廳畫面全是前端假資料；**直接雙擊 `index.html` 開網頁即可（file://），不需要任何 server**。別跟 `public/`（main 分支真正連 server 的客戶端）搞混。
 - Ubuntu server：`morowinserver`（192.168.0.94，使用者 morowin，SSH 走 `ssh.morowin.win`）；ubuntu 分支的 server 規劃部署在同一台。
 - 部署細節（Tunnel 路由表、其他子網域）：`../ForOpencodeMemory/fastCRW-vs-SearXNG-Comparison.md` 的「實際部署狀態」章節。
 
@@ -24,7 +25,7 @@
 | `npm start` | `node dist/entry.js` → HTTP+WS server；port 取 `PORT` env，否則從 2639 起自動找 |
 | `npm run build:pkg` / `npm run smoke:pkg` | pkg 打 Windows exe（node18-win-x64）→ `dist-pkg/`（gitignore） |
 
-沒有 CI、lint、formatter 設定。
+沒有 CI、lint、formatter 設定。`ubuntu-web/` 前端原型直接雙擊 `index.html` 開網頁即可，不需 server。
 
 ## 環境變數（皆有預設值）
 
@@ -47,5 +48,6 @@
 
 - `docs/phase0..3-spec.md` — 各 phase 實作規格（含 WS 協定、測試規格、不可違反的不變式）
 - `docs/ubuntu-plan.md` — ubuntu 分支三階段計畫（無頭單房 → 多房 → 模型切換）
+- `docs/ubuntu-spec.md` — ubuntu 版多人實時伺服器規格書（房間系統＋實時通訊＋觀戰；初稿，AI/遊戲邏輯待補）
 - `docs/人狼規則.md` — 遊戲規則＋GM 紀律（AI 行為約束、洩密禁令）
 - `docs/GM_GUIDE.md` — GM 操作指南
