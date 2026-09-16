@@ -1,7 +1,7 @@
 # Ubuntu 版規格書：多人實時狼人殺伺服器
 
 分支：`ubuntu`
-狀態：初稿（待補充 AI/遊戲邏輯部分）
+狀態：M1–M4 已完成並部署上線（待補充 AI/遊戲邏輯部分）
 
 ## 1. 定位
 
@@ -19,7 +19,7 @@
   - 玩家人數：滑桿 6–15（預設 15）
   - 隨機人數 toggle：關＝定值；開＝滑桿變上限（顯示 `≤N`），開局時在 6–上限 間隨機決定實際人數
 - 身分切換（頂欄）：參戰／觀戰；房主無論參戰或觀戰都保留房主工具（含開始遊戲）
-- 玩家列表：角色圖示「?」佔位（lobby 不分配角色；角色於開局時隨機分配）、房主標 👑、房主可踢其他玩家
+- 玩家列表（分左右兩欄）：上「⚔ 參戰」、下「👀 觀戰」；角色圖示「?」佔位（lobby 不分配角色；角色於開局時隨機分配）、房主標 👑、房主可踢其他玩家（含觀戰者）
 - 房主可開始遊戲
 - 觀戰：可看白板、可發言（聊天）；不能操作（開始遊戲、踢人等）
 - 房主離開：無手動轉讓；依入房時間（最早者）自動轉讓給下一位玩家
@@ -91,18 +91,27 @@
 
 | 方向 | type | payload | 說明 |
 |---|---|---|---|
-| C→S | `CREATE_ROOM` | `{ nickname }` | 建立房間，回 `ROOM_CREATED { code }` |
-| C→S | `JOIN_ROOM` | `{ code, nickname }` | 加入房間 |
-| S→C | `ROOM_JOINED` | `{ code, isHost, players[], started }` | 加入成功 |
+| C→S | `CREATE_ROOM` | `{ nickname }` | 建立房間，回 `ROOM_JOINED { code, isHost, players[], started, maxPlayers, randomCount }` |
+| C→S | `JOIN_ROOM` | `{ code, nickname, asSpectator? }` | 加入房間（`asSpectator: true` 強制觀戰） |
+| S→C | `ROOM_JOINED` | `{ code, isHost, players[], started, maxPlayers, randomCount }` | 加入成功（參戰） |
+| S→C | `SPECTATOR_JOINED` | `{ code, isHost, players[], started, maxPlayers, randomCount }` | 以觀戰身份進入 |
 | S→C | `ROOM_FULL` | — | 房間滿員（非觀戰） |
-| S→C | `SPECTATOR_JOINED` | `{ nickname, players[] }` | 以觀戰身份進入 |
 | C→S | `SEND_MESSAGE` | `{ text }` | 發言 |
 | S→C | `MESSAGE` | `{ from, text, ts }` | broadcast 發言 |
-| S→C | `PLAYER_JOINED` | `{ nickname }` | 有人加入 |
+| S→C | `PLAYER_JOINED` | `{ nickname }` | 有人加入（broadcast 給其他成員） |
 | S→C | `PLAYER_LEFT` | `{ nickname }` | 有人離開 |
-| C→S | `START_GAME` | `{ maxPlayers, randomCount }` | 房主開始（後續）；server 依 `randomCount` 決定實際人數（定值或 6–上限 隨機） |
+| C→S | `SET_MODE` | `{ mode: 'play' \| 'spectate' }` | 切換參戰/觀戰 |
+| S→C | `MEMBERS_CHANGED` | `{ players[] }` | 身分切換後 broadcast 完整名單 |
+| C→S | `SET_SETTING` | `{ maxPlayers, randomCount }` | 房主調整設定 |
+| S→C | `SETTING_CHANGED` | `{ maxPlayers, randomCount }` | broadcast 設定變更 |
+| C→S | `START_GAME` | `{ maxPlayers, randomCount }` | 房主開始；server 依 `randomCount` 決定實際人數（定值或 6–上限 隨機） |
+| S→C | `GAME_STARTED` | `{ started, actualCount }` | 遊戲開始通知 |
 | C→S | `KICK_PLAYER` | `{ target }` | 房主踢人 |
-| S→C | `HOST_CHANGED` | `{ newHost }` | 房主離開後自動轉讓，通知新房主 |
+| S→C | `KICKED` | `{ reason }` | 被踢通知（只發給被踢者） |
+| S→C | `HOST_CHANGED` | `{ newHost }` | 房主離開後自動轉讓 |
+| S→C | `ERROR` | `{ message }` | 錯誤（rate limit、不在房間等） |
+
+> `players[]` 元素格式：`{ nickname, isHost, isSpectator }`（`MemberInfo`）。
 
 ## 7. 安全 / 限制
 
@@ -124,32 +133,43 @@
 
 ## 9. 里程碑
 
-| # | 交付物 | 驗收標準 |
-|---|---|---|
-| M1 | 首頁 + 建立/加入房間 + WebSocket 連線 | 兩台瀏覽器可進同一房、互相看到對方加入 |
-| M2 | 房間內打字 broadcast + 玩家列表 + 房主操作 | 多人同時打字、踢人正常 |
-| M3 | 觀戰模式 + 房間回收（清空立即 / 超時 30 分鐘）| 加入已開始房間 → 只讀；空房立即回收、無活動 30 分鐘自動清理 |
-| M4 | 遊戲設定面板（房主調人數等）+ START_GAME 事件 | 房主可設參數、觸發開始（遊戲邏輯後續接） |
+| # | 交付物 | 驗收標準 | 狀態 |
+|---|---|---|---|
+| M1 | 首頁 + 建立/加入房間 + WebSocket 連線 | 兩台瀏覽器可進同一房、互相看到對方加入 | ✅ |
+| M2 | 房間內打字 broadcast + 玩家列表 + 房主操作 | 多人同時打字、踢人正常 | ✅ |
+| M3 | 觀戰模式 + 房間回收（清空立即 / 超時 30 分鐘）| 加入已開始房間 → 只讀；空房立即回收、無活動 30 分鐘自動清理 | ✅ |
+| M4 | 遊戲設定面板（房主調人數等）+ START_GAME 事件 | 房主可設參數、觸發開始（遊戲邏輯後續接） | ✅ |
 
 ## 10. 部署現狀
 
 | 項目 | 狀態 |
 |---|---|
-| URL | `https://morowin.win/wolfgame/` |
-| 伺服器 | `192.168.0.94`（Ubuntu，user `morowin`） |
-| 靜態檔案 | `/var/www/wolf/`（nginx root） |
-| 反向代理 | nginx（port 80）→ cloudflared tunnel → `morowin.win` |
+| URL | `http://morowin.win/wolfgame/` |
+| 伺服器 | `192.168.0.94`（Ubuntu 24.04，user `morowin`） |
+| 程式碼 | `/opt/wolfgame/`（git clone ubuntu 分支） |
+| Node.js | 20.20.2（NodeSource apt） |
+| 後端 | `dist/lobby-server/entry.js`（systemd service `wolfgame`，port 2640） |
+| 靜態檔案 | 由 Node.js 伺服（`ubuntu-web/`），nginx 不再直接伺服 |
+| 反向代理 | nginx（port 80）`/wolfgame/` → `127.0.0.1:2640/`（strip prefix）+ WS upgrade |
 | 隧道 | cloudflared service（systemd），routes：`morowin.win`→`:80`、`api.morowin.win`→`:9090` |
 | 前端 | 已上線（純 HTML/CSS/JS，無 build step） |
-| 後端 | 尚未實作（WebSocket 房間伺服器待 M1） |
+| 後端 | 已上線（WebSocket 多房伺服器，M1–M4 完成） |
 
-### 更新前端部署流程
+### 部署流程
 
 ```bash
-# 本機修改 ubuntu-web/ 後：
-scp -i ~/.ssh/id_ed25519_mille22554 ubuntu-web/* morowin@192.168.0.94:/var/www/wolf/
-# 或 git push 後在 server 上 git pull + 手動 copy
+# 本機：修改 src/ 或 ubuntu-web/ 後
+npm run build          # 若改了 src/（dist/ 有 commit 進 git）
+git add -A && git commit -m "..." && git push
+
+# Server：
+ssh -F ~/.ssh/config ssh.morowin.win \
+  "cd /opt/wolfgame && git pull && sudo systemctl restart wolfgame"
 ```
+
+- nginx 配置：`deploy/nginx-wolfgame.conf`（已部署至 `/etc/nginx/sites-enabled/`）
+- systemd unit：`deploy/wolfgame.service`（已部署至 `/etc/systemd/system/`，enabled）
+- 前端快取：`Cache-Control: no-cache` + `index.html` 內 `app.js?v=N` 版本號（改動前端時 bump N）
 
 ## 11. 待確認
 
