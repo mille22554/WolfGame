@@ -24,6 +24,10 @@ export interface AiGameState {
     players: AiPlayerInfo[];
     /** 對特定玩家可見的私訊（狼隊名單、狂人、占い結果等） */
     privateInfo?: string;
+    /** 人狼 playerId 列表（用於排除可刀目標） */
+    wolfIds?: number[];
+    /** 狂人 playerId */
+    madmanId?: number;
     /** 最近討論訊息（白天討論用） */
     recentMessages?: {
         from: string;

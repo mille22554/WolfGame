@@ -44,6 +44,8 @@ const gameState = {
   phase: 'NIGHT_WOLF_MEETING',
   players,
   privateInfo: '你是人狼。你的同夥：P1(kenta)、P3(ryoko)、P7(tatuya)。狂人是 P9(shota)，他是友方但不知道誰是狼。不可刀同夥和狂人。',
+  wolfIds: [1, 3, 7],
+  madmanId: 9,
 };
 
 // ============================================

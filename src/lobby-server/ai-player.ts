@@ -58,6 +58,10 @@ export interface AiGameState {
   players: AiPlayerInfo[];
   /** 對特定玩家可見的私訊（狼隊名單、狂人、占い結果等） */
   privateInfo?: string;
+  /** 人狼 playerId 列表（用於排除可刀目標） */
+  wolfIds?: number[];
+  /** 狂人 playerId */
+  madmanId?: number;
   /** 最近討論訊息（白天討論用） */
   recentMessages?: { from: string; text: string }[];
 }
@@ -92,7 +96,11 @@ function buildSystemPrompt(profile: CharacterProfile, role: string, extraContext
     personaSummary,
     profile.memory ? `\n你的記憶：\n${profile.memory}` : '',
     extraContext,
-    `\n規則：你只能回覆 JSON，不要多餘文字。`,
+    ``,
+    `硬規則：`,
+    `- 使用繁體中文。禁止簡體字。禁止英文單詞。`,
+    `- 只能引用已公開的遊戲事實。禁止編造不存在的遊戲術語、機制或事件。`,
+    `- 你只能回覆 JSON，不要多餘文字。不要 markdown。`,
   ].filter(Boolean).join('\n');
 }
 
@@ -116,11 +124,20 @@ export function buildPreSpeechPrompt(
 
   const system = buildSystemPrompt(profile, '人狼', wolfContext);
 
+  // 可刀目標：排除自己、同夥、狂人
+  const wolfIdSet = new Set(gameState.wolfIds ?? []);
+  const eligibleTargets = gameState.players
+    .filter(p => p.alive && p.id !== player.id && !wolfIdSet.has(p.id) && p.id !== gameState.madmanId)
+    .map(p => `P${p.id}(${p.name})`)
+    .join('、');
+
   const user = [
-    `當前：第 ${gameState.day} 夜，狼會議。`,
-    `存活玩家：${aliveList}`,
+    `當前：第 ${gameState.day} 夜，狼會議（私頻，只有人狼能看到）。`,
     `你的情報：${gameState.privateInfo ?? '你是人狼'}`,
-    `請發表你的刀人意見（一句話，≤50字）。`,
+    `可刀目標（只能從以下選）：${eligibleTargets}`,
+    ``,
+    `任務：提出一個刀人目標並簡述理由（≤50字）。`,
+    `提醒：只說你有把握的觀察，不要編造。用你的角色語氣說話。`,
     `回覆格式：{"speech": "..."}`,
   ].join('\n');
 
@@ -174,11 +191,12 @@ export function buildExpandPrompt(
   const system = buildSystemPrompt(profile, '人狼', wolfContext);
 
   const user = [
-    `當前：第 ${gameState.day} 夜，狼會議。`,
-    `存活玩家：${aliveList}`,
+    `當前：第 ${gameState.day} 夜，狼會議（私頻）。`,
     `你的情報：${gameState.privateInfo ?? '你是人狼'}`,
     `你之前的草稿：「${draft}」`,
-    `請將草稿展開為完整發言（≤150字），要有說服力、符合你的角色個性。`,
+    ``,
+    `任務：將草稿展開為完整發言（≤150字）。要有說服力、符合你的角色語氣。`,
+    `提醒：只引用你有把握的觀察，不要編造。`,
     `回覆格式：{"speech": "..."}`,
   ].join('\n');
 
