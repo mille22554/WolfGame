@@ -59,6 +59,7 @@ function buildSystemPrompt(profile, role, extraContext) {
         `- 只能引用已公開的遊戲事實。禁止編造不存在的遊戲術語、機制或事件。`,
         `- 禁止使用「站位」「位置」「編號大小」等概念。玩家名字就是名字，沒有位置意義。`,
         `- 不要假設其他玩家說過或做過任何事。你只能引用 prompt 中明確給出的資訊。若是第一次討論，就提出你的初始建議，不要回應不存在的發言。`,
+        `- 直接說內容。禁止「我先講...」「讓我說一下...」「我想表達的是...」等前言。`,
         `- 你只能回覆 JSON，不要多餘文字。不要 markdown。`,
     ].filter(Boolean).join('\n');
 }
@@ -75,11 +76,11 @@ export function buildPreSpeechPrompt(player, profile, gameState) {
         '你必須提出刀人目標並說服同夥。',
     ].join('\n');
     const system = buildSystemPrompt(profile, '人狼', wolfContext);
-    // 可刀目標：排除自己、同夥、狂人（只用名字，不給編號——避免 AI 把數字當「位置」）
+    // 可刀目標：排除自己、同夥、狂人（用中文名，不給編號）
     const wolfIdSet = new Set(gameState.wolfIds ?? []);
     const eligibleTargets = gameState.players
         .filter(p => p.alive && p.id !== player.id && !wolfIdSet.has(p.id) && p.id !== gameState.madmanId)
-        .map(p => p.name)
+        .map(p => p.displayName)
         .join('、');
     // 討論歷史：明確告訴 AI 之前發生過什麼
     const discussionHistory = gameState.recentMessages?.length

@@ -20,21 +20,21 @@ import { loadCharacterProfile, runWolfMeetingPipeline } from '../dist/lobby-serv
 // ============================================
 
 const players = [
-  { id: 1, name: 'kenta', role: 'werewolf', personality: 'kenta', alive: true },
-  { id: 2, name: 'aoi', role: 'seer', personality: 'aoi', alive: true },
-  { id: 3, name: 'ryoko', role: 'werewolf', personality: 'ryoko', alive: true },
-  { id: 4, name: 'shinichi', role: 'villager', personality: 'shinichi', alive: true },
-  { id: 5, name: 'rin', role: 'medium', personality: 'rin', alive: true },
-  { id: 6, name: 'futa', role: 'villager', personality: 'futa', alive: true },
-  { id: 7, name: 'tatuya', role: 'werewolf', personality: 'tatuya', alive: true },
-  { id: 8, name: 'misaki', role: 'villager', personality: 'misaki', alive: true },
-  { id: 9, name: 'shota', role: 'madman', personality: 'shota', alive: true },
-  { id: 10, name: 'chihiro', role: 'mason', personality: 'chihiro', alive: true },
-  { id: 11, name: 'koharu', role: 'mason', personality: 'koharu', alive: true },
-  { id: 12, name: 'ren', role: 'guard', personality: 'ren', alive: true },
-  { id: 13, name: 'sayuki', role: 'villager', personality: 'sayuki', alive: true },
-  { id: 14, name: 'yuko', role: 'villager', personality: 'yuko', alive: true },
-  { id: 15, name: 'yuma', role: 'villager', personality: 'yuma', alive: true },
+  { id: 1, name: 'kenta', displayName: '健太', role: 'werewolf', personality: 'kenta', alive: true },
+  { id: 2, name: 'aoi', displayName: '葵', role: 'seer', personality: 'aoi', alive: true },
+  { id: 3, name: 'ryoko', displayName: '良子', role: 'werewolf', personality: 'ryoko', alive: true },
+  { id: 4, name: 'shinichi', displayName: '真一', role: 'villager', personality: 'shinichi', alive: true },
+  { id: 5, name: 'rin', displayName: '鈴', role: 'medium', personality: 'rin', alive: true },
+  { id: 6, name: 'futa', displayName: '二葉', role: 'villager', personality: 'futa', alive: true },
+  { id: 7, name: 'tatuya', displayName: '太助', role: 'werewolf', personality: 'tatuya', alive: true },
+  { id: 8, name: 'misaki', displayName: '美咲', role: 'villager', personality: 'misaki', alive: true },
+  { id: 9, name: 'shota', displayName: '翔太', role: 'madman', personality: 'shota', alive: true },
+  { id: 10, name: 'chihiro', displayName: '千尋', role: 'mason', personality: 'chihiro', alive: true },
+  { id: 11, name: 'koharu', displayName: '小晴', role: 'mason', personality: 'koharu', alive: true },
+  { id: 12, name: 'ren', displayName: '蓮', role: 'guard', personality: 'ren', alive: true },
+  { id: 13, name: 'sayuki', displayName: '佐雪', role: 'villager', personality: 'sayuki', alive: true },
+  { id: 14, name: 'yuko', displayName: '裕子', role: 'villager', personality: 'yuko', alive: true },
+  { id: 15, name: 'yuma', displayName: '優馬', role: 'villager', personality: 'yuma', alive: true },
 ];
 
 const wolves = players.filter(p => p.role === 'werewolf');

@@ -14,6 +14,7 @@ export declare function loadCharacterProfile(id: string): CharacterProfile | nul
 export interface AiPlayerInfo {
     id: number;
     name: string;
+    displayName: string;
     role: string;
     personality: string;
     alive: boolean;
