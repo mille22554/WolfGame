@@ -85,7 +85,7 @@ export function buildPreSpeechPrompt(player, profile, gameState) {
         `可刀目標（只能從以下選）：${eligibleTargets}`,
         ``,
         `任務：提出一個刀人目標並簡述理由（≤50字）。`,
-        `提醒：只說你有把握的觀察，不要編造。用你的角色語氣說話。`,
+        `提醒：理由只能基於你實際擁有的資訊。若沒有足夠資訊，說「直覺」或「隨機」就好，不要硬編觀察。座位號大小不是策略理由。用你的角色語氣說話。`,
         `回覆格式：{"speech": "..."}`,
     ].join('\n');
     return [
