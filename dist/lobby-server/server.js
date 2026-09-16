@@ -42,7 +42,7 @@ function serveStatic(req, res, publicDir) {
     if (fs.existsSync(target) && fs.statSync(target).isFile()) {
         const buf = fs.readFileSync(target);
         const ext = path.extname(target).toLowerCase();
-        res.writeHead(200, { 'Content-Type': CONTENT_TYPES[ext] ?? 'application/octet-stream' });
+        res.writeHead(200, { 'Content-Type': CONTENT_TYPES[ext] ?? 'application/octet-stream', 'Cache-Control': 'no-cache' });
         res.end(buf);
     }
     else {

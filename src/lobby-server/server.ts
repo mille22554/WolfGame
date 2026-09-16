@@ -67,7 +67,7 @@ function serveStatic(req: http.IncomingMessage, res: http.ServerResponse, public
   if (fs.existsSync(target) && fs.statSync(target).isFile()) {
     const buf = fs.readFileSync(target);
     const ext = path.extname(target).toLowerCase();
-    res.writeHead(200, { 'Content-Type': CONTENT_TYPES[ext] ?? 'application/octet-stream' });
+    res.writeHead(200, { 'Content-Type': CONTENT_TYPES[ext] ?? 'application/octet-stream', 'Cache-Control': 'no-cache' });
     res.end(buf);
   } else {
     res.writeHead(404);

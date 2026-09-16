@@ -1,14 +1,104 @@
 {
-  "players": [],
-  "day": 0,
-  "phase": "setup",
-  "nightActions": [],
+  "schemaVersion": 3,
+  "phase": "NIGHT_COLLECTING",
+  "day": 1,
+  "players": [
+    {
+      "id": 1,
+      "name": "GM",
+      "role": "madman",
+      "team": "village",
+      "controlledBy": "ai",
+      "personality": "ryoko",
+      "alive": true,
+      "isMasonPartner": false,
+      "seerChecks": [],
+      "guardProtects": []
+    },
+    {
+      "id": 2,
+      "name": "P2",
+      "role": "seer",
+      "team": "village",
+      "controlledBy": "ai",
+      "personality": "misaki",
+      "alive": true,
+      "isMasonPartner": false,
+      "seerChecks": [],
+      "guardProtects": []
+    },
+    {
+      "id": 3,
+      "name": "P3",
+      "role": "villager",
+      "team": "village",
+      "controlledBy": "ai",
+      "personality": "shinichi",
+      "alive": true,
+      "isMasonPartner": false,
+      "seerChecks": [],
+      "guardProtects": []
+    },
+    {
+      "id": 4,
+      "name": "P4",
+      "role": "guard",
+      "team": "village",
+      "controlledBy": "ai",
+      "personality": "yuko",
+      "alive": true,
+      "isMasonPartner": false,
+      "seerChecks": [],
+      "guardProtects": []
+    },
+    {
+      "id": 5,
+      "name": "P5",
+      "role": "werewolf",
+      "team": "werewolf",
+      "controlledBy": "ai",
+      "personality": "kenta",
+      "alive": true,
+      "isMasonPartner": false,
+      "seerChecks": [],
+      "guardProtects": []
+    },
+    {
+      "id": 6,
+      "name": "P6",
+      "role": "villager",
+      "team": "village",
+      "controlledBy": "ai",
+      "personality": "koharu",
+      "alive": true,
+      "isMasonPartner": false,
+      "seerChecks": [],
+      "guardProtects": []
+    }
+  ],
+  "humanPlayerIndices": [],
+  "discussionLog": [],
   "votes": [],
   "deathHistory": [],
-  "discussionLog": [],
-  "masonChatLog": [],
+  "seerChecks": [],
+  "guardProtects": [],
+  "winner": null,
   "gameOver": false,
-  "wolfKillTarget": null,
-  "seerCheckTarget": null,
-  "seerCheckResult": null
+  "boardVersion": 1,
+  "daySummaries": [],
+  "voteReady": [],
+  "skippedHumans": [],
+  "pendingGate": {
+    "kind": "night",
+    "required": [
+      2,
+      5
+    ],
+    "done": [],
+    "timeoutMs": 90000,
+    "deadline": 1789527261784
+  },
+  "expectedPlayerCount": 6,
+  "nightActions": [],
+  "masonChatLog": []
 }
