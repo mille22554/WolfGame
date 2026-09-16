@@ -80,6 +80,7 @@ export class RoomManager {
         const wasHost = hostBefore !== undefined && hostBefore.clientId === clientId;
         const left = room.removeMember(clientId);
         if (room.totalMembers === 0) {
+            room.destroyGame();
             this.rooms.delete(room.code);
             return { room: undefined, left, wasHost, newHost: undefined };
         }
@@ -95,8 +96,10 @@ export class RoomManager {
         if (!target || target.clientId === hostClientId)
             return { ok: false, error: 'NOT_FOUND' }; // 不可踢自己
         room.removeMember(target.clientId);
-        if (room.totalMembers === 0)
+        if (room.totalMembers === 0) {
+            room.destroyGame();
             this.rooms.delete(room.code);
+        }
         return { ok: true, room, kicked: target };
     }
     setSetting(hostClientId, patch) {
@@ -171,6 +174,7 @@ export class RoomManager {
         const reclaimed = [];
         for (const [code, room] of this.rooms) {
             if (t - room.lastActivity > this.inactivityTimeoutMs) {
+                room.destroyGame();
                 this.rooms.delete(code);
                 reclaimed.push(code);
             }

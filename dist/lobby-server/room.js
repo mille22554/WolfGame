@@ -6,6 +6,7 @@ export class Room {
     maxPlayers; // 6..15, default 15
     randomCount = false; // default false
     started = false; // default false
+    game = null; // 進行中的遊戲引擎（M5）；房間回收／解散時 destroyGame()
     lastActivity; // Date.now(), updated on any member action
     chat = [];
     constructor(code, maxPlayers = 15) {
@@ -74,6 +75,17 @@ export class Room {
         return [...this.members.values()]
             .sort((a, b) => a.joinSeq - b.joinSeq)
             .map((m) => ({ nickname: m.nickname, isHost: m.clientId === hostId, isSpectator: m.isSpectator }));
+    }
+    /** 參戰成員（非觀戰者），依加入順序（遊戲開局用） */
+    getParticipatingMembers() {
+        return [...this.members.values()].filter((m) => !m.isSpectator);
+    }
+    /** 摧毀遊戲引擎（清除所有 timer）；房間回收／解散時呼叫，避免孤兒 timer 讓 process 無法結束 */
+    destroyGame() {
+        if (this.game) {
+            this.game.destroy();
+            this.game = null;
+        }
     }
 }
 //# sourceMappingURL=room.js.map

@@ -1,11 +1,11 @@
 # Ubuntu 版規格書：多人實時狼人殺伺服器
 
 分支：`ubuntu`
-狀態：M1–M4 已完成並部署上線（待補充 AI/遊戲邏輯部分）
+狀態：M1–M4 已完成並部署上線；M5（遊戲核心）進行中
 
 ## 1. 定位
 
-外部真人玩家的線上狼人殺入口。本階段只實作**房間系統 + 實時通訊 + 遊戲設定**，AI 與遊戲流程（狼隊會議、投票、夜晚結算）後續迭代加入。
+外部真人玩家的線上狼人殺入口。全真人對戰（無 AI），支援 6–15 人房間，含完整遊戲流程（角色分配、夜間行動、白天討論投票、勝利判定）。
 
 ## 2. 核心功能
 
@@ -45,9 +45,9 @@
 │  │ 前端靜態  │    │  Node.js 伺服器       │   │
 │  │ (SPA)    │◄──►│  - WebSocket 路由     │   │
 │  │          │    │  - 房間管理器          │   │
-│  └──────────┘    │  - 遊戲引擎（後續）    │   │
-│                   │  - LLM 推理（後續）    │   │
-│                   └──────────────────────┘   │
+│  │          │    │  - 遊戲引擎（phase    │   │
+│  │          │    │    狀態機 + 結算）    │   │
+│  └──────────┘    └──────────────────────┘   │
 └─────────────────────────────────────────────┘
          ▲ WebSocket (wss://)
          │
@@ -77,8 +77,10 @@
 ## 5. 房間生命週期
 
 ```
-建立 → Lobby（等待玩家）→ 遊戲中（後續）→ 結束 → 清理
-                │
+建立 → Lobby（等待玩家）→ 遊戲中（Night/Day 循環）→ 結束 → 清理
+                │                    │
+                │                    ├── 遊戲中斷（房主解散）→ 回到 Lobby
+                │                    └── 全部掉線 → 暫停（5 分鐘未回來→清理）
                 ├── 房主離開 → 依入房時間自動轉讓
                 ├── 清空（無人）→ 立即回收
                 ├── 無活動超時（30 分鐘）→ 自動清理
@@ -121,11 +123,9 @@
 - 單房上限：20 人（含觀戰）
 - 無鑑權（MVP），但房主操作驗證 socket 綁定的 nickname
 
-## 8. 不做（本階段排除）
+## 8. 不做（排除）
 
-- AI / LLM 推理
-- 遊戲流程（夜晚、投票、死亡、勝利判定）
-- 角色分配
+- AI / LLM 推理（全真人對戰）
 - 帳號系統
 - 持久化（重啟即清空）
 - 跨房間通訊
@@ -138,7 +138,9 @@
 | M1 | 首頁 + 建立/加入房間 + WebSocket 連線 | 兩台瀏覽器可進同一房、互相看到對方加入 | ✅ |
 | M2 | 房間內打字 broadcast + 玩家列表 + 房主操作 | 多人同時打字、踢人正常 | ✅ |
 | M3 | 觀戰模式 + 房間回收（清空立即 / 超時 30 分鐘）| 加入已開始房間 → 只讀；空房立即回收、無活動 30 分鐘自動清理 | ✅ |
-| M4 | 遊戲設定面板（房主調人數等）+ START_GAME 事件 | 房主可設參數、觸發開始（遊戲邏輯後續接） | ✅ |
+| M4 | 遊戲設定面板（房主調人數等）+ START_GAME 事件 | 房主可設參數、觸發開始 | ✅ |
+| M5 | 遊戲核心：角色分配 + 夜間行動 + 白天投票 + 勝利判定（server-side） | 完整一局可跑完（6 人局）；夜間行動 timeout 正常；投票平票處理正確 | ⬜ |
+| M6 | 前端遊戲 UI：角色揭示 + 夜間操作面板 + 投票面板 + phase 指示 + 死亡公告 + 結算畫面 | 真人可完整操作一局；各角色看到正確資訊 | ⬜ |
 
 ## 10. 部署現狀
 
@@ -178,3 +180,142 @@ ssh -F ~/.ssh/config ssh.morowin.win \
 - [x] 部署環境：Ubuntu 伺服器，無 GPU（已定）
 - [x] 房間代碼長度：4 位數字（10^4 = 1 萬組合，MVP 足夠；首位非 0）
 - [ ] 是否需要在首頁顯示「進行中的房間」列表（讓玩家可以瀏覽加入）
+
+## 12. 遊戲流程（M5+）
+
+### 12.1 Phase 狀態機
+
+```
+LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
+                                                      │
+                                                      ▼
+        ┌─────────── GAME_OVER ◄──(win check)── DAY_RESULT
+        │                                        │
+        │         ┌──────────────────────────────┘
+        │         ▼
+        │    DAY_VOTING ◄──(host ends discussion / timeout)── DAY_DISCUSSION
+        │         │
+        └─────────┘  (next night)
+```
+
+| Phase | 說明 | 持續時間 |
+|---|---|---|
+| `ROLE_REVEAL` | 各玩家看到自己的角色（私發）；人狼互見、共有者互見 | 10 秒（固定） |
+| `NIGHT` | 收集夜間行動：人狼刀人、占い師查人、守衛護人 | 60 秒 timeout |
+| `NIGHT_RESULT` | 公布昨晚結果（死者/平安夜）；霊能者收到黎明資訊 | 10 秒（固定） |
+| `DAY_DISCUSSION` | 全存活玩家自由發言（复用 lobby chat）；房主可提前結束 | 120 秒 timeout 或房主手動結束 |
+| `DAY_VOTING` | 全存活玩家投票（含棄票） | 60 秒 timeout |
+| `DAY_RESULT` | 公布投票結果（死者身分不公開）；霊能者得知票死者身分 | 10 秒（固定） |
+| `GAME_OVER` | 公布所有角色、勝負結果 | 永久（直到房間解散/重開） |
+
+- 每輪：`NIGHT → NIGHT_RESULT → DAY_DISCUSSION → DAY_VOTING → DAY_RESULT → (win check) → NIGHT...`
+- Day 1 的 NIGHT 之前沒有「昨晚結果」，ROLE_REVEAL 直接進 NIGHT
+- Day 1 的 NIGHT_RESULT 公布第一夜結果
+
+### 12.2 角色分配
+
+- 沿用 main 分支 `ROLE_CONFIG` 表（`src/types.ts`），依實際人數查表 → shuffle → 分配
+- 分配對象：僅「參戰」玩家（觀戰者不分配）
+- 共有者（MASON）：13+ 人才有；分配後互設 `masonPartnerId`
+- 人狼：互設 `wolfPartnerIds`（知道所有同夥）
+- 狂人：人狼知道他是誰（`madmanId`），狂人不知道誰是人狼
+
+### 12.3 夜間行動（NIGHT phase）
+
+各角色可提交的行動：
+
+| 角色 | 行動 | 限制 |
+|---|---|---|
+| 人狼 | `WOLF_KILL { targetId }` | 所有存活人狼各自提交；不可選自己、不可選狂人；多數決（同目標票最高；平票→先提交者） |
+| 占い師 | `SEER_CHECK { targetId }` | 不可選自己；每夜一次 |
+| 守衛 | `GUARD_PROTECT { targetId }` | Day1 不可；不可自護（自護→隨機護他人）；可連續護同一人 |
+| 霊能者 | 無（被動） | 黎明自動收到昨日票死者身分 |
+| 共有者 | 無主動行動 | 可發 `MASON_CHAT`（僅雙方可見） |
+| 村民/狂人 | 無 | — |
+
+**結算順序**（server-side，不可並行）：
+1. 守衛護 → 記錄 `guardedTargetId`
+2. 人狼刀 → 若目標 == guardedTargetId → 平安夜（kill blocked）；否則目標死亡
+3. 占い師查 → 結果僅發給占い師
+4. 黎明：霊能者收到「昨天被票死者」身分（Day1 無）
+
+**Timeout 處理**：
+- 60 秒內未提交的行動 → 視為「跳過」（人狼未刀→平安夜；占い師未查→無結果；守衛未護→無護）
+- 人狼多數決：只算已提交的人狼；若全未提交→平安夜
+
+### 12.4 白天討論（DAY_DISCUSSION）
+
+- 复用 lobby 的 `SEND_MESSAGE` / `MESSAGE`（公頻）
+- 額外頻道：
+  - `WOLF_CHAT` / `WOLF_MESSAGE`：僅存活人狼可見
+  - `MASON_CHAT` / `MASON_MESSAGE`：僅共有者雙方可見
+- 房主可發 `END_DISCUSSION` 提前進入投票
+- 120 秒 timeout 自動進入投票
+- 已死亡玩家不能發言（任何頻道）
+
+### 12.5 投票（DAY_VOTING）
+
+- 全存活玩家各投 1 票：`CAST_VOTE { targetId }` 或 `CAST_VOTE { targetId: null }`（棄票）
+- 不可投自己
+- 60 秒 timeout：未投票者視為棄票
+- 結算：票最高者出局；平票→隨機選一位（或無人出局，取「隨機」）
+- 被票死者身分不公開（僅霊能者得知）
+
+### 12.6 勝利判定
+
+每輪 DAY_RESULT 後檢查：
+- **村勝**：存活人狼數 == 0
+- **狼勝**：存活人狼數 ≥ 存活村人陣營數（含狂人、共有者、村民、占い師、守衛、霊能者）
+- 平局不可能（狼 ≥ 村 時狼已勝）
+
+### 12.7 死亡規則
+
+- 夜殺：身分完全不公開（任何人不知道，含霊能者）
+- 票死：身分不公開（僅霊能者得知）
+- 死者不發言、不投票、不操作（前端灰化）
+- 死者可看公頻聊天（觀戰）
+- 狂人死 → 人狼陣營少一人（但狂人算村人陣營，所以狼數不變）
+
+### 12.8 新增 WS 協議
+
+| 方向 | type | payload | 說明 |
+|---|---|---|---|
+| C→S | `NIGHT_ACTION` | `{ type: 'WOLF_KILL'\|'SEER_CHECK'\|'GUARD_PROTECT', targetId }` | 提交夜間行動 |
+| C→S | `CAST_VOTE` | `{ targetId: number \| null }` | 投票（null=棄票） |
+| C→S | `END_DISCUSSION` | — | 房主提前結束討論 |
+| C→S | `WOLF_CHAT` | `{ text }` | 人狼私頻發言 |
+| C→S | `MASON_CHAT` | `{ text }` | 共有者私頻發言 |
+| S→C | `PHASE_CHANGED` | `{ phase, day }` | phase 切換通知（broadcast 全房） |
+| S→C | `ROLE_REVEALED` | `{ role, displayName, description, partners? }` | 私發各玩家自己的角色 |
+| S→C | `NIGHT_RESULT` | `{ peacefulNight: bool, deaths: [{ id, nickname }] }` | 夜間結果（broadcast） |
+| S→C | `SEER_RESULT` | `{ targetId, nickname, result: 'villager'\|'werewolf' }` | 私發占い師 |
+| S→C | `GUARD_RESULT` | `{ targetId, nickname, blocked: bool }` | 私發守衛 |
+| S→C | `MEDIUM_RESULT` | `{ targetId, nickname, result: 'villager'\|'werewolf' }` | 私發霊能者（黎明） |
+| S→C | `VOTE_RESULT` | `{ votes: Record<number, number>, eliminatedId: number\|null, tie: bool }` | 投票結果（broadcast） |
+| S→C | `PLAYER_ELIMINATED` | `{ id, nickname, cause: 'wolf_kill'\|'vote' }` | 有人出局（broadcast） |
+| S→C | `GAME_OVER` | `{ winner: 'village'\|'werewolf', players: [{ id, nickname, role, alive }] }` | 終局（broadcast，公布全部角色） |
+| S→C | `WOLF_MESSAGE` | `{ from, text, ts }` | 人狼私頻（僅存活人狼） |
+| S→C | `MASON_MESSAGE` | `{ from, text, ts }` | 共有者私頻（僅雙方） |
+| S→C | `PHASE_COUNTDOWN` | `{ phase, secondsLeft }` | 倒數提醒（每 10 秒發一次，剩餘 <30s 時） |
+
+### 12.9 前端 UI 需求（M6）
+
+| 元件 | 說明 |
+|---|---|
+| Phase 指示器 | 頂欄顯示當前 phase（夜/昼）+ 天數 + 倒數計時 |
+| 角色揭示畫面 | ROLE_REVEAL phase 全螢幕顯示自己的角色（10 秒後自動消失） |
+| 夜間操作面板 | 依角色顯示不同 UI：人狼→選目標（排除自己/狂人）；占い師→選目標；守衛→選目標（Day1 灰化） |
+| 人狼私頻 | 僅人狼可見的聊天區（可折疊） |
+| 投票面板 | DAY_VOTING 時顯示所有存活玩家按鈕 + 棄票按鈕 |
+| 死亡公告 | NIGHT_RESULT / DAY_RESULT 時全螢幕 toast（3 秒） |
+| 玩家狀態更新 | 死亡玩家灰化 + ☠ 標記；不能發言/投票 |
+| 結算畫面 | GAME_OVER 全螢幕：勝負結果 + 全部角色揭露 |
+| 霊能者/占い師/守衛私訊 | 各自的結果以 toast 顯示（僅自己可見） |
+
+### 12.10 與 main 分支共用
+
+- `ROLE_CONFIG`、`Role`、`Team`、`ROLE_TEAM`、`seerSeesAs()` 等常數/函式 → 直接 import 或 copy
+- `assignRoles()`、`checkWinCondition()` 邏輯 → 可复用（需確認 import path）
+- `night.ts` 的結算邏輯 → 可复用（需改為 async/timeout 模式）
+- **不共用**：`engine.ts`（事件佇列 + LLM dispatch 太複雜）、`character-session.ts`（LLM prompt）、`ai-scheduler.ts`（AI 排程）
+- ubuntu 版用更簡單的 **phase timer + 直接 state mutation** 模式（不需 event queue）

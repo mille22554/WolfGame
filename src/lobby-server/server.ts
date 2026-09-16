@@ -14,6 +14,7 @@ import { randomUUID } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { getResourceRoot } from '../utils.js';
 import { RoomManager } from './room-manager.js';
+import { GameEngine } from './game.js';
 import type { ClientToServerMessage, ServerToClientMessage } from './types.js';
 
 export interface LobbyServerOptions {
@@ -188,6 +189,32 @@ export async function createLobbyServer(opts: LobbyServerOptions = {}): Promise<
         const r = roomManager.startGame(clientId, msg.maxPlayers, msg.randomCount);
         if (r.ok) {
           broadcastToRoom(r.room.code, { type: 'GAME_STARTED', started: true, actualCount: r.actualCount });
+          // M5：建立遊戲引擎（僅參戰者入局；觀戰者不分配角色）
+          const participants = r.room.getParticipatingMembers();
+          if (participants.length > 0) {
+            const roomCode = r.room.code;
+            const game = new GameEngine(
+              roomCode,
+              participants.map((m) => ({ clientId: m.clientId, nickname: m.nickname })),
+              {
+                sendTo: (cid, m) => {
+                  const c = clients.get(cid);
+                  if (c && c.ws.readyState === WebSocket.OPEN) c.ws.send(JSON.stringify(m));
+                },
+                broadcast: (m, targetClientIds) => {
+                  const payload = JSON.stringify(m);
+                  for (const c of clients.values()) {
+                    if (c.roomCode !== roomCode) continue;
+                    if (targetClientIds && !targetClientIds.includes(c.clientId)) continue;
+                    if (c.ws.readyState === WebSocket.OPEN) c.ws.send(payload);
+                  }
+                },
+                getHostClientId: () => roomManager.getRoom(roomCode)?.host?.clientId,
+              },
+            );
+            r.room.game = game;
+            game.start();
+          }
         } else {
           send(ws, { type: 'ERROR', message: '只有房主可以開始遊戲' });
         }
@@ -204,6 +231,46 @@ export async function createLobbyServer(opts: LobbyServerOptions = {}): Promise<
           broadcastToRoom(r.room.code, { type: 'PLAYER_LEFT', nickname: r.kicked.nickname });
         } else {
           send(ws, { type: 'ERROR', message: '無法移出該玩家' });
+        }
+        break;
+      }
+      case 'NIGHT_ACTION': {
+        const room = rec.roomCode ? roomManager.getRoom(rec.roomCode) : undefined;
+        if (room && room.game) {
+          room.touch();
+          room.game.handleNightAction(clientId, { type: msg.action, targetClientId: msg.targetClientId });
+        }
+        break;
+      }
+      case 'CAST_VOTE': {
+        const room = rec.roomCode ? roomManager.getRoom(rec.roomCode) : undefined;
+        if (room && room.game) {
+          room.touch();
+          room.game.handleVote(clientId, msg.targetClientId);
+        }
+        break;
+      }
+      case 'END_DISCUSSION': {
+        const room = rec.roomCode ? roomManager.getRoom(rec.roomCode) : undefined;
+        if (room && room.game) {
+          room.touch();
+          room.game.handleEndDiscussion(clientId);
+        }
+        break;
+      }
+      case 'WOLF_CHAT': {
+        const room = rec.roomCode ? roomManager.getRoom(rec.roomCode) : undefined;
+        if (room && room.game) {
+          room.touch();
+          room.game.handleWolfChat(clientId, msg.text);
+        }
+        break;
+      }
+      case 'MASON_CHAT': {
+        const room = rec.roomCode ? roomManager.getRoom(rec.roomCode) : undefined;
+        if (room && room.game) {
+          room.touch();
+          room.game.handleMasonChat(clientId, msg.text);
         }
         break;
       }

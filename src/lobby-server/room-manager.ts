@@ -105,6 +105,7 @@ export class RoomManager {
     const left = room.removeMember(clientId);
 
     if (room.totalMembers === 0) {
+      room.destroyGame();
       this.rooms.delete(room.code);
       return { room: undefined, left, wasHost, newHost: undefined };
     }
@@ -119,7 +120,10 @@ export class RoomManager {
     const target = room.getMemberByNickname(targetNickname);
     if (!target || target.clientId === hostClientId) return { ok: false, error: 'NOT_FOUND' }; // 不可踢自己
     room.removeMember(target.clientId);
-    if (room.totalMembers === 0) this.rooms.delete(room.code);
+    if (room.totalMembers === 0) {
+      room.destroyGame();
+      this.rooms.delete(room.code);
+    }
     return { ok: true, room, kicked: target };
   }
 
@@ -195,6 +199,7 @@ export class RoomManager {
     const reclaimed: string[] = [];
     for (const [code, room] of this.rooms) {
       if (t - room.lastActivity > this.inactivityTimeoutMs) {
+        room.destroyGame();
         this.rooms.delete(code);
         reclaimed.push(code);
       }

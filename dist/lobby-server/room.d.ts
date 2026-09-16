@@ -4,6 +4,7 @@
  * 房主 = joinSeq 最小者（最早加入者）；即時計算，房主離開時自動移轉。
  */
 import type { MemberInfo, ChatEntry } from './types.js';
+import type { GameEngine } from './game.js';
 export interface Member {
     clientId: string;
     nickname: string;
@@ -17,6 +18,7 @@ export declare class Room {
     maxPlayers: number;
     randomCount: boolean;
     started: boolean;
+    game: GameEngine | null;
     lastActivity: number;
     private chat;
     constructor(code: string, maxPlayers?: number);
@@ -34,5 +36,9 @@ export declare class Room {
     getChat(): ChatEntry[];
     /** Full member list sorted by joinSeq; each flagged with isHost (== current host) and isSpectator. */
     memberList(): MemberInfo[];
+    /** 參戰成員（非觀戰者），依加入順序（遊戲開局用） */
+    getParticipatingMembers(): Member[];
+    /** 摧毀遊戲引擎（清除所有 timer）；房間回收／解散時呼叫，避免孤兒 timer 讓 process 無法結束 */
+    destroyGame(): void;
 }
 //# sourceMappingURL=room.d.ts.map

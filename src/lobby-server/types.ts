@@ -25,7 +25,12 @@ export type ClientToServerMessage =
   | { type: 'SET_SETTING'; maxPlayers?: number; randomCount?: boolean }
   | { type: 'SET_MODE'; mode: 'play' | 'spectate' }
   | { type: 'START_GAME'; maxPlayers: number; randomCount: boolean }
-  | { type: 'KICK_PLAYER'; target: string };
+  | { type: 'KICK_PLAYER'; target: string }
+  | { type: 'NIGHT_ACTION'; action: 'WOLF_KILL' | 'SEER_CHECK' | 'GUARD_PROTECT'; targetClientId: string }
+  | { type: 'CAST_VOTE'; targetClientId: string | null }
+  | { type: 'END_DISCUSSION' }
+  | { type: 'WOLF_CHAT'; text: string }
+  | { type: 'MASON_CHAT'; text: string };
 
 export type ServerToClientMessage =
   | { type: 'ROOM_JOINED'; code: string; isHost: boolean; players: MemberInfo[]; started: boolean; maxPlayers: number; randomCount: boolean }
@@ -39,7 +44,19 @@ export type ServerToClientMessage =
   | { type: 'GAME_STARTED'; started: boolean; actualCount: number }
   | { type: 'MEMBERS_CHANGED'; players: MemberInfo[] }
   | { type: 'KICKED'; reason: string }
-  | { type: 'ERROR'; message: string };
+  | { type: 'ERROR'; message: string }
+  | { type: 'PHASE_CHANGED'; phase: string; day: number }
+  | { type: 'ROLE_REVEALED'; role: string; displayName: string; description: string; partners: string[] }
+  | { type: 'NIGHT_RESULT'; peacefulNight: boolean; deaths: { clientId: string; nickname: string }[] }
+  | { type: 'SEER_RESULT'; targetClientId: string; nickname: string; result: 'villager' | 'werewolf' }
+  | { type: 'GUARD_RESULT'; targetClientId: string; nickname: string; blocked: boolean }
+  | { type: 'MEDIUM_RESULT'; targetClientId: string; nickname: string; result: 'villager' | 'werewolf' }
+  | { type: 'VOTE_RESULT'; votes: Record<string, number>; eliminatedClientId: string | null; tie: boolean }
+  | { type: 'PLAYER_ELIMINATED'; clientId: string; nickname: string; cause: 'wolf_kill' | 'vote' }
+  | { type: 'GAME_OVER'; winner: 'village' | 'werewolf'; players: { clientId: string; nickname: string; role: string; alive: boolean }[] }
+  | { type: 'WOLF_MESSAGE'; from: string; text: string; ts: number }
+  | { type: 'MASON_MESSAGE'; from: string; text: string; ts: number }
+  | { type: 'PHASE_COUNTDOWN'; phase: string; secondsLeft: number };
 
 export const MIN_PLAYERS = 6;
 export const MAX_PLAYERS = 15;
