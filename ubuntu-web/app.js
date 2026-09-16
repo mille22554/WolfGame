@@ -1,7 +1,8 @@
 // ============================================================
-// 狼人殺 · 前端原型 (app.js)
+// 狼人殺 · 前端 (app.js)
 // 負責：頁面切換、房間渲染、星星裝飾、按鈕事件
-// 純前端、無框架、無外部依賴；遊戲動作按鈕一律 alert('TODO')
+// 純前端、無框架、無外部依賴；透過 WebSocket 連接 lobby-server
+// （同源 ws://，server 在同一 port 提供靜態檔案與 WS）
 // ============================================================
 
 'use strict';
@@ -9,23 +10,142 @@
 // ---------- 工具 ----------
 const $ = (sel, root = document) => root.querySelector(sel);
 
-// ---------- 前端狀態（演示用） ----------
+// ---------- 前端狀態（房間資料以 server 為準） ----------
 const state = {
   roomCode: '',
   nickname: '',
   isHost: false,
   isSpectating: false,
+  started: false,
   maxPlayers: 15,
   randomCount: false,
+  players: [], // MemberInfo[]：{ nickname, isHost, isSpectator }
 };
 
-// 生成 4 位數字房間代碼（與加入房間的格式一致；首位不為 0）
-function genCode() {
-  let code = String(1 + Math.floor(Math.random() * 9));
-  for (let i = 1; i < 4; i++) {
-    code += Math.floor(Math.random() * 10);
+// 重置為初始狀態（離開房間／被移出時使用）
+function resetState() {
+  state.roomCode = '';
+  state.nickname = '';
+  state.isHost = false;
+  state.isSpectating = false;
+  state.started = false;
+  state.maxPlayers = 15;
+  state.randomCount = false;
+  state.players = [];
+}
+
+// ---------- WebSocket ----------
+let ws = null;
+let connected = false;
+let intentionalClose = false; // 點「離開」主動關閉：不告警、不重連
+let reconnectAttempts = 0;
+const MAX_RECONNECT = 5;
+const RECONNECT_DELAY_MS = 3000;
+
+function connectWS() {
+  if (location.protocol === 'file:') { connected = false; return; } // 靜態檔直接開啟時沒有 server
+  if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
+  const s = new WebSocket('ws://' + location.host);
+  ws = s;
+  s.onopen = () => { if (s !== ws) return; connected = true; reconnectAttempts = 0; };
+  s.onmessage = (e) => {
+    if (s !== ws) return; // 舊 socket 的訊息忽略
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+    onServerMessage(msg);
+  };
+  s.onclose = () => {
+    if (s !== ws) return;
+    connected = false;
+    if (intentionalClose) { intentionalClose = false; return; }
+    alert('連線中斷');
+    if (reconnectAttempts < MAX_RECONNECT) {
+      reconnectAttempts++;
+      setTimeout(connectWS, RECONNECT_DELAY_MS);
+    }
+  };
+}
+
+function wsSend(msg) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+}
+
+// 使用者主動要求建立／加入但尚未連線：先嘗試（重新）連線，仍沒連上才告警
+function ensureConnected() {
+  if (connected) return true;
+  if (location.protocol !== 'file:') {
+    intentionalClose = false;
+    reconnectAttempts = 0;
+    connectWS();
   }
-  return code;
+  if (!connected) alert('尚未連線到伺服器');
+  return connected;
+}
+
+// ---------- 伺服器訊息分發 ----------
+function onServerMessage(msg) {
+  switch (msg.type) {
+    case 'ROOM_JOINED':
+    case 'SPECTATOR_JOINED':
+      state.roomCode = msg.code;
+      state.isHost = msg.isHost;
+      state.isSpectating = msg.type === 'SPECTATOR_JOINED';
+      state.started = msg.started;
+      state.maxPlayers = msg.maxPlayers;
+      state.randomCount = msg.randomCount;
+      state.players = msg.players;
+      enterRoom();
+      break;
+    case 'MESSAGE':
+      addMessage(msg.from, msg.text, formatTime(msg.ts), msg.from === state.nickname);
+      break;
+    case 'PLAYER_JOINED':
+      if (!state.players.some((p) => p.nickname === msg.nickname)) {
+        // server 只給暱稱；先加佔位（遊戲已開始時新加入者會轉觀戰）
+        state.players.push({ nickname: msg.nickname, isHost: false, isSpectator: state.started });
+      }
+      renderPlayers();
+      break;
+    case 'PLAYER_LEFT':
+      state.players = state.players.filter((p) => p.nickname !== msg.nickname);
+      renderPlayers();
+      break;
+    case 'HOST_CHANGED':
+      state.isHost = msg.newHost === state.nickname;
+      state.players.forEach((p) => { p.isHost = p.nickname === msg.newHost; });
+      renderRoom();
+      break;
+    case 'SETTING_CHANGED':
+      state.maxPlayers = msg.maxPlayers;
+      state.randomCount = msg.randomCount;
+      syncMaxPlayers(msg.maxPlayers);
+      syncRandomCount(msg.randomCount);
+      break;
+    case 'GAME_STARTED':
+      state.started = true;
+      alert('遊戲開始！實際人數：' + msg.actualCount);
+      break;
+    case 'MEMBERS_CHANGED': {
+      state.players = msg.players;
+      state.isHost = msg.players.some((p) => p.isHost && p.nickname === state.nickname);
+      const me = msg.players.find((p) => p.nickname === state.nickname);
+      if (me) state.isSpectating = me.isSpectator;
+      renderRoom();
+      break;
+    }
+    case 'KICKED':
+      alert('你被移出房間：' + msg.reason);
+      resetState();
+      resetHome();
+      showPage('home');
+      break;
+    case 'ROOM_FULL':
+      $('#overlay-full').hidden = false;
+      break;
+    case 'ERROR':
+      alert(msg.message);
+      break;
+  }
 }
 
 // ---------- 裝飾：隨機星星（v6：180 顆、集中在上半部，避開村莊） ----------
@@ -77,7 +197,7 @@ function showLoading(done) {
   }, 900);
 }
 
-// ---------- 房間渲染 ----------
+// ---------- 房間渲染（不清聊天；重渲染時保留聊天歷史與輸入中文字） ----------
 function renderRoom() {
   $('#room-code').textContent = state.roomCode;
   // 身分切換：高亮目前身分
@@ -87,35 +207,29 @@ function renderRoom() {
   $('#host-tools').hidden = !state.isHost;
   $('#waiting-note').hidden = state.isHost || state.isSpectating;
   $('#spectate-note').hidden = !state.isSpectating || state.isHost;
-  // 觀戰者也可發言（聊天）；身分只限制房主操作
-  $('#chat-text').value = '';
   renderPlayers();
-  renderChat();
   syncMaxPlayers(state.maxPlayers);
   syncRandomCount(state.randomCount);
 }
 
-// 玩家列表：角色圖示先用「?」佔位；房主有 👑；房主可看到踢人按鈕
+// 玩家列表：以 server 的 state.players 為準；角色圖示先用「?」佔位；
+// 房主有 👑；房主可看到踢人按鈕；自己是 you
 function renderPlayers() {
   const list = $('#player-list');
   list.innerHTML = '';
 
-  const players = [];
-  if (!state.isSpectating) {
-    players.push({ nick: state.nickname || '你', host: state.isHost, you: true });
-  }
-
-  // 空狀態：目前沒有玩家（觀戰中，或新房間還沒其他人加入）
-  if (players.length === 0) {
+  // 空狀態：目前沒有成員
+  if (state.players.length === 0) {
     const li = document.createElement('li');
     li.className = 'player-empty';
     li.textContent = '（目前沒有玩家）';
     list.appendChild(li);
   }
 
-  players.forEach((p, i) => {
+  state.players.forEach((m, i) => {
+    const you = m.nickname === state.nickname;
     const li = document.createElement('li');
-    li.className = 'player' + (p.you ? ' you' : '');
+    li.className = 'player' + (you ? ' you' : '');
 
     const avatar = document.createElement('span');
     avatar.className = 'avatar';
@@ -125,11 +239,11 @@ function renderPlayers() {
 
     const name = document.createElement('span');
     name.className = 'name';
-    name.textContent = p.nick;
+    name.textContent = m.nickname;
 
     li.append(avatar, name);
 
-    if (p.host) {
+    if (m.isHost) {
       const crown = document.createElement('span');
       crown.className = 'crown';
       crown.textContent = '👑';
@@ -138,7 +252,7 @@ function renderPlayers() {
     }
 
     // 踢人：只有房主看得到，且不能踢自己
-    if (state.isHost && !p.you) {
+    if (state.isHost && m.nickname !== state.nickname) {
       const kick = document.createElement('button');
       kick.className = 'kick';
       kick.textContent = '✕';
@@ -149,7 +263,8 @@ function renderPlayers() {
     list.appendChild(li);
   });
 
-  $('#player-count').textContent = players.length;
+  // 人數只算參戰玩家（不含觀戰者）
+  $('#player-count').textContent = state.players.filter((m) => !m.isSpectator).length;
 }
 
 // ---------- 聊天 ----------
@@ -190,13 +305,12 @@ function renderChat() {
   box.appendChild(empty);
 }
 
-// 發送訊息（純前端本地顯示，無後端）
+// 發送訊息（送給 server，由 server 廣播回給所有人；本地不先顯示，避免重複）
 function sendChat() {
   const input = $('#chat-text');
   const text = input.value.trim();
   if (!text) return;
-  const time = new Date().toTimeString().slice(0, 5);
-  addMessage(state.nickname || '你', text, time, true);
+  wsSend({ type: 'SEND_MESSAGE', text });
   input.value = '';
   input.focus();
 }
@@ -213,7 +327,7 @@ function syncMaxPlayers(v) {
 }
 
 // 隨機人數 toggle：開啟→滑桿禁用（上限保留），關閉→啟用
-// （原型純本地狀態；接後端時此處送 SET_RANDOM_COUNT {enabled}）
+// （事件處理器送 SET_SETTING；server 廣播 SETTING_CHANGED 同步所有 client）
 function syncRandomCount(v) {
   state.randomCount = v;
   $('#random-count').checked = v;
@@ -227,11 +341,18 @@ function updateCountValue() {
   $('#max-players-value').textContent = state.randomCount ? '≤' + state.maxPlayers : String(state.maxPlayers);
 }
 
+// ---------- 時間格式（HH:MM） ----------
+function formatTime(ts) {
+  return new Date(ts).toTimeString().slice(0, 5);
+}
+
 // ---------- 進入房間（先走 loading 過渡） ----------
 function enterRoom() {
   showLoading(() => {
     showPage('room');
     renderRoom();
+    renderChat();
+    $('#chat-text').value = '';
   });
 }
 
@@ -240,20 +361,17 @@ function init() {
   createStars();
   showPage('home');
 
-  // 建立房間 → 自己是房主（讀取統一的暱稱欄）
+  // 建立房間 → 等 server 回 ROOM_JOINED 才進房
   $('#btn-create').addEventListener('click', () => {
     const nick = $('#nick').value.trim();
     if (!nick) { alert('請先輸入暱稱'); $('#nick').focus(); return; }
+    if (!ensureConnected()) return;
     state.nickname = nick;
-    state.isHost = true;
-    state.isSpectating = false;
-    state.roomCode = genCode();
-    state.maxPlayers = 15;
-    state.randomCount = false;
-    enterRoom();
+    wsSend({ type: 'CREATE_ROOM', nickname: nick });
   });
 
   // 加入房間：第一次點擊 → 在「建立房間」按鈕的位置展開代碼欄；第二次點擊 → 驗證並送出
+  //（等 server 回 ROOM_JOINED／SPECTATOR_JOINED／ROOM_FULL／ERROR）
   $('#btn-join').addEventListener('click', () => {
     if (!joinOpen) {
       joinOpen = true;
@@ -267,18 +385,10 @@ function init() {
     const nick = $('#nick').value.trim();
     if (!/^\d{4}$/.test(code)) { alert('房間代碼需為 4 位數字'); return; }
     if (!nick) { alert('請先輸入暱稱'); $('#nick').focus(); return; }
+    if (!ensureConnected()) return;
     state.nickname = nick;
-    state.isHost = false;
-    state.isSpectating = false;
     state.roomCode = code;
-    state.maxPlayers = 15;
-    state.randomCount = false;
-    if (code === '9999') {
-      // 演示：房間已滿 → 詢問是否以觀戰進入
-      showLoading(() => { $('#overlay-full').hidden = false; });
-    } else {
-      enterRoom();
-    }
+    wsSend({ type: 'JOIN_ROOM', code, nickname: nick });
   });
 
   // 房間代碼：只保留數字，最多 4 位
@@ -290,19 +400,19 @@ function init() {
   // 取消加入流程 → 返回初始畫面
   $('#btn-cancel-join').addEventListener('click', resetHome);
 
-  // 離開房間 → 回首頁（重置加入流程）
+  // 離開房間 → 關閉 WS（server 偵測斷線移除成員）、重置、回首頁
   $('#btn-leave').addEventListener('click', () => {
-    state.isSpectating = false;
+    intentionalClose = true;
+    if (ws) ws.close();
+    resetState();
     resetHome();
     showPage('home');
   });
 
-  // 房間已滿 → 以觀戰進入
+  // 房間已滿 → 以觀戰進入（等 server 回 SPECTATOR_JOINED）
   $('#btn-spectate').addEventListener('click', () => {
     $('#overlay-full').hidden = true;
-    state.isSpectating = true;
-    showPage('room');
-    renderRoom();
+    wsSend({ type: 'JOIN_ROOM', code: state.roomCode, nickname: state.nickname, asSpectator: true });
   });
 
   // 房間已滿 → 取消（重置加入流程）
@@ -312,37 +422,44 @@ function init() {
     showPage('home');
   });
 
-  // 開始遊戲（待接後端）
-  $('#btn-start').addEventListener('click', () => alert('TODO'));
-
-  // 踢人（待接後端）— 事件委派
-  $('#player-list').addEventListener('click', (e) => {
-    if (e.target.closest('.kick')) alert('TODO');
+  // 開始遊戲
+  $('#btn-start').addEventListener('click', () => {
+    wsSend({ type: 'START_GAME', maxPlayers: state.maxPlayers, randomCount: state.randomCount });
   });
 
-  // 聊天發送（純前端本地顯示）
+  // 踢人（事件委派）
+  $('#player-list').addEventListener('click', (e) => {
+    const btn = e.target.closest('.kick');
+    if (!btn) return;
+    const li = btn.closest('li');
+    const nameEl = li ? li.querySelector('.name') : null;
+    if (!nameEl) return;
+    wsSend({ type: 'KICK_PLAYER', target: nameEl.textContent });
+  });
+
+  // 聊天發送
   $('#btn-send').addEventListener('click', sendChat);
   $('#chat-text').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') sendChat();
   });
 
-  // 人數滑桿（隨機開啟時已禁用，不會觸發）
-  $('#max-players').addEventListener('input', (e) => syncMaxPlayers(+e.target.value));
+  // 人數滑桿（隨機開啟時已禁用，不會觸發）；本地先同步顯示，server 廣播確認
+  $('#max-players').addEventListener('input', (e) => {
+    syncMaxPlayers(+e.target.value);
+    wsSend({ type: 'SET_SETTING', maxPlayers: +e.target.value });
+  });
 
   // 隨機人數 toggle：開啟→滑桿禁用（上限保留），實際人數開局才擲出
   $('#random-count').addEventListener('change', (e) => {
     syncRandomCount(e.target.checked);
+    wsSend({ type: 'SET_SETTING', randomCount: e.target.checked });
   });
 
-  // 身分切換：參戰／觀戰
-  $('#mode-play').addEventListener('click', () => {
-    state.isSpectating = false;
-    renderRoom();
-  });
-  $('#mode-spec').addEventListener('click', () => {
-    state.isSpectating = true;
-    renderRoom();
-  });
+  // 身分切換：參戰／觀戰（server 廣播 MEMBERS_CHANGED 更新所有 client 的 UI）
+  $('#mode-play').addEventListener('click', () => wsSend({ type: 'SET_MODE', mode: 'play' }));
+  $('#mode-spec').addEventListener('click', () => wsSend({ type: 'SET_MODE', mode: 'spectate' }));
+
+  connectWS();
 }
 
 document.addEventListener('DOMContentLoaded', init);
