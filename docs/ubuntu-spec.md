@@ -452,7 +452,7 @@ User（夜間行動）:
 #### 白天討論發言（SpeechScheduler 管線）
 
 ```
-IDLE →（20s 無訊息 或 全真人跳過）→ PRE_SPEECH → JUDGE → SELECT → EXPAND → BROADCAST → IDLE
+IDLE →（60s 無訊息 或 全真人跳過）→ PRE_SPEECH → JUDGE → SELECT → EXPAND → BROADCAST → IDLE
 ```
 
 | 階段 | 說明 | 參數 |
