@@ -196,26 +196,28 @@ ssh -F ~/.ssh/config ssh.morowin.win \
 
 ```
 LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
-                                                      │
-                                                      ▼
-        ┌─────────── GAME_OVER ◄──(win check)── DAY_RESULT
-        │                                        │
-        │         ┌──────────────────────────────┘
-        │         ▼
-        │    DAY_VOTING ◄──(host ends discussion / timeout)── DAY_DISCUSSION
-        │         │
-        └─────────┘  (next night)
+                                                       │
+                                                       ▼
+         ┌─────────── GAME_OVER ◄──(win check)── DAY_RESULT
+         │                                        │
+         │         ┌──────────────────────────────┘
+         │         ▼
+         │    DAY_VOTING ◄──(host ends discussion)── DAY_DISCUSSION
+         │         │
+         └─────────┘  (next night)
 ```
 
-| Phase | 說明 | 持續時間 |
+| Phase | 說明 | 結束條件 |
 |---|---|---|
 | `ROLE_REVEAL` | 各玩家看到自己的角色（私發）；人狼互見、共有者互見 | 10 秒（固定） |
-| `NIGHT` | 收集夜間行動：人狼刀人、占い師查人、守衛護人 | 60 秒 timeout |
+| `NIGHT` | 收集夜間行動：人狼刀人、占い師查人、守衛護人 | 所有有行動的玩家皆已提交（無 timeout） |
 | `NIGHT_RESULT` | 公布昨晚結果（死者/平安夜）；霊能者收到黎明資訊 | 10 秒（固定） |
-| `DAY_DISCUSSION` | 全存活玩家自由發言（复用 lobby chat）；房主可提前結束 | 120 秒 timeout 或房主手動結束 |
-| `DAY_VOTING` | 全存活玩家投票（含棄票） | 60 秒 timeout |
+| `DAY_DISCUSSION` | 全存活玩家自由發言（复用 lobby chat） | 房主手動結束（無 timeout） |
+| `DAY_VOTING` | 全存活玩家投票（含棄票） | 所有存活玩家皆已投票（無 timeout） |
 | `DAY_RESULT` | 公布投票結果（死者身分不公開）；霊能者得知票死者身分 | 10 秒（固定） |
 | `GAME_OVER` | 公布所有角色、勝負結果 | 永久（直到房間解散/重開） |
+
+> **無 timeout 設計**：NIGHT / DAY_DISCUSSION / DAY_VOTING 皆不限時，等待所有玩家完成行動。玩家可從容思考，不被倒數逼迫。掉線處理見 §5（全部掉線 → 暫停 5 分鐘 → 清理）。
 
 - 每輪：`NIGHT → NIGHT_RESULT → DAY_DISCUSSION → DAY_VOTING → DAY_RESULT → (win check) → NIGHT...`
 - Day 1 的 NIGHT 之前沒有「昨晚結果」，ROLE_REVEAL 直接進 NIGHT
@@ -248,9 +250,11 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 3. 占い師查 → 結果僅發給占い師
 4. 黎明：霊能者收到「昨天被票死者」身分（Day1 無）
 
-**Timeout 處理**：
-- 60 秒內未提交的行動 → 視為「跳過」（人狼未刀→平安夜；占い師未查→無結果；守衛未護→無護）
-- 人狼多數決：只算已提交的人狼；若全未提交→平安夜
+**結束條件**：
+- 所有有夜間行動的玩家（存活狼 + 占い師 + 守衛）皆已提交 → 立即結算
+- 無 timeout：未提交的玩家會一直等待（前端顯示「等待中…」）
+- 人狼多數決：所有存活狼皆提交後，取同目標票最高者；平票→先提交者
+- 若某角色已全數死亡（如占い師已死）→ 該角色不需提交，不阻塞 phase 結束
 
 ### 12.4 白天討論（DAY_DISCUSSION）
 
@@ -258,15 +262,14 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 - 額外頻道：
   - `WOLF_CHAT` / `WOLF_MESSAGE`：僅存活人狼可見
   - `MASON_CHAT` / `MASON_MESSAGE`：僅共有者雙方可見
-- 房主可發 `END_DISCUSSION` 提前進入投票
-- 120 秒 timeout 自動進入投票
+- 房主發 `END_DISCUSSION` 進入投票（唯一結束方式，無 timeout）
 - 已死亡玩家不能發言（任何頻道）
 
 ### 12.5 投票（DAY_VOTING）
 
 - 全存活玩家各投 1 票：`CAST_VOTE { targetId }` 或 `CAST_VOTE { targetId: null }`（棄票）
 - 不可投自己
-- 60 秒 timeout：未投票者視為棄票
+- 無 timeout：等待所有存活玩家皆已投票（含棄票）→ 立即結算
 - 結算：票最高者出局；平票→隨機選一位（或無人出局，取「隨機」）
 - 被票死者身分不公開（僅霊能者得知）
 
@@ -305,13 +308,12 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | S→C | `GAME_OVER` | `{ winner: 'village'\|'werewolf', players: [{ id, nickname, role, alive }] }` | 終局（broadcast，公布全部角色） |
 | S→C | `WOLF_MESSAGE` | `{ from, text, ts }` | 人狼私頻（僅存活人狼） |
 | S→C | `MASON_MESSAGE` | `{ from, text, ts }` | 共有者私頻（僅雙方） |
-| S→C | `PHASE_COUNTDOWN` | `{ phase, secondsLeft }` | 倒數提醒（每 10 秒發一次，剩餘 <30s 時） |
 
 ### 12.9 前端 UI 需求（M6）
 
 | 元件 | 說明 |
 |---|---|
-| Phase 指示器 | 頂欄顯示當前 phase（夜/昼）+ 天數 + 倒數計時 |
+| Phase 指示器 | 頂欄顯示當前 phase（夜/昼）+ 天數 + 等待狀態（「等待 N 人行動…」） |
 | 角色揭示畫面 | ROLE_REVEAL phase 全螢幕顯示自己的角色（10 秒後自動消失） |
 | 夜間操作面板 | 依角色顯示不同 UI：人狼→選目標（排除自己/狂人）；占い師→選目標；守衛→選目標（Day1 灰化） |
 | 人狼私頻 | 僅人狼可見的聊天區（可折疊） |
@@ -370,7 +372,8 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | API 格式 | OpenAI-compatible（`POST /v1/chat/completions`） |
 | 環境變數 | `LLAMA_SERVER_PORT`（預設 2064）、`LLM_MODEL`（model tag，預設空＝server 唯一模型） |
 | 超时 | 單次呼叫 30 秒（CPU 27B 推論 60 token ≈ 15-30 秒） |
-| Fallback | timeout / 5xx → 該行動視為「跳過」（夜間不刀/不查/不護；投票棄票；發言跳過） |
+| 呼叫 timeout | 單次 HTTP 請求 30 秒（CPU 27B 推論 60 token ≈ 15-30 秒） |
+| Fallback | LLM 呼叫失敗（timeout / 5xx / parse error）→ server 自動替該 AI 提交預設行動（狼→隨機刀一人；占い→隨機查一人；守衛→隨機護一人；投票→棄票；發言→跳過）。**必須自動提交**，因為 phase 無 timeout，若 AI 永遠不提交則遊戲卡死 |
 
 ### 13.3 AI 玩家數量
 
