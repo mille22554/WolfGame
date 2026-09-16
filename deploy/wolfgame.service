@@ -1,0 +1,34 @@
+# wolfgame.service — systemd unit for lobby-server
+# 部署路徑：/etc/systemd/system/wolfgame.service
+#
+# 用法：
+#   sudo cp deploy/wolfgame.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now wolfgame
+#
+# 查看狀態：systemctl status wolfgame
+# 查看日誌：journalctl -u wolfgame -f
+# 重啟：    sudo systemctl restart wolfgame
+
+[Unit]
+Description=Werewolf Lobby Server (multi-room WebSocket)
+After=network.target
+
+[Service]
+Type=simple
+User=morowin
+WorkingDirectory=/opt/wolfgame
+ExecStart=/usr/bin/node /opt/wolfgame/dist/lobby-server/entry.js
+Environment=PORT=2640
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wolfgame
+
+# 安全加固（可选，视需求开启）
+# NoNewPrivileges=true
+# PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

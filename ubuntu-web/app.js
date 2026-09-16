@@ -43,9 +43,12 @@ const MAX_RECONNECT = 5;
 const RECONNECT_DELAY_MS = 3000;
 
 function connectWS() {
-  if (location.protocol === 'file:') { connected = false; return; } // 靜態檔直接開啟時沒有 server
+  if (location.protocol === 'file:') { connected = false; return; }
   if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
-  const s = new WebSocket('ws://' + location.host);
+  // 由當前頁面 URL 推導 WS 位址（dev: ws://localhost:2640/；prod: ws://morowin.win/wolfgame/）
+  const base = location.origin.replace(/^http/, 'ws');
+  const dir = location.pathname.replace(/\/[^/]*$/, '/'); // 去掉檔名，保留目錄
+  const s = new WebSocket(base + (dir === '/' ? '/' : dir));
   ws = s;
   s.onopen = () => { if (s !== ws) return; connected = true; reconnectAttempts = 0; };
   s.onmessage = (e) => {
