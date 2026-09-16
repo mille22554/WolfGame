@@ -63,7 +63,7 @@
 |---|---|---|
 | 語言 | TypeScript | 與 main 分支共用類型定義、遊戲規則常數 |
 | 伺服器 | Node.js + `ws`（WebSocket） | 已有模式；房間規模小（<20 人/房），Node 足夠 |
-| 前端 | 輕量 SPA（待選：React / Vue / 原生） | 頁面簡單（首頁 + 房間），不需重框架 |
+| 前端 | 原生 HTML/CSS/JS（已定，見 §11） | 頁面簡單（首頁 + 房間），不需重框架 |
 | 實時通訊 | WebSocket（沿用 main 的 `ws` 模式） | 打字交流需要低延遲 bidirectional |
 | 狀態持久化 | 記憶體為主 + 可选 JSON 快照 | MVP 不需資料庫；伺服器重啟房間重置 |
 | 部署 | nginx（靜態）+ cloudflared tunnel | 前端已上線；後端 WebSocket 待實作後改用 pm2/systemd |
@@ -96,7 +96,7 @@
 | S→C | `MESSAGE` | `{ from, text, ts }` | broadcast 發言 |
 | S→C | `PLAYER_JOINED` | `{ nickname }` | 有人加入 |
 | S→C | `PLAYER_LEFT` | `{ nickname }` | 有人離開 |
-| C→S | `START_GAME` | `{ playerCount, ...config }` | 房主開始（後續） |
+| C→S | `START_GAME` | `{ maxPlayers, randomCount }` | 房主開始（後續）；server 依 `randomCount` 決定實際人數（定值或 6–上限 隨機） |
 | C→S | `KICK_PLAYER` | `{ target }` | 房主踢人 |
 | C→S | `CLOSE_ROOM` | — | 房主解散 |
 | S→C | `ROOM_CLOSED` | — | 房間已解散，所有客戶端收到 |
