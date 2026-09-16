@@ -100,6 +100,7 @@ function buildSystemPrompt(profile: CharacterProfile, role: string, extraContext
     `硬規則：`,
     `- 使用繁體中文。禁止簡體字。禁止英文單詞。`,
     `- 只能引用已公開的遊戲事實。禁止編造不存在的遊戲術語、機制或事件。`,
+    `- 禁止使用「站位」「位置」「編號大小」等概念。玩家名字就是名字，沒有位置意義。`,
     `- 你只能回覆 JSON，不要多餘文字。不要 markdown。`,
   ].filter(Boolean).join('\n');
 }
@@ -124,11 +125,11 @@ export function buildPreSpeechPrompt(
 
   const system = buildSystemPrompt(profile, '人狼', wolfContext);
 
-  // 可刀目標：排除自己、同夥、狂人
+  // 可刀目標：排除自己、同夥、狂人（只用名字，不給編號——避免 AI 把數字當「位置」）
   const wolfIdSet = new Set(gameState.wolfIds ?? []);
   const eligibleTargets = gameState.players
     .filter(p => p.alive && p.id !== player.id && !wolfIdSet.has(p.id) && p.id !== gameState.madmanId)
-    .map(p => `P${p.id}(${p.name})`)
+    .map(p => p.name)
     .join('、');
 
   const user = [
@@ -137,7 +138,7 @@ export function buildPreSpeechPrompt(
     `可刀目標（只能從以下選）：${eligibleTargets}`,
     ``,
     `任務：提出一個刀人目標並簡述理由（≤50字）。`,
-    `提醒：理由只能基於你實際擁有的資訊。若沒有足夠資訊，說「直覺」或「隨機」就好，不要硬編觀察。座位號大小不是策略理由。用你的角色語氣說話。`,
+    `提醒：理由只能基於你實際擁有的資訊。若沒有足夠資訊，說「直覺」或「隨機」就好，不要硬編觀察。禁止使用「站位」「位置」「編號」等概念。用你的角色語氣說話。`,
     `回覆格式：{"speech": "..."}`,
   ].join('\n');
 
