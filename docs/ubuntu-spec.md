@@ -383,12 +383,14 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 
 | 項目 | 值 |
 |---|---|
-| 模型 | Qwen3.8 27B（GGUF Q4_K_M 量化） |
-| 推理引擎 | llama.cpp server（`llama-server`） |
-| 位址 | `http://127.0.0.1:2064`（同機 localhost） |
+| 模型 | Qwen3.8-27B-AWQ（INT4，mattbucci 量化）+ DSpark 推測解碼 |
+| 推理引擎 | SGLang（`sglang-server.service`） |
+| 位址 | `http://127.0.0.1:9090`（同機 localhost） |
 | API 格式 | OpenAI-compatible（`POST /v1/chat/completions`） |
-| 環境變數 | `LLAMA_SERVER_PORT`（預設 2064）、`LLM_MODEL`（model tag，預設空＝server 唯一模型） |
-| 呼叫 timeout | 單次 HTTP 請求 30 秒（CPU 27B 推論 60 token ≈ 15-30 秒） |
+| 認證 | `Authorization: Bearer ${SGLANG_API_KEY}`（env 變數，部署時注入） |
+| 環境變數 | `SGLANG_API_KEY`、`LLM_MODEL`（model name，預設 `qwen3.8-27b`） |
+| 併發限制 | `--max-running-requests 2`（同時最多 2 個請求，第 3 個排隊） |
+| 呼叫 timeout | 單次 HTTP 請求 60 秒（GPU 27B + DSpark，100 token ≈ 3-8 秒） |
 | Fallback | LLM 呼叫失敗（timeout / 5xx / parse error）→ server 自動替該 AI 提交預設行動（狼→隨機刀一人；占い→隨機查一人；守衛→隨機護一人；投票→棄票；發言→跳過）。**必須自動提交**，因為 phase 無 timeout，若 AI 永遠不提交則遊戲卡死 |
 
 ### 13.3 AI 玩家數量
