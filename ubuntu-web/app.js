@@ -87,10 +87,8 @@ function renderRoom() {
   $('#host-tools').hidden = !state.isHost;
   $('#waiting-note').hidden = state.isHost || state.isSpectating;
   $('#spectate-note').hidden = !state.isSpectating || state.isHost;
-  // 觀戰中無法發言
+  // 觀戰者也可發言（聊天）；身分只限制房主操作
   $('#chat-text').value = '';
-  $('#chat-text').disabled = state.isSpectating;
-  $('#btn-send').disabled = state.isSpectating;
   renderPlayers();
   renderChat();
   syncMaxPlayers(state.maxPlayers);
@@ -188,13 +186,12 @@ function renderChat() {
   // 空狀態：不塞假訊息
   const empty = document.createElement('div');
   empty.className = 'chat-empty';
-  empty.textContent = state.isSpectating ? '（觀戰中，無法發言）' : '（還沒有訊息）';
+  empty.textContent = '（還沒有訊息）';
   box.appendChild(empty);
 }
 
 // 發送訊息（純前端本地顯示，無後端）
 function sendChat() {
-  if (state.isSpectating) return; // 觀戰中無法發言
   const input = $('#chat-text');
   const text = input.value.trim();
   if (!text) return;
