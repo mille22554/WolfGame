@@ -227,6 +227,22 @@ export async function createLobbyServer(opts = {}) {
                 }
                 break;
             }
+            case 'TOGGLE_MASON_END_TURN': {
+                const room = rec.roomCode ? roomManager.getRoom(rec.roomCode) : undefined;
+                if (room && room.game) {
+                    room.touch();
+                    room.game.handleToggleMasonEndTurn(clientId);
+                }
+                break;
+            }
+            case 'TOGGLE_WOLF_READY': {
+                const room = rec.roomCode ? roomManager.getRoom(rec.roomCode) : undefined;
+                if (room && room.game) {
+                    room.touch();
+                    room.game.handleToggleWolfReady(clientId);
+                }
+                break;
+            }
             case 'CAST_VOTE': {
                 const room = rec.roomCode ? roomManager.getRoom(rec.roomCode) : undefined;
                 if (room && room.game) {

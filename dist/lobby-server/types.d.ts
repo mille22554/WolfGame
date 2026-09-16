@@ -45,6 +45,10 @@ export type ClientToServerMessage = {
     action: 'WOLF_KILL' | 'SEER_CHECK' | 'GUARD_PROTECT';
     targetClientId: string;
 } | {
+    type: 'TOGGLE_MASON_END_TURN';
+} | {
+    type: 'TOGGLE_WOLF_READY';
+} | {
     type: 'CAST_VOTE';
     targetClientId: string | null;
 } | {
@@ -115,6 +119,27 @@ export type ServerToClientMessage = {
     displayName: string;
     description: string;
     partners: string[];
+    madman?: string;
+} | {
+    type: 'MASON_READY';
+    clientId: string;
+    ready: boolean;
+} | {
+    type: 'WOLF_READY';
+    clientId: string;
+    ready: boolean;
+} | {
+    type: 'WOLF_VOTE_SPLIT';
+    votes: Record<string, number>;
+} | {
+    type: 'WOLF_SPEECH_SELECTED';
+    round: number;
+    from: string;
+    text: string;
+} | {
+    type: 'WOLF_MEETING_ABORTED';
+    count: number;
+    reason: string;
 } | {
     type: 'NIGHT_RESULT';
     peacefulNight: boolean;
@@ -175,6 +200,8 @@ export declare const MIN_PLAYERS = 6;
 export declare const MAX_PLAYERS = 15;
 export declare const MAX_MEMBERS_PER_ROOM = 20;
 export declare const MAX_MESSAGE_LEN = 200;
+/** 狼會議安全上限（測試用）：白板累計 N 則 WOLF_MESSAGE 未收斂 → 停止並報告 */
+export declare const WOLF_MESSAGE_CAP = 100;
 export declare const CHAT_LIMIT = 50;
 export declare const RATE_LIMIT_PER_MIN = 10;
 //# sourceMappingURL=types.d.ts.map

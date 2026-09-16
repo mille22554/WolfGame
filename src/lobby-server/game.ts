@@ -1,22 +1,27 @@
 /**
- * game.ts — 單一房間的遊戲引擎（ubuntu 分支 M5）
+ * game.ts — 單一房間的遊戲引擎（ubuntu 分支 M5 + stage 2 狼會議）
  *
  * 簡化 phase 狀態機：phase timer + 直接 state mutation（不用 event queue，見規格 §12.10）。
  *
- * 流程：ROLE_REVEAL(10s) → NIGHT(60s) → NIGHT_RESULT(10s) → DAY_DISCUSSION(120s)
+ * 流程：ROLE_REVEAL(10s) → NIGHT(不限時，依序解鎖) → NIGHT_RESULT(10s) → DAY_DISCUSSION(120s)
  *       → DAY_VOTING(60s) → DAY_RESULT(10s) →（勝利判定）→ 下一夜... → GAME_OVER
  *
  * 規則（規格 §12）：
- * - 人狼不可殺狂人；狼刀目標取多數決（平票 → 先提交者）
+ * - NIGHT 依序解鎖：GUARD（Day2 起）→ MASON（雙共有者 toggle ON）→ WOLF（狼會議）→ SEER
+ * - 狼會議（§12.3 連續對話制）：DISCUSSION（WOLF_CHAT 持續對話 + toggle ready）
+ *   → 全 ready → VOTING（各狼投 WOLF_KILL）→ 明確多數 → 收斂；
+ *   平票 → 回 DISCUSSION（ready 重置、round+1、broadcast WOLF_VOTE_SPLIT）
+ *   白板累計 WOLF_MESSAGE_CAP（100）則未收斂 → 停止並 broadcast WOLF_MEETING_ABORTED（不自動收斂）
+ * - 人狼不可殺狂人；狼刀取收斂的 wolfTargetId（平票絕不用先提交者/隨機，回討論）
  * - 守衛 Day1 不可行動；不可自護（自護 → 隨機改護他人）
  * - 占い師不可查自己
  * - 霊能者只在黎明得知「昨日」被票死者身分（夜殺不可知）
  * - 夜殺／票死：身分不公開
  * - 村勝：人狼全滅；狼勝：存活人狼數 ≥ 存活村人陣營數
- * - 所有活躍玩家皆已提交（夜間行動／投票）→ 提前結算，不等 timeout
+ * - NIGHT 不限時：等待所有夜間步驟完成才結算（無 timeout 截斷）
  */
 import { Role, Team, SeerResult, ROLE_CONFIG, ROLE_TEAM, getDisplayName, getDescription, seerSeesAs } from '../types.js';
-import { MAX_MESSAGE_LEN } from './types.js';
+import { MAX_MESSAGE_LEN, WOLF_MESSAGE_CAP } from './types.js';
 
 export type GamePhase =
   | 'ROLE_REVEAL'
@@ -26,6 +31,12 @@ export type GamePhase =
   | 'DAY_VOTING'
   | 'DAY_RESULT'
   | 'GAME_OVER';
+
+/** NIGHT 內部依序解鎖的子步驟（規格 §12.3 結算順序） */
+export type NightStep = 'GUARD' | 'MASON' | 'WOLF' | 'SEER';
+
+/** 狼會議子階段：討論（WOLF_CHAT + toggle ready）→ 投票（WOLF_KILL） */
+export type WolfSubphase = 'DISCUSSION' | 'VOTING';
 
 export interface GamePlayer {
   clientId: string;
@@ -68,6 +79,26 @@ export interface GameState {
   winner: Team | null;
   /** 昨日被票出局者 clientId（霊能者黎明資訊用；每日投票開始時清除，避免隔天重送舊資訊） */
   lastVoteDeathClientId: string | null;
+  /** 目前夜間步驟（非 NIGHT phase 時 null） */
+  nightStep: NightStep | null;
+  /** 本夜依序要走的步驟（依存活角色＋day 計算） */
+  nightSteps: NightStep[];
+  /** mason clientId -> 是否 toggle ON（雙人都 ON 才解鎖下一步） */
+  masonReady: Map<string, boolean>;
+  /** wolf clientId -> 是否 toggle ON（全 ready 才進 VOTING） */
+  wolfReady: Map<string, boolean>;
+  /** 狼會議子階段（非 WOLF step 時 null） */
+  wolfSubphase: WolfSubphase | null;
+  /** wolf clientId -> 投票目標 clientId（覆蓋式） */
+  wolfVotes: Map<string, string>;
+  /** 狼會議回合數（平票 +1） */
+  wolfMeetingRound: number;
+  /** 收斂後確定的刀人目標（平票時保持 null，回討論重來） */
+  wolfTargetId: string | null;
+  /** 白板累計 WOLF_MESSAGE 數（本夜；安全上限用） */
+  wolfMessageCount: number;
+  /** 狼會議已因安全上限停止（停止後不再受理 WOLF_CHAT / TOGGLE_WOLF_READY；不自動收斂） */
+  wolfMeetingAborted: boolean;
 }
 
 export interface GameCallbacks {
@@ -79,6 +110,10 @@ export interface GameCallbacks {
   getAllClientIds?(): string[];
   /** 目前房主 clientId（END_DISCUSSION 驗證用；房間已不存在時回傳 undefined） */
   getHostClientId?(): string | undefined;
+  /** NIGHT 子步驟激活（AI 控制器掛鉤：驅動該 step 的 AI 玩家行動） */
+  onNightStepActive?(step: NightStep, players: GamePlayer[]): void;
+  /** 狼會議子階段切換（AI 控制器掛鉤：DISCUSSION 跑管線、VOTING 驅動投票） */
+  onWolfSubphaseChange?(subphase: WolfSubphase, round: number): void;
 }
 
 export class GameEngine {
@@ -100,12 +135,23 @@ export class GameEngine {
       deathHistory: [],
       winner: null,
       lastVoteDeathClientId: null,
+      nightStep: null,
+      nightSteps: [],
+      masonReady: new Map(),
+      wolfReady: new Map(),
+      wolfSubphase: null,
+      wolfVotes: new Map(),
+      wolfMeetingRound: 1,
+      wolfTargetId: null,
+      wolfMessageCount: 0,
+      wolfMeetingAborted: false,
     };
   }
 
   /** 開始遊戲：分配角色、私發 ROLE_REVEALED、進入 phase 循環 */
   start(): void {
     this.assignRoles();
+    const madman = this.state.players.find((p) => p.role === Role.MADMAN);
     for (const p of this.state.players) {
       const partners: string[] = [];
       if (p.role === Role.WEREWOLF) {
@@ -117,18 +163,21 @@ export class GameEngine {
         const m = this.getPlayerByClientId(p.masonPartnerId);
         if (m) partners.push(m.nickname);
       }
-      this.callbacks.sendTo(p.clientId, {
+      const msg: Record<string, unknown> = {
         type: 'ROLE_REVEALED',
         role: p.role,
         displayName: getDisplayName(p.role),
         description: getDescription(p.role),
         partners,
-      });
+      };
+      // 規格 §12.2：人狼知道狂人是誰（AI 需據此排除狂人不可刀）
+      if (p.role === Role.WEREWOLF && madman) msg.madman = madman.nickname;
+      this.callbacks.sendTo(p.clientId, msg);
     }
     this.transitionTo('ROLE_REVEAL');
   }
 
-  /** 處理夜間行動提交 */
+  /** 處理夜間行動提交（依序解鎖：各行動只在對應 nightStep 時受理） */
   handleNightAction(clientId: string, action: { type: 'WOLF_KILL' | 'SEER_CHECK' | 'GUARD_PROTECT'; targetClientId: string }): void {
     if (this.state.phase !== 'NIGHT') return;
     const player = this.getPlayerByClientId(clientId);
@@ -137,6 +186,10 @@ export class GameEngine {
     if (action.type === 'WOLF_KILL' && player.role !== Role.WEREWOLF) return;
     if (action.type === 'SEER_CHECK' && player.role !== Role.SEER) return;
     if (action.type === 'GUARD_PROTECT' && player.role !== Role.GUARD) return;
+    // 依序解鎖：WOLF_KILL 只在狼會議投票環節受理；SEER/GUARD 只在各自步驟受理
+    if (action.type === 'WOLF_KILL' && (this.state.nightStep !== 'WOLF' || this.state.wolfSubphase !== 'VOTING')) return;
+    if (action.type === 'SEER_CHECK' && this.state.nightStep !== 'SEER') return;
+    if (action.type === 'GUARD_PROTECT' && this.state.nightStep !== 'GUARD') return;
     // 守衛 Day1 不可行動
     if (action.type === 'GUARD_PROTECT' && this.state.day === 1) return;
     // 目標驗證：不可是自己、目標必須存在且存活；人狼不可選狂人
@@ -145,14 +198,47 @@ export class GameEngine {
     if (!target || !target.alive) return;
     if (action.type === 'WOLF_KILL' && target.role === Role.MADMAN) return;
 
-    // 存入（同一玩家同類型重新提交 → 覆蓋舊行動）
+    if (action.type === 'WOLF_KILL') {
+      // 狼投票：存 wolfVotes（覆蓋式）；所有存活狼皆已提交 → 計票
+      this.state.wolfVotes.set(clientId, action.targetClientId);
+      if (this.allWolvesVoted()) this.resolveWolfVote();
+      return;
+    }
+    // GUARD_PROTECT / SEER_CHECK：單人行動，存 nightActions（覆蓋式）→ 推進下一步
     const entry: NightAction = { actorClientId: clientId, type: action.type, targetClientId: action.targetClientId };
     const idx = this.state.nightActions.findIndex((a) => a.actorClientId === clientId && a.type === action.type);
     if (idx >= 0) this.state.nightActions[idx] = entry;
     else this.state.nightActions.push(entry);
+    this.completeNightStep();
+  }
 
-    // 所有活躍玩家皆已行動 → 提前結算（不等完整 timeout）
-    if (this.allNightActionsSubmitted()) this.resolveNight();
+  /** 共有者 toggle 回合結束（開/關）；雙人都 ON → 解鎖下一步 */
+  handleToggleMasonEndTurn(clientId: string): void {
+    if (this.state.phase !== 'NIGHT' || this.state.nightStep !== 'MASON') return;
+    const player = this.getPlayerByClientId(clientId);
+    if (!player || player.role !== Role.MASON || !player.alive) return;
+    const ready = !(this.state.masonReady.get(clientId) ?? false);
+    this.state.masonReady.set(clientId, ready);
+    this.callbacks.broadcast({ type: 'MASON_READY', clientId, ready });
+    if (this.allMasonsReady()) this.completeNightStep();
+  }
+
+  /** 人狼 toggle「準備投票」（開/關）；全 ready → 進入 VOTING */
+  handleToggleWolfReady(clientId: string): void {
+    if (this.state.phase !== 'NIGHT' || this.state.nightStep !== 'WOLF' || this.state.wolfSubphase !== 'DISCUSSION') return;
+    if (this.state.wolfMeetingAborted) return; // 安全上限已觸發：停止受理
+    const player = this.getPlayerByClientId(clientId);
+    if (!player || player.role !== Role.WEREWOLF || !player.alive) return;
+    const ready = !(this.state.wolfReady.get(clientId) ?? false);
+    this.state.wolfReady.set(clientId, ready);
+    this.callbacks.broadcast(
+      { type: 'WOLF_READY', clientId, ready },
+      this.getAliveWolves().map((p) => p.clientId),
+    );
+    if (this.allWolvesReady()) {
+      this.state.wolfSubphase = 'VOTING';
+      this.callbacks.onWolfSubphaseChange?.('VOTING', this.state.wolfMeetingRound);
+    }
   }
 
   /** 處理投票（targetClientId = null → 棄票） */
@@ -183,17 +269,35 @@ export class GameEngine {
     this.transitionTo('DAY_VOTING');
   }
 
-  /** 人狼私頻（僅存活人狼可見） */
+  /** 人狼私頻（僅狼會議步驟可用、僅存活人狼可見）；累計訊息數，達安全上限 → 停止並報告 */
   handleWolfChat(clientId: string, text: string): void {
-    if (this.state.phase === 'GAME_OVER') return;
+    if (this.state.phase !== 'NIGHT' || this.state.nightStep !== 'WOLF') return;
+    if (this.state.wolfMeetingAborted) return; // 安全上限已觸發：停止受理
     const player = this.getPlayerByClientId(clientId);
     if (!player || player.role !== Role.WEREWOLF || !player.alive) return;
     const clean = text.trim();
     if (clean.length === 0 || clean.length > MAX_MESSAGE_LEN) return;
+    this.state.wolfMessageCount += 1;
     this.callbacks.broadcast(
       { type: 'WOLF_MESSAGE', from: player.nickname, text: clean, ts: Date.now() },
       this.getAliveWolves().map((p) => p.clientId),
     );
+    // 安全上限（測試用）：累計 100 則未收斂 → 立即停止並報告（不自動收斂、不強制決選）
+    if (this.state.wolfMessageCount >= WOLF_MESSAGE_CAP) this.abortWolfMeeting();
+  }
+
+  /** 狼會議安全上限觸發：標記停止＋broadcast 報告（night 停在 WOLF step，由 harness 觀察 timeout 兜底） */
+  private abortWolfMeeting(): void {
+    this.state.wolfMeetingAborted = true;
+    this.callbacks.broadcast(
+      { type: 'WOLF_MEETING_ABORTED', count: this.state.wolfMessageCount, reason: '白板累計 100 則 WOLF_MESSAGE 未收斂' },
+      this.getAliveWolves().map((p) => p.clientId),
+    );
+  }
+
+  /** 廣播給所有存活人狼（AI 控制器用：WOLF_SPEECH_SELECTED 等） */
+  broadcastToWolves(msg: object): void {
+    this.callbacks.broadcast(msg, this.getAliveWolves().map((p) => p.clientId));
   }
 
   /** 共有者私頻（僅雙方可見） */
@@ -216,6 +320,32 @@ export class GameEngine {
     this.stopCountdown();
     for (const t of this.timers) clearTimeout(t);
     this.timers = [];
+  }
+
+  /** 夜間狀態快照（供 harness / AI 控制器觀察狼會議進度） */
+  getNightState(): {
+    phase: GamePhase;
+    nightStep: NightStep | null;
+    wolfSubphase: WolfSubphase | null;
+    wolfMeetingRound: number;
+    wolfTargetId: string | null;
+    wolfMessageCount: number;
+    wolfMeetingAborted: boolean;
+  } {
+    return {
+      phase: this.state.phase,
+      nightStep: this.state.nightStep,
+      wolfSubphase: this.state.wolfSubphase,
+      wolfMeetingRound: this.state.wolfMeetingRound,
+      wolfTargetId: this.state.wolfTargetId,
+      wolfMessageCount: this.state.wolfMessageCount,
+      wolfMeetingAborted: this.state.wolfMeetingAborted,
+    };
+  }
+
+  /** 全部玩家（AI 控制器用 nickname→clientId 對照 LLM 回傳的中文名） */
+  getPlayers(): GamePlayer[] {
+    return this.state.players;
   }
 
   // --- Private methods ---
@@ -273,9 +403,21 @@ export class GameEngine {
         this.schedule(() => this.transitionTo('NIGHT'), 10_000);
         break;
       case 'NIGHT':
+        // 夜間重置：行動、ready toggle、狼投票、收斂目標
         this.state.nightActions = [];
-        this.startCountdown(60);
-        this.schedule(() => this.resolveNight(), 60_000);
+        this.state.masonReady.clear();
+        this.state.wolfReady.clear();
+        this.state.wolfVotes.clear();
+        this.state.wolfSubphase = null;
+        this.state.wolfTargetId = null;
+        this.state.wolfMeetingRound = 1;
+        this.state.wolfMessageCount = 0;
+        this.state.wolfMeetingAborted = false;
+        // 依序解鎖（GUARD→MASON→WOLF→SEER）；規格 §12.3：NIGHT 不限時（無 timeout 截斷）
+        this.state.nightSteps = this.computeNightSteps();
+        this.state.nightStep = this.state.nightSteps[0] ?? null;
+        if (this.state.nightStep) this.activateNightStep();
+        else this.resolveNight(); // 無任何夜間行動角色存活 → 直接結算
         break;
       case 'NIGHT_RESULT':
         // 結果 phase 固定 10 秒；勝利判定已在 resolveNight 完成（state.winner 已設定）
@@ -351,101 +493,184 @@ export class GameEngine {
     }
   }
 
-  /** 角色對應的夜間行動類型（null = 該玩家本夜無主動行動） */
-  private actionTypeFor(p: GamePlayer): 'WOLF_KILL' | 'SEER_CHECK' | 'GUARD_PROTECT' | null {
-    if (p.role === Role.WEREWOLF) return 'WOLF_KILL';
-    if (p.role === Role.SEER) return 'SEER_CHECK';
-    if (p.role === Role.GUARD && this.state.day > 1) return 'GUARD_PROTECT';
-    return null;
+  /** 計算本夜依序要走的步驟（只含存活且該 day 有行動的角色） */
+  private computeNightSteps(): NightStep[] {
+    const steps: NightStep[] = [];
+    const alive = this.getAlivePlayers();
+    if (this.state.day > 1 && alive.some((p) => p.role === Role.GUARD)) steps.push('GUARD');
+    if (alive.some((p) => p.role === Role.MASON)) steps.push('MASON');
+    if (alive.some((p) => p.role === Role.WEREWOLF)) steps.push('WOLF');
+    if (alive.some((p) => p.role === Role.SEER)) steps.push('SEER');
+    return steps;
   }
 
-  /** 活躍夜間玩家 = 存活人狼 + 存活占い師 + 存活守衛（Day2 起） */
-  private getNightActivePlayers(): GamePlayer[] {
-    return this.getAlivePlayers().filter((p) => this.actionTypeFor(p) !== null);
+  /** 激活目前夜間步驟：WOLF 步驟進入 DISCUSSION 子階段；通知 AI 控制器 */
+  private activateNightStep(): void {
+    const step = this.state.nightStep;
+    if (!step) return;
+    if (step === 'WOLF') {
+      this.state.wolfSubphase = 'DISCUSSION';
+      this.callbacks.onWolfSubphaseChange?.('DISCUSSION', this.state.wolfMeetingRound);
+    }
+    this.callbacks.onNightStepActive?.(step, this.getStepPlayers(step));
   }
 
-  private allNightActionsSubmitted(): boolean {
-    const active = this.getNightActivePlayers();
-    if (active.length === 0) return false;
-    return active.every((p) => {
-      const t = this.actionTypeFor(p);
-      return t !== null && this.state.nightActions.some((a) => a.actorClientId === p.clientId && a.type === t);
-    });
+  /** 該步驟對應的存活玩家 */
+  private getStepPlayers(step: NightStep): GamePlayer[] {
+    switch (step) {
+      case 'GUARD': return this.getAlivePlayers().filter((p) => p.role === Role.GUARD);
+      case 'MASON': return this.getAlivePlayers().filter((p) => p.role === Role.MASON);
+      case 'WOLF': return this.getAliveWolves();
+      case 'SEER': return this.getAlivePlayers().filter((p) => p.role === Role.SEER);
+    }
   }
 
-  /** 夜間結算：守衛 → 人狼 → 占い師 → 霊能者（黎明）；broadcast 結果後進 NIGHT_RESULT 或 GAME_OVER */
+  /** 目前步驟完成 → 推進下一步；無下一步 → 結算夜間 */
+  private completeNightStep(): void {
+    const current = this.state.nightStep;
+    const idx = current === null ? this.state.nightSteps.length : this.state.nightSteps.indexOf(current);
+    const next = idx >= 0 ? this.state.nightSteps[idx + 1] : undefined;
+    this.state.nightStep = next ?? null;
+    if (next) this.activateNightStep();
+    else this.resolveNight();
+  }
+
+  /** 所有存活共有者皆已 toggle ON */
+  private allMasonsReady(): boolean {
+    const masons = this.getAlivePlayers().filter((p) => p.role === Role.MASON);
+    return masons.length > 0 && masons.every((m) => this.state.masonReady.get(m.clientId) === true);
+  }
+
+  /** 所有存活狼皆已 toggle ON */
+  private allWolvesReady(): boolean {
+    const wolves = this.getAliveWolves();
+    return wolves.length > 0 && wolves.every((w) => this.state.wolfReady.get(w.clientId) === true);
+  }
+
+  /** 所有存活狼皆已提交 WOLF_KILL */
+  private allWolvesVoted(): boolean {
+    const wolves = this.getAliveWolves();
+    return wolves.length > 0 && wolves.every((w) => this.state.wolfVotes.has(w.clientId));
+  }
+
+  /**
+   * 狼投票計票（規格 §12.3）：
+   * - 明確多數（2:1、3:0）→ 確定 wolfTargetId，完成 WOLF 步驟
+   * - 平票（1:1、1:1:1）→ 回 DISCUSSION：ready 全重置、votes 清空、round+1、broadcast WOLF_VOTE_SPLIT
+   */
+  private resolveWolfVote(): void {
+    const counts = new Map<string, number>();
+    for (const target of this.state.wolfVotes.values()) counts.set(target, (counts.get(target) ?? 0) + 1);
+    let max = 0;
+    for (const c of counts.values()) if (c > max) max = c;
+    const leaders = [...counts.entries()].filter(([, c]) => c === max).map(([id]) => id);
+    if (leaders.length === 1) {
+      this.state.wolfTargetId = leaders[0];
+      this.completeNightStep();
+      return;
+    }
+    // 平票：回討論重來（不用先提交者/隨機決狼刀）
+    for (const key of this.state.wolfReady.keys()) this.state.wolfReady.set(key, false);
+    this.state.wolfVotes.clear();
+    this.state.wolfSubphase = 'DISCUSSION';
+    this.state.wolfMeetingRound += 1;
+    this.callbacks.broadcast(
+      { type: 'WOLF_VOTE_SPLIT', votes: Object.fromEntries(counts.entries()) },
+      this.getAliveWolves().map((p) => p.clientId),
+    );
+    this.callbacks.onWolfSubphaseChange?.('DISCUSSION', this.state.wolfMeetingRound);
+  }
+
+  /** 夜間結算：守衛 → 人狼（收斂目標）→ 占い師 → 霊能者（黎明）；broadcast 結果後進 NIGHT_RESULT 或 GAME_OVER */
   private resolveNight(): void {
     if (this.state.phase !== 'NIGHT') return; // 已提前結算過
     this.stopCountdown();
+    this.state.nightStep = null;
+    this.state.wolfSubphase = null;
 
-    // 1) 守衛：記錄護衛目標（自護 → 隨機改護他人，防禦性處理）
+    const wolfTargetId = this.state.wolfTargetId; // 狼會議收斂的刀人目標（平票時為 null）
+    const guardedTargetId = this.applyGuard();
+    const peacefulNight = wolfTargetId === null || wolfTargetId === guardedTargetId;
+    const nightDeath = peacefulNight ? null : this.applyWolfKill(wolfTargetId);
+
+    this.applySeerResult();
+    this.sendDawnInfo();
+    this.broadcastNightResult(peacefulNight, nightDeath, wolfTargetId, guardedTargetId);
+
+    // 勝利判定
+    const winner = this.checkWin();
+    this.state.winner = winner;
+    if (winner) this.transitionTo('GAME_OVER');
+    else this.transitionTo('NIGHT_RESULT');
+  }
+
+  /** 守衛：記錄護衛目標（自護 → 隨機改護他人，防禦性處理）；回傳護衛目標（無則 null） */
+  private applyGuard(): string | null {
     const guardAction = this.state.nightActions.find((a) => a.type === 'GUARD_PROTECT');
     const guard = guardAction ? this.getPlayerByClientId(guardAction.actorClientId) : undefined;
-    let guardedTargetId: string | null = null;
-    if (guardAction && guard) {
-      guardedTargetId = guardAction.targetClientId;
-      if (guardedTargetId === guard.clientId) {
-        const others = this.getAlivePlayers().filter((p) => p.clientId !== guard.clientId);
-        if (others.length > 0) guardedTargetId = others[Math.floor(Math.random() * others.length)].clientId;
-      }
+    if (!guardAction || !guard) return null;
+    let targetId = guardAction.targetClientId;
+    if (targetId === guard.clientId) {
+      const others = this.getAlivePlayers().filter((p) => p.clientId !== guard.clientId);
+      if (others.length > 0) targetId = others[Math.floor(Math.random() * others.length)].clientId;
     }
+    return targetId;
+  }
 
-    // 2) 人狼：多數決（平票 → 先提交者）；目標 == 護衛目標 → 平安夜
-    const wolfActions = this.state.nightActions.filter((a) => a.type === 'WOLF_KILL');
-    const wolfCounts = new Map<string, number>();
-    for (const a of wolfActions) wolfCounts.set(a.targetClientId, (wolfCounts.get(a.targetClientId) ?? 0) + 1);
-    let wolfTargetId: string | null = null;
-    let wolfMax = 0;
-    for (const a of wolfActions) {
-      const c = wolfCounts.get(a.targetClientId) ?? 0;
-      if (c > wolfMax) {
-        wolfMax = c;
-        wolfTargetId = a.targetClientId;
-      }
-    }
-    const peacefulNight = wolfTargetId === null || wolfTargetId === guardedTargetId;
-    let nightDeath: GamePlayer | null = null;
-    if (!peacefulNight && wolfTargetId) {
-      const target = this.getPlayerByClientId(wolfTargetId);
-      if (target) {
-        target.alive = false;
-        nightDeath = target;
-        this.state.deathHistory.push({ clientId: target.clientId, nickname: target.nickname, day: this.state.day, cause: 'wolf_kill' });
-      }
-    }
+  /** 人狼：刀收斂的 wolfTargetId（== 護衛目標時由呼叫方判定平安夜）；回傳被殺玩家（無則 null） */
+  private applyWolfKill(wolfTargetId: string | null): GamePlayer | null {
+    if (!wolfTargetId) return null;
+    const target = this.getPlayerByClientId(wolfTargetId);
+    if (!target) return null;
+    target.alive = false;
+    this.state.deathHistory.push({ clientId: target.clientId, nickname: target.nickname, day: this.state.day, cause: 'wolf_kill' });
+    return target;
+  }
 
-    // 3) 占い師：查驗結果記錄並只發給占い師
+  /** 占い師：查驗結果記錄並只發給占い師 */
+  private applySeerResult(): void {
     const seerAction = this.state.nightActions.find((a) => a.type === 'SEER_CHECK');
     const seer = seerAction ? this.getPlayerByClientId(seerAction.actorClientId) : undefined;
     const seerTarget = seerAction ? this.getPlayerByClientId(seerAction.targetClientId) : undefined;
-    if (seerAction && seer && seerTarget) {
-      seer.seerChecks.push({ targetId: seerTarget.clientId, result: seerSeesAs(seerTarget.role), day: this.state.day });
-    }
+    if (!seerAction || !seer || !seerTarget) return;
+    seer.seerChecks.push({ targetId: seerTarget.clientId, result: seerSeesAs(seerTarget.role), day: this.state.day });
+    this.callbacks.sendTo(seer.clientId, {
+      type: 'SEER_RESULT',
+      targetClientId: seerTarget.clientId,
+      nickname: seerTarget.nickname,
+      result: seerSeesAs(seerTarget.role),
+    });
+  }
 
-    // 4) 黎明：霊能者得知昨日被票死者身分（Day1 無）
+  /** 黎明：霊能者得知昨日被票死者身分（Day1 無） */
+  private sendDawnInfo(): void {
     const medium = this.state.players.find((p) => p.role === Role.MEDIUM && p.alive);
     const mediumTarget =
       this.state.day > 1 && this.state.lastVoteDeathClientId
         ? (this.getPlayerByClientId(this.state.lastVoteDeathClientId) ?? null)
         : null;
+    if (medium && mediumTarget) {
+      this.callbacks.sendTo(medium.clientId, {
+        type: 'MEDIUM_RESULT',
+        targetClientId: mediumTarget.clientId,
+        nickname: mediumTarget.nickname,
+        result: seerSeesAs(mediumTarget.role),
+      });
+    }
+  }
 
-    // 5) 廣播夜間結果
+  /** 廣播夜間結果：NIGHT_RESULT、GUARD_RESULT（私發）、PLAYER_ELIMINATED */
+  private broadcastNightResult(peacefulNight: boolean, nightDeath: GamePlayer | null, wolfTargetId: string | null, guardedTargetId: string | null): void {
     this.callbacks.broadcast({
       type: 'NIGHT_RESULT',
       peacefulNight,
       deaths: nightDeath ? [{ clientId: nightDeath.clientId, nickname: nightDeath.nickname }] : [],
     });
-    if (seerAction && seer && seerTarget) {
-      this.callbacks.sendTo(seer.clientId, {
-        type: 'SEER_RESULT',
-        targetClientId: seerTarget.clientId,
-        nickname: seerTarget.nickname,
-        result: seerSeesAs(seerTarget.role),
-      });
-    }
-    if (guardAction && guard && guardedTargetId) {
+    if (guardedTargetId) {
+      const guardAction = this.state.nightActions.find((a) => a.type === 'GUARD_PROTECT');
+      const guard = guardAction ? this.getPlayerByClientId(guardAction.actorClientId) : undefined;
       const gTarget = this.getPlayerByClientId(guardedTargetId);
-      if (gTarget) {
+      if (guard && gTarget) {
         const blocked = wolfTargetId !== null && wolfTargetId === guardedTargetId;
         guard.guardProtects.push({ targetId: gTarget.clientId, day: this.state.day, success: blocked });
         this.callbacks.sendTo(guard.clientId, {
@@ -456,14 +681,6 @@ export class GameEngine {
         });
       }
     }
-    if (medium && mediumTarget) {
-      this.callbacks.sendTo(medium.clientId, {
-        type: 'MEDIUM_RESULT',
-        targetClientId: mediumTarget.clientId,
-        nickname: mediumTarget.nickname,
-        result: seerSeesAs(mediumTarget.role),
-      });
-    }
     if (nightDeath) {
       this.callbacks.broadcast({
         type: 'PLAYER_ELIMINATED',
@@ -472,12 +689,6 @@ export class GameEngine {
         cause: 'wolf_kill',
       });
     }
-
-    // 6) 勝利判定
-    const winner = this.checkWin();
-    this.state.winner = winner;
-    if (winner) this.transitionTo('GAME_OVER');
-    else this.transitionTo('NIGHT_RESULT');
   }
 
   /** 投票結算：票最高者出局（平票 → 隨機）；broadcast 結果後進 DAY_RESULT 或 GAME_OVER */
