@@ -235,7 +235,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 
 | 角色 | 行動 | 限制 |
 |---|---|---|
-| 人狼 | `WOLF_KILL { targetId }` | 所有存活人狼各自提交；不可選自己、不可選狂人；多數決（同目標票最高；平票→先提交者） |
+| 人狼 | `WOLF_KILL { targetId }` | 所有存活人狼各自提交；不可選自己、不可選狂人；多數決（同目標票最高；平票→先提交者）；提交前可通過狼會議（WOLF_CHAT）協調 |
 | 占い師 | `SEER_CHECK { targetId }` | 不可選自己；每夜一次 |
 | 守衛 | `GUARD_PROTECT { targetId }` | Day1 不可；不可自護（自護→隨機護他人）；可連續護同一人 |
 | 霊能者 | 無（被動） | 黎明自動收到昨日票死者身分 |
@@ -329,6 +329,27 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 - **不共用**：`engine.ts`（事件佇列太複雜）、`ai-scheduler.ts`（排程模式不同）
 - **部分共用**：`character-session.ts` 的 prompt 結構可參考，但 ubuntu 版簡化為單一 `ai-player.ts`
 - ubuntu 版用更簡單的 **phase timer + 直接 state mutation** 模式（不需 event queue）
+
+### 12.11 私頻頻道
+
+| 頻道 | 可用 phase | 可見範圍 | 功能定位 |
+|---|---|---|---|
+| 狼會議（`WOLF_CHAT`） | `NIGHT` + `DAY_DISCUSSION` | 所有存活人狼 | 夜間：協調刀人目標（「我們刀 3 號吧」）；白天：協調投票策略、交換觀察 |
+| 共有者交談（`MASON_CHAT`） | `NIGHT` + `DAY_DISCUSSION` | 僅共有者雙方 | 確認彼此身份（開局後首次）、交換情報、協調投票 |
+
+**規則：**
+- 已死亡玩家不能發送任何私頻訊息（含狼、共有者）
+- 人狼死亡 → 剩餘存活狼仍可用狼會議
+- 共有者一方死亡 → 該頻道停用（剩下一方無法對話）
+- 私頻訊息**不記錄在公頻**，其他玩家完全看不到
+- 觀戰者看不到任何私頻
+- 訊息格式與公頻相同：`{ from, text, ts }`
+- 每則訊息上限 200 字（與公頻相同）
+
+**與 main 分支的差異：**
+- main 分支的「狼隊會議」是 LLM 驅動的結構化對話（多輪 back-and-forth 後投票決選）
+- ubuntu 版是**即時聊天頻道**（真人打字、即時 broadcast 給狼隊），更簡單直覺
+- 狼隊最終刀誰仍由各自提交 `WOLF_KILL` 決定（多數決），聊天只是協調工具
 
 ## 13. AI 補位（M7）
 
