@@ -344,7 +344,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 
 - `ROLE_CONFIG`、`Role`、`Team`、`ROLE_TEAM`、`seerSeesAs()` 等常數/函式 → 直接 import 或 copy
 - `assignRoles()`、`checkWinCondition()` 邏輯 → 可复用（需確認 import path）
-- `night.ts` 的結算邏輯 → 可复用（需改為 async/timeout 模式）
+- `night.ts` 的結算邏輯 → 可复用（需改為 async 等待模式）
 - **不共用**：`engine.ts`（事件佇列太複雜）
 - **部分共用**：`ai-scheduler.ts` 的 SpeechScheduler 管線邏輯（PRE_SPEECH→JUDGE→SELECT→EXPAND→BROADCAST）；`character-session.ts` 的 prompt 結構可參考，但 ubuntu 版簡化為單一 `ai-player.ts`
 - ubuntu 版用更簡單的 **phase 狀態機 + 直接 state mutation** 模式（不需 event queue）
