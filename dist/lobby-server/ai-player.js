@@ -81,13 +81,20 @@ export function buildPreSpeechPrompt(player, profile, gameState) {
         .filter(p => p.alive && p.id !== player.id && !wolfIdSet.has(p.id) && p.id !== gameState.madmanId)
         .map(p => p.name)
         .join('、');
+    // 討論歷史：明確告訴 AI 之前發生過什麼
+    const discussionHistory = gameState.recentMessages?.length
+        ? gameState.recentMessages.map(m => `${m.from}：「${m.text}」`).join('\n')
+        : '之前沒有任何討論，沒有人發過言。';
     const user = [
         `當前：第 ${gameState.day} 夜，狼會議（私頻，只有人狼能看到）。`,
         `你的情報：${gameState.privateInfo ?? '你是人狼'}`,
         `可刀目標（只能從以下選）：${eligibleTargets}`,
         ``,
+        `之前的討論：`,
+        discussionHistory,
+        ``,
         `任務：提出一個刀人目標並簡述理由（≤50字）。`,
-        `提醒：理由只能基於你實際擁有的資訊。若沒有足夠資訊，說「直覺」或「隨機」就好，不要硬編觀察。禁止使用「站位」「位置」「編號」等概念。用你的角色語氣說話。`,
+        `提醒：理由只能引用上面「之前的討論」裡實際出現的內容。若沒有討論，就說直覺或隨機，不要假裝你觀察到了什麼。用你的角色語氣說話。`,
         `回覆格式：{"speech": "..."}`,
     ].join('\n');
     return [
