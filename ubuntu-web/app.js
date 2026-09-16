@@ -215,21 +215,29 @@ function renderRoom() {
   syncRandomCount(state.randomCount);
 }
 
-// 玩家列表：以 server 的 state.players 為準；角色圖示先用「?」佔位；
-// 房主有 👑；房主可看到踢人按鈕；自己是 you
+// 玩家列表：以 server 的 state.players 為準；分成參戰／觀戰兩組；
+// 角色圖示先用「?」佔位；房主有 👑；房主可看到踢人按鈕；自己是 you
 function renderPlayers() {
-  const list = $('#player-list');
-  list.innerHTML = '';
+  const players = state.players.filter((m) => !m.isSpectator);
+  const spectators = state.players.filter((m) => m.isSpectator);
 
-  // 空狀態：目前沒有成員
-  if (state.players.length === 0) {
+  renderPlayerList($('#player-list'), players, '（目前沒有參戰玩家）');
+  renderPlayerList($('#spectator-list'), spectators, '（目前沒有觀戰者）');
+
+  // 人數只算參戰玩家
+  $('#player-count').textContent = players.length;
+}
+
+function renderPlayerList(list, members, emptyText) {
+  list.innerHTML = '';
+  if (members.length === 0) {
     const li = document.createElement('li');
     li.className = 'player-empty';
-    li.textContent = '（目前沒有玩家）';
+    li.textContent = emptyText;
     list.appendChild(li);
+    return;
   }
-
-  state.players.forEach((m, i) => {
+  members.forEach((m, i) => {
     const you = m.nickname === state.nickname;
     const li = document.createElement('li');
     li.className = 'player' + (you ? ' you' : '');
@@ -265,9 +273,6 @@ function renderPlayers() {
 
     list.appendChild(li);
   });
-
-  // 人數只算參戰玩家（不含觀戰者）
-  $('#player-count').textContent = state.players.filter((m) => !m.isSpectator).length;
 }
 
 // ---------- 聊天 ----------
@@ -430,15 +435,17 @@ function init() {
     wsSend({ type: 'START_GAME', maxPlayers: state.maxPlayers, randomCount: state.randomCount });
   });
 
-  // 踢人（事件委派）
-  $('#player-list').addEventListener('click', (e) => {
+  // 踢人（事件委派，參戰＋觀戰兩組）
+  const kickHandler = (e) => {
     const btn = e.target.closest('.kick');
     if (!btn) return;
     const li = btn.closest('li');
     const nameEl = li ? li.querySelector('.name') : null;
     if (!nameEl) return;
     wsSend({ type: 'KICK_PLAYER', target: nameEl.textContent });
-  });
+  };
+  $('#player-list').addEventListener('click', kickHandler);
+  $('#spectator-list').addEventListener('click', kickHandler);
 
   // 聊天發送
   $('#btn-send').addEventListener('click', sendChat);
