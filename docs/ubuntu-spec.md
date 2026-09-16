@@ -458,7 +458,7 @@ IDLE →（60s 無訊息 或 全真人跳過）→ PRE_SPEECH → JUDGE → SELE
 | 階段 | 說明 | 參數 |
 |---|---|---|
 | IDLE | 每 1s 檢查；等待 60s 無新訊息（或全真人跳過） | `cdMs=60000`, `checkIntervalMs=1000` |
-| PRE_SPEECH | 所有存活 AI 分批次（每批 3 個）平行生成草稿（≤100 token） | `preSpeechBatch=3`, `temp=0.7` |
+| PRE_SPEECH | 所有存活 AI 分批次（每批 2 個）平行生成草稿（≤100 token） | `preSpeechBatch=2`, `temp=1.0` |
 | JUDGE | 單次 LLM 呼叫，全盲評分所有草稿（不告知哪個 AI 寫哪段） | `temp=0.3`, `maxTokens=300` |
 | SELECT | 新穎性懲罰（與最近 3 則訊息比較）+ top3 中隨機選一 | `topK=3`, `recentCompareCount=3` |
 | EXPAND | 將選中的草稿展開為完整發言（commit 點，之後不中斷） | `temp=0.8` |
