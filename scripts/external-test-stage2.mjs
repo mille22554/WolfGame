@@ -118,13 +118,8 @@ function wolfMeetingFlowSection(log, events, players) {
     L.push('');
   }
 
-  // 用 WOLF_SPEECH_SELECTED 事件分組輪次（index-based：依 log 順序分組，避免 timestamp 邊界重疊）
+  // 用 WOLF_SPEECH_SELECTED 事件分組輪次（timestamp-based：用事件時間範圍匹配 log entries）
   const selectedEvents = events.filter((e) => e.type === 'WOLF_SPEECH_SELECTED');
-  // 找出每個 JUDGE 在 log 中的 index
-  const judgeIndices = [];
-  for (let j = 0; j < log.length; j++) {
-    if (log[j].kind === 'JUDGE') judgeIndices.push(j);
-  }
 
   for (let i = 0; i < selectedEvents.length; i++) {
     const ev = selectedEvents[i];
@@ -133,14 +128,14 @@ function wolfMeetingFlowSection(log, events, players) {
     L.push(`- **Judge 選出：** ${ev.from} → 發布「${ev.text}」`);
     L.push(`- **${ev.from}：** ✅ ready`);
     L.push('');
-    // 該輪次的回應：log 中 JUDGE[i] 之後、JUDGE[i+1] 之前的 WOLF_STANCE（排除發言者；每狼只取最後一筆=最終結果）
+    // 該輪次的回應：ts 在 [本事件, 下一事件) 範圍內的 WOLF_STANCE（排除發言者；每狼只取最後一筆=最終結果）
     const speakerClientId = players.find((p) => p.nickname === ev.from)?.clientId ?? '';
-    const startIdx = (i < judgeIndices.length ? judgeIndices[i] : log.length) + 1;
-    const endIdx = (i + 1 < judgeIndices.length ? judgeIndices[i + 1] : log.length);
+    const tStart = ev.ts;
+    const tEnd = (i + 1 < selectedEvents.length ? selectedEvents[i + 1].ts : Infinity);
     const lastByWolf = new Map();
-    for (let j = startIdx; j < endIdx; j++) {
-      if (log[j].kind === 'WOLF_STANCE' && log[j].clientId !== '' && log[j].clientId !== speakerClientId) {
-        lastByWolf.set(log[j].clientId, log[j]); // 後面的覆蓋前面的 → 保留最後一筆
+    for (const entry of log) {
+      if (entry.kind === 'WOLF_STANCE' && entry.clientId !== '' && entry.clientId !== speakerClientId && entry.ts >= tStart && entry.ts < tEnd) {
+        lastByWolf.set(entry.clientId, entry); // 後面的覆蓋前面的 → 保留最後一筆
       }
     }
     const responses = [...lastByWolf.values()];
