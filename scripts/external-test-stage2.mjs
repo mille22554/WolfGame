@@ -102,10 +102,38 @@ let aborted = false;
 let phaseTimeout = TIMEOUTS.NIGHT;
 let phaseStarted = Date.now();
 let lastMajorPhase = 'NIGHT';
+let lastProgressLog = Date.now();
+const PROGRESS_INTERVAL_MS = 600_000; // 每 10 分鐘輸出一次進度
+
+/** 輸出當前進度（每 10 分鐘一次） */
+function logProgress(s) {
+  const elapsed = Math.round((Date.now() - phaseStarted) / 1000);
+  const mins = Math.floor(elapsed / 60);
+  const secs = elapsed % 60;
+  if (s.phase === 'DAY_DISCUSSION') {
+    const alive = game.getAlivePlayers();
+    const readyCount = alive.filter((p) => game.state.dayReady.get(p.clientId) === true).length;
+    console.log(`[progress] ${mins}m${secs}s | ${s.phase} | ready: ${readyCount}/${alive.length}`);
+  } else if (s.phase === 'DAY_VOTING') {
+    const alive = game.getAlivePlayers();
+    const voted = alive.filter((p) => game.state.votes.some((v) => v.voterClientId === p.clientId)).length;
+    console.log(`[progress] ${mins}m${secs}s | ${s.phase} | votes: ${voted}/${alive.length}`);
+  } else if (s.phase === 'NIGHT') {
+    console.log(`[progress] ${mins}m${secs}s | ${s.phase} | step: ${s.nightStep} | wolfRound: ${s.wolfMeetingRound} | wolfMsgs: ${s.wolfMessageCount}`);
+  } else {
+    console.log(`[progress] ${mins}m${secs}s | ${s.phase}`);
+  }
+}
 
 while (true) {
   const s = game.getNightState();
   const major = currentMajorPhase(s.phase);
+
+  // 每 10 分鐘輸出進度
+  if (Date.now() - lastProgressLog >= PROGRESS_INTERVAL_MS) {
+    lastProgressLog = Date.now();
+    logProgress(s);
+  }
 
   // 階段切換 → 重置該階段的 timeout
   if (major !== lastMajorPhase) {
