@@ -311,6 +311,51 @@ export class GameEngine {
     getPlayers() {
         return this.state.players;
     }
+    /** 序列化目前遊戲狀態（JSON-safe；用於存檔/分階段測試 resume） */
+    saveState() {
+        return {
+            day: this.state.day,
+            players: this.state.players.map((p) => ({
+                clientId: p.clientId,
+                nickname: p.nickname,
+                role: p.role,
+                team: p.team,
+                alive: p.alive,
+                isMasonPartner: p.isMasonPartner,
+                masonPartnerId: p.masonPartnerId ?? null,
+                wolfPartnerIds: p.wolfPartnerIds,
+                seerChecks: p.seerChecks,
+                guardProtects: p.guardProtects,
+            })),
+            deathHistory: this.state.deathHistory,
+            lastVoteDeathClientId: this.state.lastVoteDeathClientId,
+            winner: this.state.winner,
+        };
+    }
+    /**
+     * 從存檔恢復狀態並直接進入 DAY_DISCUSSION（跳過 ROLE_REVEAL / NIGHT）。
+     * 用於分階段測試：先跑 night 存檔，再 resume 只跑 day。
+     */
+    restoreState(snapshot) {
+        this.state.day = snapshot.day;
+        this.state.players = snapshot.players.map((p) => ({
+            clientId: p.clientId,
+            nickname: p.nickname,
+            role: p.role,
+            team: p.team,
+            alive: p.alive,
+            isMasonPartner: p.isMasonPartner,
+            masonPartnerId: p.masonPartnerId ?? undefined,
+            wolfPartnerIds: p.wolfPartnerIds ?? [],
+            seerChecks: p.seerChecks ?? [],
+            guardProtects: p.guardProtects ?? [],
+        }));
+        this.state.deathHistory = snapshot.deathHistory ?? [];
+        this.state.lastVoteDeathClientId = snapshot.lastVoteDeathClientId ?? null;
+        this.state.winner = snapshot.winner ?? null;
+        // 直接跳進 DAY_DISCUSSION
+        this.transitionTo('DAY_DISCUSSION');
+    }
     // --- Private methods ---
     assignRoles() {
         const count = this.players.length;

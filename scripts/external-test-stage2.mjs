@@ -17,7 +17,7 @@
  * - 產出 markdown 報告（--report 或 REPORT env 或預設 ai-trace-stage2-output.md）
  * - exit code：0 = 目標階段完成、1 = 未收斂（安全上限 / timeout）
  */
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, readFileSync } from 'node:fs';
 import { GameEngine } from '../dist/lobby-server/game.js';
 import { AiController } from '../dist/lobby-server/ai-controller.js';
 
@@ -30,6 +30,8 @@ function getArg(flag, defaultValue) {
 }
 const STOP_AT = getArg('--stop-at', 'DAY_RESULT'); // NIGHT_RESULT | DAY_RESULT | GAME_OVER
 const REPORT_PATH = getArg('--report', process.env.REPORT || 'ai-trace-stage2-output.md');
+const SAVE_STATE_PATH = getArg('--save-state', null); // 存檔路徑（跑完目標階段後存檔）
+const RESUME_PATH = getArg('--resume', null); // 存檔路徑（從存檔恢復，跳過 night）
 
 // 各階段 timeout
 const TIMEOUTS = {
@@ -78,9 +80,15 @@ const game = new GameEngine('STAGE2', defs.map((d) => ({ clientId: d.clientId, n
 }, 100);
 ai.setGame(game);
 
-// --- 3) 開始遊戲 ---
-game.start();
-console.log(`[stage2] 遊戲已開始，目標：--stop-at ${STOP_AT}`);
+// --- 3) 開始遊戲（或從存檔恢復） ---
+if (RESUME_PATH) {
+  const snapshot = JSON.parse(readFileSync(RESUME_PATH, 'utf-8'));
+  game.restoreState(snapshot);
+  console.log(`[stage2] 從存檔恢復（${RESUME_PATH}），day=${snapshot.day}，直接進入 DAY_DISCUSSION`);
+} else {
+  game.start();
+  console.log(`[stage2] 遊戲已開始，目標：--stop-at ${STOP_AT}`);
+}
 
 // --- 4) 觀察：分階段 timeout 輪詢 ---
 let converged = false;
@@ -127,6 +135,13 @@ const report = buildReport(game, ai, events, defs, converged, aborted, STOP_AT);
 writeFileSync(REPORT_PATH, report, 'utf-8');
 const status = converged ? `${STOP_AT} 達成` : aborted ? '未收斂（100 則白板上限）' : '未收斂（階段 timeout）';
 console.log(`[stage2] ${status}；報告已寫入 ${REPORT_PATH}`);
+
+// --- 5.5) 存檔（若指定 --save-state） ---
+if (SAVE_STATE_PATH && converged) {
+  const snapshot = game.saveState();
+  writeFileSync(SAVE_STATE_PATH, JSON.stringify(snapshot, null, 2), 'utf-8');
+  console.log(`[stage2] 狀態存檔已寫入 ${SAVE_STATE_PATH}（可用 --resume ${SAVE_STATE_PATH} 接白天）`);
+}
 
 // --- 6) 結束 ---
 ai.destroy();
