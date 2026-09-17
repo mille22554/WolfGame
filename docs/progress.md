@@ -5,55 +5,64 @@
 
 ## 目前狀態
 
-**卡在哪：** 外部測試（`scripts/external-test-stage2.mjs`）在 server 上跑 8 分鐘以上無任何輸出（只有第一行「遊戲已開始」）。process 活著、SGLang 回應正常（Unauthorized 是沒帶 key），但 LLM 呼叫似乎沒完成或沒 timeout。需要排查。
-
-**可能原因：**
-1. SGLang 負載過高（其他使用者/殘留 process 佔用）
-2. LLM timeout 設定（60s）在 nohup 環境下行為異常
-3. 測試腳本 WS 連線到 game server 後，game 沒正確 start（room 沒建立？）
-4. `llmWithRetry` 的 3 次重試 × 60s timeout = 最壞 180s/call，15 個 AI 就算 sequential 也要很久
+**卡在哪：** 白天（DAY_DISCUSSION）尚未驗證。Night 已通過（`--stop-at NIGHT_RESULT` ✅）。下一步是用 `--resume` 從存檔接白天，確認 AI 討論/投票/toggle 正常。
 
 **下一步（依序）：**
-1. SSH 到 server 手動跑一個最小 LLM 呼叫確認 SGLang 正常：
-   ```bash
-   curl -s http://127.0.0.1:9090/v1/chat/completions \
-     -H "Authorization: Bearer $SGLANG_API_KEY" \
-     -H "Content-Type: application/json" \
-     -d '{"model":"qwen3.8-27b","messages":[{"role":"user","content":"說hi"}],"max_tokens":10}'
-   ```
-2. 確認 wolfgame service 的 room 有正確建立（看 server log：`journalctl -u wolfgame -n 50`）
-3. 若 LLM 正常 → 在 server 上直接跑測試但**不加 nohup**（用 foreground + 大 timeout），觀察即時輸出
-4. 若確認是 timeout 問題 → 把 `LLM_TIMEOUT_MS` 調高（如 120000）或減少重試次數
-5. 測試通過後 → Step 5（AI 接 production server）
+1. Server 上跑 `--stop-at NIGHT_RESULT --save-state /tmp/night1.json`（~3 min）
+2. Server 上跑 `--resume /tmp/night1.json --stop-at DAY_RESULT`（≤10 min，跳過 night）
+3. 取回報告確認：AI 有發言（MESSAGE）、有 toggle（DAY_READY_STATUS）、有投票（VOTE_RESULT）
+4. 若 day 有 bug → 修 → 重跑 step 2（不用重跑 night）
+5. 全部通過 → Step 5（AI 接 production server）
 
-## 已完成（本 session 內）
+## 已完成
 
 | 項目 | Commit | 說明 |
 |---|---|---|
-| Night 流程完整實作 | 多個（見 git log） | mason/wolf/seer 會議 loop + 結算 + NIGHT_RESULT |
+| Night 流程完整實作 | 多個 | mason/wolf/seer 會議 loop + 結算 + NIGHT_RESULT |
 | Spec 更新 | `bff5cc5` | 白天項目標注「目標態/待實作」；CD 自動判斷 |
 | 100 則上限改可選 | `e95f5d6` | `wolfMessageCap`/`messageCap` 預設 0=停用 |
 | Step 1+2：toggle 制 + 平票 | `48b8127` | 移除 120s timer；`TOGGLE_VOTE_READY`/`DAY_READY_STATUS`；平票→無人出局 |
 | Step 3+4：AI 白天討論+投票 | `c397b49` | `runDayDiscussion()`/`runDayVoting()`/prompt builders |
 | Fix：一次一個 AI 發言 | `c1f65ad` | `generateDayDrafts` 從 15 平行→隨機選 1 個 |
 | docs/ai-rp-prompt-research.md | `c19c5e5` | 社群 RP 指南（prompt engineering 研究彙整） |
+| 外部測試分階段 | `b657509` | `--stop-at`（NIGHT_RESULT/DAY_RESULT/GAME_OVER）+ 各階段獨立 timeout |
+| NIGHT timeout 調高 | `4dbf085` | 120s→300s（LLM 慢時 120s 不夠） |
+| 存檔/恢復機制 | `1867954` | `GameEngine.saveState()`/`restoreState()` + 測試腳本 `--save-state`/`--resume` |
+| NIGHT 驗證通過 | — | `--stop-at NIGHT_RESULT` ✅（狼刀健太，3 則白板，round 1） |
 
 ## 待做
 
-1. **[HIGH] Debug 外部測試無輸出** → 排查 SGLang/WS/room 建立
-2. **[HIGH] 外部測試驗證完整一天** → NIGHT→DAY_DISCUSSION→DAY_VOTING→DAY_RESULT
-3. **[MED] Step 5：AI 接 production server** → `server.ts` 實例化 `AiController`，room 有 AI 玩家時啟動
-4. **[LOW] 前端（ubuntu-web/）** → 等外部測試跑通完整一局再開
+1. **[HIGH] 外部測試驗證白天** → `--resume /tmp/night1.json --stop-at DAY_RESULT`
+2. **[MED] Step 5：AI 接 production server** → `server.ts` 實例化 `AiController`
+3. **[LOW] 前端（ubuntu-web/）** → 等外部測試跑通完整一局再開
+
+## 測試腳本用法
+
+```bash
+# 跑夜晚 + 存檔（~3 min）
+node scripts/external-test-stage2.mjs --stop-at NIGHT_RESULT --save-state /tmp/night1.json
+
+# 從存檔接白天（跳過 night，≤10 min）
+node scripts/external-test-stage2.mjs --resume /tmp/night1.json --stop-at DAY_RESULT
+
+# 跑完整天（night + day，~13 min）
+node scripts/external-test-stage2.mjs --stop-at DAY_RESULT
+
+# 跑完整局（多天）
+node scripts/external-test-stage2.mjs --stop-at GAME_OVER
+```
+
+各階段 timeout：NIGHT=300s、DAY=600s。超時會明確報錯是哪個階段。
 
 ## 關鍵檔案
 
 | 檔案 | 說明 |
 |---|---|
-| `src/lobby-server/game.ts` | GameEngine（~834 行）；toggle 制、sendDayMessage、resolveVotes 平票 |
+| `src/lobby-server/game.ts` | GameEngine（~880 行）；toggle 制、sendDayMessage、resolveVotes 平票、saveState/restoreState |
 | `src/lobby-server/ai-controller.ts` | AI 控制器（~1095 行）；night + day 完整邏輯 |
 | `src/lobby-server/types.ts` | 協議類型（TOGGLE_VOTE_READY、DAY_READY_STATUS 等） |
 | `src/lobby-server/server.ts` | Production server；AiController 尚未接入（Step 5） |
-| `scripts/external-test-stage2.mjs` | 外部測試腳本；wait 到 DAY_RESULT；messageCap=100 |
+| `scripts/external-test-stage2.mjs` | 外部測試腳本；分階段 + 存檔/恢復 |
 | `docs/ubuntu-spec.md` | 權威規格（WS 協定、房間生命週期、phase 狀態機、里程碑） |
 | `docs/ai-rp-prompt-research.md` | 社群 RP 指南（調人設時參考） |
 
@@ -69,9 +78,12 @@ git add -A && git commit -m "..." && git push
 ssh -F "C:\Users\user\Desktop\FrankTests\.ssh\config" ssh.morowin.win \
   "cd /opt/wolfgame && git pull && sudo systemctl restart wolfgame"
 
-# 跑外部測試（server 上）
+# 跑外部測試（server 上，分階段）
 ssh -F "C:\Users\user\Desktop\FrankTests\.ssh\config" ssh.morowin.win \
-  "cd /opt/wolfgame && SGLANG_API_KEY=ec1f8d6ef95e81135aac5b9ac19b121836cc00e9d6511472c135c5d5bfb0c89e node scripts/external-test-stage2.mjs"
+  "cd /opt/wolfgame && SGLANG_API_KEY=ec1f8d6ef95e81135aac5b9ac19b121836cc00e9d6511472c135c5d5bfb0c89e node scripts/external-test-stage2.mjs --stop-at NIGHT_RESULT --save-state /tmp/night1.json"
+
+ssh -F "C:\Users\user\Desktop\FrankTests\.ssh\config" ssh.morowin.win \
+  "cd /opt/wolfgame && SGLANG_API_KEY=ec1f8d6ef95e81135aac5b9ac19b121836cc00e9d6511472c135c5d5bfb0c89e node scripts/external-test-stage2.mjs --resume /tmp/night1.json --stop-at DAY_RESULT"
 
 # 取回報告
 scp -F "C:\Users\user\Desktop\FrankTests\.ssh\config" \
