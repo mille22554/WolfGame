@@ -1,17 +1,55 @@
 #!/usr/bin/env node
 /**
- * external-test-stage2.mjs — Stage 2 外部測試：15 人全 AI 局的第一晚狼會議（連續對話制）
+ * external-test-stage2.mjs — Stage 2 外部測試：15 人全 AI 局（分階段可選）
  *
- * 在 server 上跑：SGLANG_API_KEY=xxx node scripts/external-test-stage2.mjs
+ * 用法：
+ *   node scripts/external-test-stage2.mjs [--stop-at PHASE] [--report PATH]
+ *
+ * PHASE 選項：
+ *   NIGHT_RESULT  — 只跑夜晚（mason→wolf→seer/guard→結算），到 DAY_DISCUSSION 開始時停止
+ *   DAY_RESULT    — 跑完整天（night + day discussion + voting），到 DAY_RESULT 停止（預設）
+ *   GAME_OVER     — 跑完整局（多天）直到 GAME_OVER
+ *
+ * 在 server 上跑：SGLANG_API_KEY=xxx node scripts/external-test-stage2.mjs --stop-at NIGHT_RESULT
  * - import dist/lobby-server/ 編譯產物（GameEngine + AiController）
- * - 建 15 人全 AI 局，跑第一夜狼會議（全狼獨立出草稿→judge 盲選發布→其他狼回應→收斂 loop）
- * - 觀察到收斂（wolfTargetId 設定）或 100 則安全上限（wolfMeetingAborted）或 15 分鐘 timeout
- * - 產出 markdown 報告（REPORT env 指定路徑；預設 ai-trace-stage2-output.md）
- * - exit code：0 = 收斂、1 = 未收斂（安全上限 / timeout）
+ * - 建 15 人全 AI 局
+ * - 各階段獨立 timeout（night 120s / day 600s）
+ * - 產出 markdown 報告（--report 或 REPORT env 或預設 ai-trace-stage2-output.md）
+ * - exit code：0 = 目標階段完成、1 = 未收斂（安全上限 / timeout）
  */
 import { writeFileSync } from 'node:fs';
 import { GameEngine } from '../dist/lobby-server/game.js';
 import { AiController } from '../dist/lobby-server/ai-controller.js';
+
+// --- CLI 參數解析 ---
+const args = process.argv.slice(2);
+function getArg(flag, defaultValue) {
+  const idx = args.indexOf(flag);
+  if (idx !== -1 && idx + 1 < args.length) return args[idx + 1];
+  return defaultValue;
+}
+const STOP_AT = getArg('--stop-at', 'DAY_RESULT'); // NIGHT_RESULT | DAY_RESULT | GAME_OVER
+const REPORT_PATH = getArg('--report', process.env.REPORT || 'ai-trace-stage2-output.md');
+
+// 各階段 timeout
+const TIMEOUTS = {
+  NIGHT: 120_000,   // 夜晚：mason(3) + wolf(3) + seer/guard → 2 分鐘夠
+  DAY: 600_000,     // 白天：15 AI 討論 + 投票 → 10 分鐘
+};
+
+// 判斷「目標階段完成」的條件
+function isTargetReached(phase) {
+  if (STOP_AT === 'NIGHT_RESULT') return phase === 'DAY_DISCUSSION' || phase === 'DAY_VOTING' || phase === 'DAY_RESULT' || phase === 'GAME_OVER';
+  if (STOP_AT === 'DAY_RESULT') return phase === 'DAY_RESULT' || phase === 'GAME_OVER';
+  if (STOP_AT === 'GAME_OVER') return phase === 'GAME_OVER';
+  return false;
+}
+
+// 目前所在大階段（決定用哪個 timeout）
+function currentMajorPhase(phase) {
+  if (phase === 'NIGHT') return 'NIGHT';
+  return 'DAY'; // DAY_DISCUSSION / DAY_VOTING / DAY_RESULT 都算 day
+}
 
 // 15 個 AI 人格（characterId → 中文名；與 character/<id>/agents.md 的中文名一致）
 const CHARACTERS = [
@@ -20,7 +58,6 @@ const CHARACTERS = [
   ['shinichi', '真一'], ['shota', '翔太'], ['tatuya', '太助'], ['yuko', '裕子'], ['yuma', '優馬'],
 ];
 
-const SAFETY_TIMEOUT_MS = 15 * 60 * 1000; // 安全 timeout：逾時記錄「未收斂」並照常出報告
 const POLL_INTERVAL_MS = 500;
 
 // --- 1) 組 15 個 AiPlayerDef ---
@@ -28,7 +65,7 @@ const defs = CHARACTERS.map(([characterId, nickname], i) => ({ clientId: `ai-${i
 
 // --- 2) AI 控制器 + 遊戲引擎（engine callback 接進 AI 控制器） ---
 const ai = new AiController(defs, { messageCap: 100 });
-const events = []; // 所有 S→C 訊息（報告用：WOLF_SPEECH_SELECTED / WOLF_READY / WOLF_MESSAGE ...）
+const events = []; // 所有 S→C 訊息（報告用）
 
 const game = new GameEngine('STAGE2', defs.map((d) => ({ clientId: d.clientId, nickname: d.nickname })), {
   sendTo: (cid, m) => ai.handlePrivate(cid, m),
@@ -43,32 +80,53 @@ ai.setGame(game);
 
 // --- 3) 開始遊戲 ---
 game.start();
-console.log('[stage2] 遊戲已開始，等待完整一天（night→day discussion→voting→result）...');
+console.log(`[stage2] 遊戲已開始，目標：--stop-at ${STOP_AT}`);
 
-// --- 4) 觀察：輪詢直到 DAY_RESULT / GAME_OVER / timeout ---
-const deadline = Date.now() + SAFETY_TIMEOUT_MS;
+// --- 4) 觀察：分階段 timeout 輪詢 ---
 let converged = false;
 let aborted = false;
-while (Date.now() < deadline) {
+let phaseTimeout = TIMEOUTS.NIGHT;
+let phaseStarted = Date.now();
+let lastMajorPhase = 'NIGHT';
+
+while (true) {
   const s = game.getNightState();
-  if (s.phase === 'DAY_RESULT' || s.phase === 'GAME_OVER') {
+  const major = currentMajorPhase(s.phase);
+
+  // 階段切換 → 重置該階段的 timeout
+  if (major !== lastMajorPhase) {
+    lastMajorPhase = major;
+    phaseStarted = Date.now();
+    phaseTimeout = TIMEOUTS[major] ?? TIMEOUTS.DAY;
+    console.log(`[stage2] 進入 ${s.phase}（timeout ${phaseTimeout / 1000}s）`);
+  }
+
+  // 目標達成
+  if (isTargetReached(s.phase)) {
     converged = true;
     break;
   }
+  // 狼會議 abort
   if (s.wolfMeetingAborted) {
     aborted = true;
     break;
   }
+  // 當前階段 timeout
+  if (Date.now() - phaseStarted > phaseTimeout) {
+    console.error(`[stage2] ⚠️ ${s.phase} 階段超時（${phaseTimeout / 1000}s）`);
+    break;
+  }
+
   await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
 }
 // 給引擎一點時間把剩餘 broadcast 送完
 await new Promise((r) => setTimeout(r, 3000));
 
 // --- 5) 報告 ---
-const report = buildReport(game, ai, events, defs, converged, aborted);
-const outPath = process.env.REPORT || 'ai-trace-stage2-output.md';
-writeFileSync(outPath, report, 'utf-8');
-console.log(`[stage2] ${converged ? '完整一天完成' : aborted ? '未收斂（100 則白板上限）' : '未收斂（timeout）'}；報告已寫入 ${outPath}`);
+const report = buildReport(game, ai, events, defs, converged, aborted, STOP_AT);
+writeFileSync(REPORT_PATH, report, 'utf-8');
+const status = converged ? `${STOP_AT} 達成` : aborted ? '未收斂（100 則白板上限）' : '未收斂（階段 timeout）';
+console.log(`[stage2] ${status}；報告已寫入 ${REPORT_PATH}`);
 
 // --- 6) 結束 ---
 ai.destroy();
@@ -275,17 +333,19 @@ function splitSection(events, players) {
   return L;
 }
 
-function buildReport(game, ai, events, defs, converged, aborted) {
+function buildReport(game, ai, events, defs, converged, aborted, stopAt) {
   const players = game.getPlayers();
   const state = game.getNightState();
   const log = ai.getLog();
   const defByClient = new Map(defs.map((d) => [d.clientId, d]));
   const wolves = players.filter((p) => p.role === 'werewolf');
   const L = [];
-  L.push('# Stage 2 外部測試報告：15 人全 AI 局第一夜狼會議（連續對話制）');
+  L.push(`# Stage 2 外部測試報告：15 人全 AI 局（--stop-at ${stopAt}）`);
   L.push('');
   L.push(`- 產生時間：${new Date().toISOString()}`);
-  L.push(`- 收斂結果：${converged ? '收斂' : aborted ? '未收斂（100 則白板上限）' : '未收斂（安全 timeout）'}`);
+  L.push(`- 目標階段：${stopAt}`);
+  L.push(`- 結果：${converged ? '✅ 達成' : aborted ? '❌ 未收斂（100 則白板上限）' : '❌ 未收斂（階段 timeout）'}`);
+  L.push(`- 最終 phase：${state.phase}`);
   L.push(`- 狼會議 engine round：${state.wolfMeetingRound}（平票才 +1）`);
   L.push(`- 白板訊息總數：${state.wolfMessageCount}`);
   L.push(`- 最終刀人目標：${state.wolfTargetId ? `${nicknameOf(players, state.wolfTargetId)}（${state.wolfTargetId}）` : '（無）'}`);
