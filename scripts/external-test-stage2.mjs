@@ -85,7 +85,7 @@ const game = new GameEngine('STAGE2', defs.map((d) => ({ clientId: d.clientId, n
     ai.handleBroadcast(m, targets);
     events.push({ ts: Date.now(), type: m.type, ...m });
     // 實時寫入討論 log（DAY_MESSAGE / WOLF_MESSAGE / DAY_READY_STATUS）
-    if (m.type === 'DAY_MESSAGE' || m.type === 'WOLF_MESSAGE' || m.type === 'DAY_READY_STATUS') {
+    if (m.type === 'MESSAGE' || m.type === 'WOLF_MESSAGE' || m.type === 'DAY_READY_STATUS') {
       const line = m.type === 'DAY_READY_STATUS'
         ? `[READY] ${m.ready.map((r) => r.nickname).join(', ')} (${m.ready.length}/${m.total})`
         : `[${new Date().toISOString().slice(11, 19)}] ${m.from}: ${m.text}`;
