@@ -3,8 +3,8 @@
  *
  * 簡化 phase 狀態機：phase timer + 直接 state mutation（不用 event queue，見規格 §12.10）。
  *
- * 流程：ROLE_REVEAL(10s) → NIGHT(不限時，依序解鎖) → NIGHT_RESULT(10s) → DAY_DISCUSSION(120s)
- *       → DAY_VOTING(60s) → DAY_RESULT(10s) →（勝利判定）→ 下一夜... → GAME_OVER
+ * 流程：ROLE_REVEAL(10s) → NIGHT(不限時，依序解鎖) → NIGHT_RESULT(10s) → DAY_DISCUSSION(不限時，toggle)
+ *       → DAY_VOTING(不限時，等全員投票) → DAY_RESULT(10s) →（勝利判定）→ 下一夜... → GAME_OVER
  *
  * 規則（規格 §12）：
  * - NIGHT 依序解鎖：GUARD（Day2 起）→ MASON（雙共有者 toggle ON）→ WOLF（狼會議）→ SEER
@@ -469,8 +469,7 @@ export class GameEngine {
                 this.state.votes = [];
                 // 清除昨日票死記錄：霊能者只在黎明得知「昨日」的票死者
                 this.state.lastVoteDeathClientId = null;
-                this.startCountdown(60);
-                this.schedule(() => this.resolveVotes(), 60_000);
+                // 不限時：等待所有存活玩家皆已投票（handleVote 內檢查全員完成 → resolveVotes）
                 break;
             case 'DAY_RESULT':
                 this.schedule(() => {
