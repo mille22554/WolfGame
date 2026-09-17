@@ -43,15 +43,15 @@ ai.setGame(game);
 
 // --- 3) 開始遊戲 ---
 game.start();
-console.log('[stage2] 遊戲已開始，等待完整夜流程（mason→wolf→seer→結算）...');
+console.log('[stage2] 遊戲已開始，等待完整一天（night→day discussion→voting→result）...');
 
-// --- 4) 觀察：輪詢 getNightState() 直到 NIGHT_RESULT / 100 則上限 / timeout ---
+// --- 4) 觀察：輪詢直到 DAY_RESULT / GAME_OVER / timeout ---
 const deadline = Date.now() + SAFETY_TIMEOUT_MS;
 let converged = false;
 let aborted = false;
 while (Date.now() < deadline) {
   const s = game.getNightState();
-  if (s.phase === 'NIGHT_RESULT' || s.phase === 'DAY_DISCUSSION' || s.phase === 'GAME_OVER') {
+  if (s.phase === 'DAY_RESULT' || s.phase === 'GAME_OVER') {
     converged = true;
     break;
   }
@@ -62,13 +62,13 @@ while (Date.now() < deadline) {
   await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
 }
 // 給引擎一點時間把剩餘 broadcast 送完
-await new Promise((r) => setTimeout(r, 2000));
+await new Promise((r) => setTimeout(r, 3000));
 
 // --- 5) 報告 ---
 const report = buildReport(game, ai, events, defs, converged, aborted);
 const outPath = process.env.REPORT || 'ai-trace-stage2-output.md';
 writeFileSync(outPath, report, 'utf-8');
-console.log(`[stage2] ${converged ? '狼會議收斂' : aborted ? '未收斂（100 則白板上限）' : '未收斂（timeout）'}；報告已寫入 ${outPath}`);
+console.log(`[stage2] ${converged ? '完整一天完成' : aborted ? '未收斂（100 則白板上限）' : '未收斂（timeout）'}；報告已寫入 ${outPath}`);
 
 // --- 6) 結束 ---
 ai.destroy();
@@ -377,6 +377,18 @@ function buildReport(game, ai, events, defs, converged, aborted) {
     else if (e.type === 'MASON_SPEECH_SELECTED') L.push(`- [${fmtTs(e.ts)}] MASON_SPEECH_SELECTED round=${e.round} from=${e.from} text=「${e.text}」`);
     else if (e.type === 'WOLF_MESSAGE' || e.type === 'MASON_MESSAGE' || e.type === 'WOLF_READY' || e.type === 'MASON_READY' || e.type === 'WOLF_VOTE_SPLIT') {
       L.push(`- [${fmtTs(e.ts)}] ${e.type} ${JSON.stringify(e)}`);
+    }
+    else if (e.type === 'MESSAGE') {
+      L.push(`- [${fmtTs(e.ts)}] MESSAGE ${e.from}：「${e.text}」`);
+    }
+    else if (e.type === 'DAY_READY_STATUS') {
+      L.push(`- [${fmtTs(e.ts)}] DAY_READY_STATUS ready=[${e.ready.map((r) => r.nickname).join(', ')}] total=${e.total}`);
+    }
+    else if (e.type === 'VOTE_RESULT') {
+      L.push(`- [${fmtTs(e.ts)}] VOTE_RESULT votes=${JSON.stringify(e.votes)} eliminated=${e.eliminatedClientId ?? 'null'} tie=${e.tie}`);
+    }
+    else if (e.type === 'PLAYER_ELIMINATED') {
+      L.push(`- [${fmtTs(e.ts)}] PLAYER_ELIMINATED ${e.nickname}（${e.cause}）`);
     }
   }
   L.push('');
