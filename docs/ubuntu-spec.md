@@ -590,7 +590,7 @@ AI 狼依 §12.3 的 loop 驅動（非 SpeechScheduler 管線，是持續對話�
 
 | 檔案 | 說明 |
 |---|---|
-| `src/lobby-server/llm.ts` | LLM client：`chat(messages, { timeout, maxTokens })` → `fetch(localhost:9090/v1/chat/completions)`（Bearer auth）；回傳 `string \| null` |
+| `src/lobby-server/llm.ts` | LLM client：`chat(messages, { timeout })` → `fetch(localhost:9090/v1/chat/completions)`（Bearer auth）；回傳 `string \| null` |
 | `src/lobby-server/ai-player.ts` | AI 玩家邏輯：`generateSpeech()`、`generateVote()`、`generateNightAction()` → 組裝 prompt → 呼叫 llm → parse JSON → 回傳行動 |
 
 ### 13.8 GameEngine 整合點
@@ -611,7 +611,6 @@ AI 狼依 §12.3 的 loop 驅動（非 SpeechScheduler 管線，是持續對話�
 | `SGLANG_API_KEY` | —（部署時注入） | Bearer token |
 | `LLM_MODEL` | `qwen3.8-27b` | model name（`--served-model-name`） |
 | `LLM_TIMEOUT_MS` | `60000` | 單次 LLM 呼叫 timeout |
-| `LLM_MAX_TOKENS` | `200` | 單次回應 max tokens |
 | `AI_ENABLED` | `true` | 設 `false` 可停用 AI 補位（純真人模式） |
 
 ### 13.10 systemd 部署

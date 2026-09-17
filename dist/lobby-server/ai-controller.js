@@ -15,7 +15,7 @@
  */
 import { Role } from '../types.js';
 import { chat } from './llm.js';
-import { loadCharacterProfile, parseJsonResponse, buildJudgePrompt, } from './ai-player.js';
+import { loadCharacterProfile, parseJsonResponse, } from './ai-player.js';
 const MAX_LLM_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
 /** 共有者會議安全上限：白板累計 N 則 MASON_MESSAGE 未收斂 → 停止討論（強制 toggle ON 避免夜間卡死） */
@@ -278,8 +278,7 @@ export class AiController {
             }
             // ④ 收斂判斷：全狼 ready 且沒人想再講（allReady 但仍有新草稿 → 不 break，繼續 loop 處理；安全網）
             const allReady = wolves.every((w) => this.isWolfReady(w.clientId));
-            const noNewDrafts = newDrafts.length === 0;
-            if (allReady && noNewDrafts)
+            if (allReady && newDrafts.length === 0)
                 break; // 收斂：全狼 stance=投XXX 且沒人想再講
             if (newDrafts.length > 0) {
                 drafts = newDrafts; // 下一輪 judge 從新草稿中選
@@ -312,12 +311,27 @@ export class AiController {
         }));
         return results.filter((r) => r !== null);
     }
+    /** 組裝 judge 盲評 prompt：system「你是裁判，全盲評分」；user 列出所有 speech（不標作者），要求 JSON 回 {"scores":[...],"best":index} */
+    buildJudgePrompts(speeches) {
+        const numbered = speeches.map((s, i) => `[${i + 1}]: ${s}`).join('\n');
+        const user = [
+            `以下是 ${speeches.length} 篇發言（不標明作者）：`,
+            numbered,
+            `請給每篇打分（1-10 分），並選出最佳的一篇。`,
+            `回覆 JSON：{"scores": [n, n, ...], "best": index}`,
+            `（index 從 0 開始）`,
+        ].join('\n');
+        return [
+            { role: 'system', content: '你是裁判，全盲評分。' },
+            { role: 'user', content: user },
+        ];
+    }
     /** Judge 盲評（LLM）：給所有 speech 打分（1-10），回最高分的 index；LLM 失敗 → 隨機 fallback（不阻塞）。
      *  LLM 呼叫本身由 llmWithRetry 記錄 log。 */
     async judgeScoreIndex(speeches, round) {
         if (speeches.length <= 1)
             return 0;
-        const prompts = buildJudgePrompt(speeches);
+        const prompts = this.buildJudgePrompts(speeches);
         const result = await this.llmWithRetry('', 'JUDGE', round, prompts, (p) => Array.isArray(p.scores) && p.scores.length === speeches.length ? 'ok' : null);
         if (result.value !== null && result.parsed) {
             const scores = result.parsed.scores.map((s) => (typeof s === 'number' && Number.isFinite(s) ? s : 0));
@@ -546,11 +560,9 @@ export class AiController {
             if (!selected)
                 break;
             this.game.sendDayMessage(selected.player.clientId, selected.speech);
-            // 發言者已發言 → 確保 ready（同狼會議：未 ON 才 toggle；發言者被選中時必為 OFF，不會誤撤）
-            if (!this.dayReadyMap.get(selected.player.clientId)) {
-                this.dayReadyMap.set(selected.player.clientId, true);
-                this.game.handleToggleVoteReady(selected.player.clientId);
-            }
+            // 發言者已發言 → toggle ready（無條件；dayReadyMap 同步：ON→true、OFF→false）
+            this.dayReadyMap.set(selected.player.clientId, !this.dayReadyMap.get(selected.player.clientId));
+            this.game.handleToggleVoteReady(selected.player.clientId);
             // ③ 除發言者外所有 AI 讀白板 → 各自回應
             const newDrafts = [];
             for (const p of aiPlayers) {
@@ -563,11 +575,9 @@ export class AiController {
                     continue;
                 const resp = await this.dayRespond(p, entry, selected.speech);
                 if (resp.type === 'ready') {
-                    // 「講完了，準備投票」→ 確保 ON（同狼會議 vote；已 ON 不再 toggle，避免已 ready 者被翻成 OFF 而擺盪）
-                    if (!this.dayReadyMap.get(p.clientId)) {
-                        this.dayReadyMap.set(p.clientId, true);
-                        this.game.handleToggleVoteReady(p.clientId);
-                    }
+                    // 「講完了，準備投票」→ toggle ready（無條件；dayReadyMap 同步：ON→true、OFF→false）
+                    this.dayReadyMap.set(p.clientId, !this.dayReadyMap.get(p.clientId));
+                    this.game.handleToggleVoteReady(p.clientId);
                 }
                 else if (resp.type === 'speak') {
                     newDrafts.push({ player: p, speech: resp.speech, stance: resp.stance });

@@ -10,7 +10,7 @@
 
 - **前置**：`npm run build`（harness 跑的是 `dist/lobby-server/`，不是 src/）；SGLang 推理服務運行中（systemd `sglang-server.service`，規格 §13.10）
 - **模型**：Qwen3.8-27B-AWQ（INT4）＋ DSpark 推測解碼；`http://127.0.0.1:9090`（OpenAI-compatible `POST /v1/chat/completions`，Bearer 認證）
-- **環境變數**：`SGLANG_API_KEY`（必填，部署時注入）、`LLM_MODEL`（預設 `qwen3.8-27b`）、`SGLANG_HOST`／`SGLANG_PORT`（預設 127.0.0.1:9090）、`LLM_TIMEOUT_MS`（60000）、`LLM_MAX_TOKENS`（200）、`AI_ENABLED`（預設 true）
+- **環境變數**：`SGLANG_API_KEY`（必填，部署時注入）、`LLM_MODEL`（預設 `qwen3.8-27b`）、`SGLANG_HOST`／`SGLANG_PORT`（預設 127.0.0.1:9090）、`LLM_TIMEOUT_MS`（60000）、`AI_ENABLED`（預設 true）
 - **併發**：SGLang `--max-running-requests 2` 與 PRE_SPEECH 每批 2 個吻合，不需排隊
 - **harness 位置**：`scripts/external-test-stage<N>.mjs`
 - **報告**：markdown，路徑由 env `REPORT` 指定（預設寫入系統暫存）
