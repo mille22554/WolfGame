@@ -6,7 +6,7 @@
     {
       "id": 1,
       "name": "GM",
-      "role": "madman",
+      "role": "seer",
       "team": "village",
       "controlledBy": "ai",
       "personality": "ryoko",
@@ -18,7 +18,7 @@
     {
       "id": 2,
       "name": "P2",
-      "role": "seer",
+      "role": "villager",
       "team": "village",
       "controlledBy": "ai",
       "personality": "misaki",
@@ -42,8 +42,8 @@
     {
       "id": 4,
       "name": "P4",
-      "role": "guard",
-      "team": "village",
+      "role": "werewolf",
+      "team": "werewolf",
       "controlledBy": "ai",
       "personality": "yuko",
       "alive": true,
@@ -54,8 +54,8 @@
     {
       "id": 5,
       "name": "P5",
-      "role": "werewolf",
-      "team": "werewolf",
+      "role": "madman",
+      "team": "village",
       "controlledBy": "ai",
       "personality": "kenta",
       "alive": true,
@@ -66,7 +66,7 @@
     {
       "id": 6,
       "name": "P6",
-      "role": "villager",
+      "role": "guard",
       "team": "village",
       "controlledBy": "ai",
       "personality": "koharu",
@@ -91,12 +91,12 @@
   "pendingGate": {
     "kind": "night",
     "required": [
-      2,
-      5
+      1,
+      4
     ],
     "done": [],
     "timeoutMs": 90000,
-    "deadline": 1789527261784
+    "deadline": 1789611961470
   },
   "expectedPlayerCount": 6,
   "nightActions": [],

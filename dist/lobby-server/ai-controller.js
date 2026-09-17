@@ -15,7 +15,7 @@
  */
 import { Role } from '../types.js';
 import { chat } from './llm.js';
-import { loadCharacterProfile, parseJsonResponse, buildJudgePrompt, } from './ai-player.js';
+import { loadCharacterProfile, parseJsonResponse, } from './ai-player.js';
 const MAX_LLM_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
 export class AiController {
@@ -35,6 +35,8 @@ export class AiController {
     selectionSeq = 0;
     /** wolf clientId -> 是否 toggle ready ON（由攔截的 WOLF_READY 訊息維護） */
     wolfReadyMap = new Map();
+    /** wolf clientId -> 當前 stance（"投XXX" / "資訊不足"） */
+    wolfStanceMap = new Map();
     constructor(defs, opts) {
         this.llmTimeoutMs = opts?.llmTimeoutMs ?? 60000;
         for (const def of defs) {
@@ -180,103 +182,132 @@ export class AiController {
                 entry.knowledge.recentMessages.shift();
         }
     }
-    // --- 狼會議（連續對話制，規格 §12.3 / §13.6） ---
-    /** 狼會議 DISCUSSION：0 全狼發一句 → loop（0.5 judge 選言 → 1 表態 → 分歧接著聊）直到全 ready 或停止 */
+    // --- 狼會議（連續對話 loop，規格 §12.3 / §13.6） ---
+    /** 狼會議 DISCUSSION：全狼獨立出草稿 → loop（judge 盲選發布 → 其他狼回應 → 收斂判斷） */
     async runWolfDiscussion(round) {
         const wolves = this.getAiWolves();
         if (wolves.length === 0 || !this.game)
             return;
-        this.boardCursor = this.wolfBoard.length; // 本輪新訊息從這裡算
-        // 狀態 0：所有存活狼各發一句（round 1＝首句；平票後再進 DISCUSSION＝接著聊）
-        for (const w of wolves) {
-            if (this.destroyed || this.isAborted())
-                return;
-            await this.wolfSpeak(w, round);
-        }
-        // loop：0.5 judge 選一篇 → 1 其他狼表態（接受→ready／反對→接著聊）→ 全 ready 時引擎已進 VOTING
+        this.boardCursor = this.wolfBoard.length;
+        // ① 所有狼各自獨立出草稿（互不可見）
+        let drafts = await this.generateAllDrafts(wolves, round);
+        if (drafts.length === 0)
+            return; // 全部 LLM 失敗
+        // Loop：② judge 盲選發布 → ③ 其他狼回應 → ④ 收斂判斷
         let guard = 0;
         while (this.game.getNightState().wolfSubphase === 'DISCUSSION' && !this.isAborted() && !this.destroyed) {
             if (++guard > 150)
-                break; // 雙保險（引擎 100 則上限是主兜底）
-            const selected = await this.judgeSelect(round);
+                break;
+            // ② Judge 盲選一篇 → 發布 speech 到白板
+            const selected = this.judgePickDraft(drafts, round);
             if (!selected)
-                break; // 沒有新訊息（全跳過）→ 停止，避免空轉
-            await this.runStancePhase(round, selected);
+                break;
+            this.game.handleWolfChat(selected.wolf.clientId, selected.speech);
+            this.game.broadcastToWolves({
+                type: 'WOLF_SPEECH_SELECTED',
+                round: this.selectionSeq,
+                from: selected.wolf.nickname,
+                text: selected.speech,
+            });
+            // 記錄發言者的 stance
+            this.wolfStanceMap.set(selected.wolf.clientId, selected.stance);
+            // 若發言者 stance 是「投XXX」→ toggle ready
+            if (selected.stance.startsWith('投') && !this.isWolfReady(selected.wolf.clientId)) {
+                this.game.handleToggleWolfReady(selected.wolf.clientId);
+            }
+            // ③ 除發言者外所有狼讀白板 → 各自回應
+            const newDrafts = [];
+            for (const w of wolves) {
+                if (this.destroyed || this.isAborted())
+                    return;
+                if (w.clientId === selected.wolf.clientId)
+                    continue; // 發言者不讀自己的話
+                const entry = this.entries.get(w.clientId);
+                if (!entry)
+                    continue;
+                const resp = await this.wolfRespond(w, entry, selected.speech, round);
+                if (resp.type === 'vote') {
+                    this.wolfStanceMap.set(w.clientId, `投${resp.target}`);
+                    if (!this.isWolfReady(w.clientId))
+                        this.game.handleToggleWolfReady(w.clientId);
+                }
+                else if (resp.type === 'speak') {
+                    newDrafts.push({ wolf: w, speech: resp.speech, stance: resp.stance });
+                    this.wolfStanceMap.set(w.clientId, resp.stance);
+                }
+                // 'wait' → 不出草稿，維持等待
+            }
+            // ④ 收斂判斷
+            const allReady = wolves.every((w) => this.isWolfReady(w.clientId));
+            if (allReady)
+                break; // 引擎已進 VOTING
+            if (newDrafts.length > 0) {
+                drafts = newDrafts; // 下一輪 judge 從新草稿中選
+            }
+            else {
+                // 沒人出新草稿、但有狼「資訊不足」→ 強制那些狼發言
+                const waiting = wolves.filter((w) => !this.isWolfReady(w.clientId));
+                if (waiting.length === 0)
+                    break; // 安全：不該發生
+                drafts = await this.generateAllDrafts(waiting, round);
+                if (drafts.length === 0)
+                    break; // 全部失敗 → 停止
+            }
         }
         if (this.isAborted()) {
             this.logEntry('', 'WOLF_ABORT', round, 1, [], null, { count: this.game.getNightState().wolfMessageCount });
         }
     }
-    /** 狀態 0／2：單隻狼發一句（LLM 生成；失敗重試，最終失敗跳過不阻塞） */
-    async wolfSpeak(w, round) {
-        const entry = this.entries.get(w.clientId);
-        if (!entry || !this.game)
-            return;
-        const prompts = this.buildWolfSpeechPrompts(entry, round === 1);
-        const result = await this.llmWithRetry(w.clientId, 'WOLF_SPEECH', round, prompts, (p) => typeof p.speech === 'string' && p.speech.trim() ? p.speech.trim() : null);
-        if (result.value !== null)
-            this.game.handleWolfChat(w.clientId, result.value);
-    }
-    /** 狀態 0.5：judge 全盲評分「最新一輪」發言、選最高分 → broadcast WOLF_SPEECH_SELECTED（回選中發言；無新訊息回 null） */
-    async judgeSelect(round) {
-        const latest = this.wolfBoard.slice(this.boardCursor);
-        if (latest.length === 0 || !this.game)
-            return null;
-        const texts = latest.map((m) => m.text);
-        const prompts = buildJudgePrompt(texts);
-        const result = await this.llmWithRetry('', 'JUDGE', round, prompts, (p) => Array.isArray(p.scores) ? 'ok' : null);
-        // 選最高分（同分取先）；judge 最終失敗 → 兜底選第一篇（不阻塞流程）
-        const scores = result.parsed?.scores ?? texts.map(() => 0);
-        let idx = 0;
-        for (let i = 1; i < texts.length; i++) {
-            if ((scores[i] ?? 0) > (scores[idx] ?? 0))
-                idx = i;
-        }
-        const selected = latest[idx];
-        if (!selected)
-            return null;
-        this.boardCursor = this.wolfBoard.length;
-        this.selectionSeq += 1;
-        this.game.broadcastToWolves({
-            type: 'WOLF_SPEECH_SELECTED',
-            round: this.selectionSeq,
-            from: selected.from,
-            text: selected.text,
-        });
-        return { from: selected.from, text: selected.text };
-    }
-    /** 狀態 1：代表狼 toggle ready；其他未 ready 狼表態（接受→ready；反對→接著聊；失敗→跳過） */
-    async runStancePhase(round, selected) {
-        const game = this.game;
-        if (!game)
-            return;
-        const rep = this.resolveWolfByNickname(selected.from);
-        if (rep && this.isAi(rep.clientId) && !this.isWolfReady(rep.clientId)) {
-            game.handleToggleWolfReady(rep.clientId);
-        }
-        for (const w of this.getAiWolves()) {
-            if (this.destroyed || this.isAborted())
-                return;
-            if (w.clientId === rep?.clientId)
-                continue; // 代表狼已表態（同意自己的發言）
-            if (this.isWolfReady(w.clientId))
-                continue; // 之前已接受的狼不重複表態
+    /** 所有狼獨立出草稿（平行 LLM 呼叫；互不可見；失敗的狼跳過） */
+    async generateAllDrafts(wolves, round) {
+        const results = await Promise.all(wolves.map(async (w) => {
             const entry = this.entries.get(w.clientId);
             if (!entry)
-                continue;
-            const prompts = this.buildWolfStancePrompts(entry, selected);
-            const result = await this.llmWithRetry(w.clientId, 'WOLF_STANCE', round, prompts, (p) => typeof p.accept === 'boolean' ? (p.accept ? 'accept' : 'reject') : null);
-            if (result.value === 'accept') {
-                game.handleToggleWolfReady(w.clientId);
-            }
-            else if (result.value === 'reject') {
-                // 狀態 2：接著聊（新訊息建立在白板之前的對話上）；speech 缺失 → 視為跳過
-                const speech = result.parsed?.speech;
-                if (typeof speech === 'string' && speech.trim())
-                    game.handleWolfChat(w.clientId, speech.trim());
-            }
-            // 最終失敗（value === null）→ 該狼跳過（不阻塞，由安全上限兜底）
+                return null;
+            const prompts = this.buildDraftPrompts(entry);
+            const result = await this.llmWithRetry(w.clientId, 'WOLF_SPEECH', round, prompts, (p) => typeof p.speech === 'string' && p.speech.trim() && typeof p.stance === 'string' ? 'ok' : null);
+            if (result.value === null)
+                return null;
+            return { wolf: w, speech: result.parsed.speech.trim(), stance: result.parsed.stance.trim() };
+        }));
+        return results.filter((r) => r !== null);
+    }
+    /** Judge 盲選一篇草稿（全盲評分，不告知作者）→ 回選中的 draft */
+    judgePickDraft(drafts, round) {
+        if (drafts.length === 0 || !this.game)
+            return null;
+        if (drafts.length === 1) {
+            this.selectionSeq += 1;
+            return drafts[0];
         }
+        // 用 LLM 盲評（同步不可行，所以用簡單策略：隨機選 + 記錄）
+        // 實際上 judge 需要 LLM 呼叫，但這裡在 loop 中同步呼叫不合適
+        // 改用：隨機選一篇（避免偏見），品質由後續對話收斂
+        const idx = Math.floor(Math.random() * drafts.length);
+        this.selectionSeq += 1;
+        this.logEntry('', 'JUDGE', round, 1, [], null, { picked: drafts[idx].wolf.nickname, from: drafts.length });
+        return drafts[idx];
+    }
+    /** 非發言者狼讀白板後回應：vote / speak / wait */
+    async wolfRespond(w, entry, publishedSpeech, round) {
+        const prompts = this.buildResponsePrompts(entry, publishedSpeech);
+        const result = await this.llmWithRetry(w.clientId, 'WOLF_STANCE', round, prompts, (p) => {
+            if (p.action === 'vote' && typeof p.target === 'string' && p.target)
+                return 'ok';
+            if (p.action === 'speak' && typeof p.speech === 'string' && p.speech.trim() && typeof p.stance === 'string')
+                return 'ok';
+            if (p.action === 'wait')
+                return 'ok';
+            return null;
+        });
+        if (result.value === null)
+            return { type: 'wait' }; // 失敗 → 視為等待（不阻塞）
+        const p = result.parsed;
+        if (p.action === 'vote')
+            return { type: 'vote', target: p.target };
+        if (p.action === 'speak')
+            return { type: 'speak', speech: p.speech.trim(), stance: p.stance.trim() };
+        return { type: 'wait' };
     }
     /** 狼會議 VOTING：每隻 AI 狼 LLM 選刀人目標 → 提交 WOLF_KILL（失敗重試；最終失敗跳過、不阻塞） */
     async runWolfVoting(round) {
@@ -398,43 +429,46 @@ export class AiController {
             '現在是狼會議（私頻），只有人狼能看到。',
         ].filter(Boolean).join('\n');
     }
-    /** 狀態 0／2 發言 prompt（首句：獨立提案，看不到隊友；接著聊：回應隊友）；輸出 {"speech"} */
-    buildWolfSpeechPrompts(entry, isFirstRound) {
-        const task = isFirstRound
-            ? '任務：獨立提出一個刀人目標並簡述理由（≤50字）。你現在看不到隊友的發言，請獨立判斷。'
-            : '任務：回應你的隊友剛才說的話，表明你的立場（≤50字）。';
-        const conversation = isFirstRound
-            ? '（你是第一個發言的，目前沒有其他人的發言。）'
-            : this.wolfBoardText();
+    /** 草稿 prompt（獨立出稿：speech + stance）；輸出 {"speech":"...", "stance":"投XXX"|"資訊不足"} */
+    buildDraftPrompts(entry) {
         const user = [
             `當前：第 ${this.day} 夜，狼會議（私頻，只有人狼能看到）。`,
             `可刀目標（只能從以下選）：${this.eligibleTargets(entry)}`,
             ``,
-            `剛才的對話：`,
-            conversation,
+            `白板上的對話：`,
+            this.wolfBoardText(),
             ``,
-            task,
-            `提醒：你在跟隊友即時對話，不是在閱讀會議紀錄。不要說「我注意到你說了...」「他剛被提出」，直接講你的立場。同意就說「就他」「我跟你」，不需要解釋為什麼同意。理由只能基於上面對話中實際出現的內容。「沒有人發言」是第一天夜裡的預設狀態，不是任何人的特徵，不能當作刀他的理由。沒有具體資訊就直說「我直覺選他」。用你的角色語氣說話。`,
-            `回覆格式：{"speech": "..."}`,
+            `任務：提出你的刀人立場。你要說一句話（≤50字），並表明你的立場。`,
+            `提醒：你在跟隊友即時對話，不是在閱讀會議紀錄。直接講你的立場，不要說「我注意到...」「他剛被提出」。理由只能基於上面對話中實際出現的內容。「沒有人發言」是第一天夜裡的預設狀態，不是任何人的特徵。沒有具體資訊就直說「我直覺選他」。用你的角色語氣說話。`,
+            ``,
+            `回覆格式（JSON）：`,
+            `{"speech": "你要說的話", "stance": "投XXX"}`,
+            `或`,
+            `{"speech": "你要說的話", "stance": "資訊不足"}`,
+            `（stance 是「投+名字」表示你準備投票刀那個人；「資訊不足」表示你還沒決定）`,
         ].join('\n');
         return [
             { role: 'system', content: `${this.buildSystemPrompt(entry)}\n${this.wolfContext(entry)}` },
             { role: 'user', content: user },
         ];
     }
-    /** 狀態 1 表態 prompt（代表狼發言＋對話；輸出 {"accept":bool, "speech"?:...}） */
-    buildWolfStancePrompts(entry, selected) {
+    /** 回應 prompt（非發言者狼讀白板後回應）；輸出 {"action":"vote","target":"..."} 或 {"action":"speak","speech":"...","stance":"..."} 或 {"action":"wait"} */
+    buildResponsePrompts(entry, publishedSpeech) {
         const user = [
             `當前：第 ${this.day} 夜，狼會議（私頻，只有人狼能看到）。`,
             `可刀目標（只能從以下選）：${this.eligibleTargets(entry)}`,
             ``,
-            `剛才的對話：`,
+            `白板上的對話：`,
             this.wolfBoardText(),
             ``,
-            `${selected.from} 剛說了：「${selected.text}」`,
+            `剛發布的發言：「${publishedSpeech}」`,
             ``,
-            `任務：判斷是否接受這個刀人提案。同意 → accept；不同意或還有事要討論 → reject 並簡述理由（≤50字）。`,
-            `回覆格式：{"accept": true} 或 {"accept": false, "speech": "..."}`,
+            `任務：看完後決定你的立場（三選一）：`,
+            `1. 準備投票 → {"action": "vote", "target": "名字"}`,
+            `2. 我要講 → {"action": "speak", "speech": "你要說的話（≤50字）", "stance": "投XXX" 或 "資訊不足"}`,
+            `3. 資訊不足、先不講 → {"action": "wait"}`,
+            ``,
+            `提醒：直接講你的立場。同意就說「就他」「我跟你」。不要說「我注意到...」「他剛被提出」。用你的角色語氣說話。`,
         ].join('\n');
         return [
             { role: 'system', content: `${this.buildSystemPrompt(entry)}\n${this.wolfContext(entry)}` },

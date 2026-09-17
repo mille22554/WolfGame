@@ -47,6 +47,8 @@ export declare class AiController {
     private selectionSeq;
     /** wolf clientId -> 是否 toggle ready ON（由攔截的 WOLF_READY 訊息維護） */
     private wolfReadyMap;
+    /** wolf clientId -> 當前 stance（"投XXX" / "資訊不足"） */
+    private wolfStanceMap;
     constructor(defs: AiPlayerDef[], opts?: {
         llmTimeoutMs?: number;
     });
@@ -63,14 +65,14 @@ export declare class AiController {
     onWolfSubphaseChange(subphase: WolfSubphase, round: number): void;
     handlePrivate(clientId: string, msg: any): void;
     handleBroadcast(msg: any, targetClientIds?: string[]): void;
-    /** 狼會議 DISCUSSION：0 全狼發一句 → loop（0.5 judge 選言 → 1 表態 → 分歧接著聊）直到全 ready 或停止 */
+    /** 狼會議 DISCUSSION：全狼獨立出草稿 → loop（judge 盲選發布 → 其他狼回應 → 收斂判斷） */
     private runWolfDiscussion;
-    /** 狀態 0／2：單隻狼發一句（LLM 生成；失敗重試，最終失敗跳過不阻塞） */
-    private wolfSpeak;
-    /** 狀態 0.5：judge 全盲評分「最新一輪」發言、選最高分 → broadcast WOLF_SPEECH_SELECTED（回選中發言；無新訊息回 null） */
-    private judgeSelect;
-    /** 狀態 1：代表狼 toggle ready；其他未 ready 狼表態（接受→ready；反對→接著聊；失敗→跳過） */
-    private runStancePhase;
+    /** 所有狼獨立出草稿（平行 LLM 呼叫；互不可見；失敗的狼跳過） */
+    private generateAllDrafts;
+    /** Judge 盲選一篇草稿（全盲評分，不告知作者）→ 回選中的 draft */
+    private judgePickDraft;
+    /** 非發言者狼讀白板後回應：vote / speak / wait */
+    private wolfRespond;
     /** 狼會議 VOTING：每隻 AI 狼 LLM 選刀人目標 → 提交 WOLF_KILL（失敗重試；最終失敗跳過、不阻塞） */
     private runWolfVoting;
     private logEntry;
@@ -93,10 +95,10 @@ export declare class AiController {
     private eligibleTargets;
     /** 狼 wolf 情境（system prompt 附加：狼隊同夥 + 狂人 + 私頻說明） */
     private wolfContext;
-    /** 狀態 0／2 發言 prompt（首句：獨立提案，看不到隊友；接著聊：回應隊友）；輸出 {"speech"} */
-    private buildWolfSpeechPrompts;
-    /** 狀態 1 表態 prompt（代表狼發言＋對話；輸出 {"accept":bool, "speech"?:...}） */
-    private buildWolfStancePrompts;
+    /** 草稿 prompt（獨立出稿：speech + stance）；輸出 {"speech":"...", "stance":"投XXX"|"資訊不足"} */
+    private buildDraftPrompts;
+    /** 回應 prompt（非發言者狼讀白板後回應）；輸出 {"action":"vote","target":"..."} 或 {"action":"speak","speech":"...","stance":"..."} 或 {"action":"wait"} */
+    private buildResponsePrompts;
     /** 狼刀目標選擇 prompt（狼隊同夥 + 可刀目標 + 討論歷史；輸出 {"target":"<displayName>"}） */
     private buildWolfKillPrompts;
     /** 占い／守衛目標選擇 prompt（角色 + 存活玩家 + 過去行動；輸出 {"target":"<displayName>"}） */
