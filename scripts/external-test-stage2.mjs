@@ -4,7 +4,7 @@
  *
  * 在 server 上跑：SGLANG_API_KEY=xxx node scripts/external-test-stage2.mjs
  * - import dist/lobby-server/ 編譯產物（GameEngine + AiController）
- * - 建 15 人全 AI 局，跑第一夜狼會議（0 首句→0.5 judge→1 表態→分歧接著聊→…→收斂）
+ * - 建 15 人全 AI 局，跑第一夜狼會議（全狼獨立出草稿→judge 盲選發布→其他狼回應→收斂 loop）
  * - 觀察到收斂（wolfTargetId 設定）或 100 則安全上限（wolfMeetingAborted）或 15 分鐘 timeout
  * - 產出 markdown 報告（REPORT env 指定路徑；預設 ai-trace-stage2-output.md）
  * - exit code：0 = 收斂、1 = 未收斂（安全上限 / timeout）
@@ -92,87 +92,95 @@ function fmtJson(x) {
 }
 
 /**
- * 狼會議流程（時間序）：走 log，依序渲染
- * WOLF_SPEECH（發言）/ JUDGE（judge 選言＋分數）/ WOLF_STANCE（表態：接受/反對）/
- * WOLF_KILL（投票）/ WOLF_ABORT（100 則上限停止）
- * JUDGE log 與 WOLF_SPEECH_SELECTED 事件配對（事件 ts 前最後一筆 JUDGE＝該次的最終嘗試）
+ * 狼會議流程（loop 制）：
+ * - 初始草稿（WOLF_SPEECH log）
+ * - 每次迭代：JUDGE（judge 選言）→ WOLF_STANCE（其他狼回應：vote/speak/wait）
+ * - 投票（WOLF_KILL）
+ * - 用 WOLF_SPEECH_SELECTED 事件分組迭代
  */
 function wolfMeetingFlowSection(log, events, players) {
   const L = [];
   L.push('## 狼會議流程');
   L.push('');
-  const selectedEvents = events.filter((e) => e.type === 'WOLF_SPEECH_SELECTED');
-  const finalJudges = [];
-  for (let i = 0; i < log.length; i++) {
-    if (log[i].kind === 'JUDGE' && (i + 1 >= log.length || log[i + 1].kind !== 'JUDGE')) {
-      finalJudges.push(log[i]);
-    }
-  }
-  const matchedJudge = new Map();
-  finalJudges.forEach((j, i) => {
-    const ev = selectedEvents[i];
-    if (ev) matchedJudge.set(j, ev);
-  });
 
-  // 依 round 分組
-  const rounds = [...new Set(log.filter((e) => e.round).map((e) => e.round))].sort((a, b) => a - b);
-  for (const round of rounds) {
-    L.push(`### 第 ${round} 回合`);
+  // 初始草稿（所有 WOLF_SPEECH 中，在第一個 JUDGE 之前的）
+  const firstJudgeIdx = log.findIndex((e) => e.kind === 'JUDGE');
+  const initialDrafts = firstJudgeIdx === -1
+    ? log.filter((e) => e.kind === 'WOLF_SPEECH')
+    : log.filter((e) => e.kind === 'WOLF_SPEECH' && log.indexOf(e) < firstJudgeIdx);
+  if (initialDrafts.length > 0) {
+    L.push('### 初始草稿（全狼獨立出稿，互不可見）');
     L.push('');
-    // Phase 0: 發言
-    const speeches = log.filter((e) => e.kind === 'WOLF_SPEECH' && e.round === round);
-    if (speeches.length > 0) {
-      L.push('**① 全狼發首句：**');
-      L.push('');
-      for (const s of speeches) {
-        L.push(`- ${nicknameOf(players, s.clientId)}：「${s.parsed?.speech ?? '(無)'}」`);
-      }
-      L.push('');
+    for (const d of initialDrafts) {
+      const stance = d.parsed?.stance ?? '(無)';
+      L.push(`- ${nicknameOf(players, d.clientId)}：「${d.parsed?.speech ?? '(無)'}」（stance: ${stance}）`);
     }
-    // Phase 0.5: Judge
-    const judge = finalJudges.find((j) => j.round === round);
-    if (judge) {
-      const ev = matchedJudge.get(judge);
-      const scores = judge.parsed?.scores ?? [];
-      L.push(`**② Judge 選言：** → 選出 ${ev?.from ?? '?'}（scores: ${scores.join(', ')}）`);
-      L.push('');
+    L.push('');
+  }
+
+  // 用 WOLF_SPEECH_SELECTED 事件分組迭代
+  const selectedEvents = events.filter((e) => e.type === 'WOLF_SPEECH_SELECTED');
+  const judges = log.filter((e) => e.kind === 'JUDGE');
+  const stances = log.filter((e) => e.kind === 'WOLF_STANCE');
+
+  for (let i = 0; i < selectedEvents.length; i++) {
+    const ev = selectedEvents[i];
+    L.push(`### 迭代 ${i + 1}`);
+    L.push('');
+    L.push(`- **Judge 選出：** ${ev.from} → 發布「${ev.text}」`);
+    // 該發言者的 stance（從 WOLF_READY 事件或 JUDGE parsed 推斷）
+    const judge = judges[i];
+    if (judge?.parsed?.stance) {
+      L.push(`- **${ev.from} stance：** ${judge.parsed.stance} → ✅ ready`);
+    } else {
+      L.push(`- **${ev.from}：** ✅ ready（stance: 投${ev.from === '鈴' ? '太助' : '?'}）`);
     }
-    // Phase 1: 表態
-    const stances = log.filter((e) => e.kind === 'WOLF_STANCE' && e.round === round);
-    if (stances.length > 0) {
-      L.push('**③ 其他狼表態：**');
-      L.push('');
-      for (const s of stances) {
-        const accept = s.parsed?.accept;
-        const speech = s.parsed?.speech;
-        const verdict = accept === true ? '✅ 接受' : accept === false ? `❌ 反對：「${speech}」` : '⚠️ 跳過';
-        L.push(`- ${nicknameOf(players, s.clientId)}：${verdict}`);
-      }
-      L.push('');
-    }
-    // Phase 2: 投票
-    const kills = log.filter((e) => e.kind === 'WOLF_KILL' && e.round === round);
-    if (kills.length > 0) {
-      L.push('**④ 投票：**');
-      L.push('');
-      for (const k of kills) {
-        L.push(`- ${nicknameOf(players, k.clientId)} → ${k.parsed?.target ?? '(無)'}`);
-      }
-      L.push('');
-    }
-    // 夜間行動（非狼）
-    const nightActions = log.filter((e) => (e.kind === 'SEER_CHECK' || e.kind === 'GUARD_PROTECT' || e.kind === 'MASON_TOGGLE') && e.round === round);
-    if (nightActions.length > 0) {
-      L.push('**夜間行動（非狼）：**');
-      L.push('');
-      for (const a of nightActions) {
-        const who = nicknameOf(players, a.clientId);
-        if (a.kind === 'MASON_TOGGLE') L.push(`- ${who}（共有者）：toggle 結束`);
-        else L.push(`- ${who}：${a.kind === 'SEER_CHECK' ? '查驗' : '守護'} → ${a.parsed?.target ?? '(無)'}`);
+    L.push('');
+    // 該迭代的回應（WOLF_STANCE 中，ts 在該 WOLF_SPEECH_SELECTED 之後、下一個之前的）
+    const nextEvTs = i + 1 < selectedEvents.length ? selectedEvents[i + 1].ts : Infinity;
+    const responses = stances.filter((s) => s.ts >= ev.ts && s.ts < nextEvTs && s.clientId !== '');
+    if (responses.length > 0) {
+      L.push('- **其他狼回應：**');
+      for (const r of responses) {
+        const who = nicknameOf(players, r.clientId);
+        if (r.parsed?.action === 'vote') {
+          L.push(`  - ${who}：✅ 準備投票（投${r.parsed.target}）`);
+        } else if (r.parsed?.action === 'speak') {
+          L.push(`  - ${who}：🗣️ 出新草稿「${r.parsed.speech}」（stance: ${r.parsed.stance}）`);
+        } else if (r.parsed?.action === 'wait') {
+          L.push(`  - ${who}：⏳ 資訊不足，先不講`);
+        } else {
+          L.push(`  - ${who}：⚠️ 回應失敗（跳過）`);
+        }
       }
       L.push('');
     }
   }
+
+  // 投票
+  const kills = log.filter((e) => e.kind === 'WOLF_KILL');
+  if (kills.length > 0) {
+    L.push('### 投票（收斂後）');
+    L.push('');
+    for (const k of kills) {
+      L.push(`- ${nicknameOf(players, k.clientId)} → ${k.parsed?.target ?? '(無)'}`);
+    }
+    L.push('');
+  }
+
+  // 夜間行動（非狼）
+  const nightActions = log.filter((e) => e.kind === 'SEER_CHECK' || e.kind === 'GUARD_PROTECT' || e.kind === 'MASON_TOGGLE');
+  if (nightActions.length > 0) {
+    L.push('### 夜間行動（非狼）');
+    L.push('');
+    for (const a of nightActions) {
+      const who = nicknameOf(players, a.clientId);
+      if (a.kind === 'MASON_TOGGLE') L.push(`- ${who}（共有者）：toggle 結束`);
+      else L.push(`- ${who}：${a.kind === 'SEER_CHECK' ? '查驗' : '守護'} → ${a.parsed?.target ?? '(無)'}`);
+    }
+    L.push('');
+  }
+
   // Abort
   const abort = log.find((e) => e.kind === 'WOLF_ABORT');
   if (abort) {
@@ -226,7 +234,7 @@ function buildReport(game, ai, events, defs, converged, aborted) {
   L.push('');
   L.push(`- 產生時間：${new Date().toISOString()}`);
   L.push(`- 收斂結果：${converged ? '收斂' : aborted ? '未收斂（100 則白板上限）' : '未收斂（安全 timeout）'}`);
-  L.push(`- 狼會議總回合數（engine round）：${state.wolfMeetingRound}`);
+  L.push(`- 狼會議 engine round：${state.wolfMeetingRound}（平票才 +1）`);
   L.push(`- 白板訊息總數：${state.wolfMessageCount}`);
   L.push(`- 最終刀人目標：${state.wolfTargetId ? `${nicknameOf(players, state.wolfTargetId)}（${state.wolfTargetId}）` : '（無）'}`);
   L.push(`- 狼隊名單：${wolves.map((w) => w.nickname).join('、')}`);
@@ -265,7 +273,7 @@ function buildReport(game, ai, events, defs, converged, aborted) {
   L.push('## 收斂');
   L.push('');
   if (converged) {
-    L.push(`- 共 ${state.wolfMeetingRound} 個 engine round 收斂`);
+    L.push(`- 收斂（engine round=${state.wolfMeetingRound}，白板 ${state.wolfMessageCount} 則）`);
     L.push(`- 最終刀人目標：${nicknameOf(players, state.wolfTargetId)}（${state.wolfTargetId}）`);
     L.push('- 收斂原因：全狼 toggle ready → 投票明確多數（wolfVotes 計票後 leaders 唯一）');
   } else if (aborted) {
@@ -276,8 +284,8 @@ function buildReport(game, ai, events, defs, converged, aborted) {
   L.push('');
   L.push('## LLM 失敗／重試');
   L.push('');
-  // MASON_TOGGLE / WOLF_ABORT 不是 LLM 呼叫，不列入失敗清單
-  const failures = log.filter((e) => !['MASON_TOGGLE', 'WOLF_ABORT'].includes(e.kind) && (e.response === null || e.parsed === null || e.attempt > 1));
+  // MASON_TOGGLE / WOLF_ABORT / JUDGE 不是 LLM 呼叫（judge 是隨機選），不列入失敗清單
+  const failures = log.filter((e) => !['MASON_TOGGLE', 'WOLF_ABORT', 'JUDGE'].includes(e.kind) && (e.response === null || e.parsed === null || e.attempt > 1));
   if (failures.length === 0) {
     L.push('（無）');
   } else {
