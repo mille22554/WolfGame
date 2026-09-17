@@ -93,9 +93,9 @@ export declare class AiController {
     private eligibleTargets;
     /** 狼 wolf 情境（system prompt 附加：狼隊同夥 + 狂人 + 私頻說明） */
     private wolfContext;
-    /** 狀態 0／2 發言 prompt（首句：提刀人目標＋理由；接著聊：建立在白板對話上）；輸出 {"speech"} */
+    /** 狀態 0／2 發言 prompt（首句：提刀人目標＋理由；接著聊：回應隊友）；輸出 {"speech"} */
     private buildWolfSpeechPrompts;
-    /** 狀態 1 表態 prompt（代表狼發言＋白板歷史；輸出 {"accept":bool, "speech"?:...}） */
+    /** 狀態 1 表態 prompt（代表狼發言＋對話；輸出 {"accept":bool, "speech"?:...}） */
     private buildWolfStancePrompts;
     /** 狼刀目標選擇 prompt（狼隊同夥 + 可刀目標 + 討論歷史；輸出 {"target":"<displayName>"}） */
     private buildWolfKillPrompts;

@@ -443,20 +443,20 @@ export class AiController {
     ].filter(Boolean).join('\n');
   }
 
-  /** 狀態 0／2 發言 prompt（首句：提刀人目標＋理由；接著聊：建立在白板對話上）；輸出 {"speech"} */
+  /** 狀態 0／2 發言 prompt（首句：提刀人目標＋理由；接著聊：回應隊友）；輸出 {"speech"} */
   private buildWolfSpeechPrompts(entry: AiEntry, isFirstRound: boolean): ChatMessage[] {
     const task = isFirstRound
       ? '任務：提出一個刀人目標並簡述理由（≤50字）。'
-      : '任務：接著白板討論，表明你現在對刀人目標的立場（≤50字）。可以引用或回應白板上的發言。';
+      : '任務：回應你的隊友剛才說的話，表明你的立場（≤50字）。';
     const user = [
       `當前：第 ${this.day} 夜，狼會議（私頻，只有人狼能看到）。`,
       `可刀目標（只能從以下選）：${this.eligibleTargets(entry)}`,
       ``,
-      `白板歷史：`,
+      `剛才的對話：`,
       this.wolfBoardText(),
       ``,
       task,
-      `提醒：理由只能引用上面「白板歷史」裡實際出現的內容。若是第一次討論，就提出你的初始建議，不要回應不存在的發言。「沒有人發言」是第一天夜裡的預設狀態，不是任何人的特徵，不能當作刀他的理由。沒有具體資訊就直說「我直覺選他」。用你的角色語氣說話。`,
+      `提醒：你在跟隊友即時對話，不是在閱讀會議紀錄。不要說「我注意到你說了...」，直接講你的立場。理由只能基於上面對話中實際出現的內容。「沒有人發言」是第一天夜裡的預設狀態，不是任何人的特徵，不能當作刀他的理由。沒有具體資訊就直說「我直覺選他」。用你的角色語氣說話。`,
       `回覆格式：{"speech": "..."}`,
     ].join('\n');
     return [
@@ -465,18 +465,18 @@ export class AiController {
     ];
   }
 
-  /** 狀態 1 表態 prompt（代表狼發言＋白板歷史；輸出 {"accept":bool, "speech"?:...}） */
+  /** 狀態 1 表態 prompt（代表狼發言＋對話；輸出 {"accept":bool, "speech"?:...}） */
   private buildWolfStancePrompts(entry: AiEntry, selected: { from: string; text: string }): ChatMessage[] {
     const user = [
       `當前：第 ${this.day} 夜，狼會議（私頻，只有人狼能看到）。`,
       `可刀目標（只能從以下選）：${this.eligibleTargets(entry)}`,
       ``,
-      `白板歷史：`,
+      `剛才的對話：`,
       this.wolfBoardText(),
       ``,
-      `代表發言（judge 選出）：${selected.from} 說：「${selected.text}」`,
+      `${selected.from} 剛說了：「${selected.text}」`,
       ``,
-      `任務：判斷是否接受這個刀人提案。資訊夠、同意 → accept；不同意或還有事要討論 → reject 並簡述理由（≤50字）。`,
+      `任務：判斷是否接受這個刀人提案。同意 → accept；不同意或還有事要討論 → reject 並簡述理由（≤50字）。`,
       `回覆格式：{"accept": true} 或 {"accept": false, "speech": "..."}`,
     ].join('\n');
     return [
