@@ -138,8 +138,10 @@ export declare class GameEngine {
     private abortWolfMeeting;
     /** 廣播給所有存活人狼（AI 控制器用：WOLF_SPEECH_SELECTED 等） */
     broadcastToWolves(msg: object): void;
-    /** 共有者私頻（僅雙方可見） */
+    /** 共有者私頻（僅 MASON step 可用、僅雙方可見） */
     handleMasonChat(clientId: string, text: string): void;
+    /** 共有者會議：judge 選言發布（broadcast MASON_MESSAGE ＋ MASON_SPEECH_SELECTED，僅雙共有者可見） */
+    publishMasonSpeech(speakerClientId: string, text: string, round: number): void;
     /** 清除所有 timer（房間回收時呼叫，避免孤兒 timer 讓 process 無法結束） */
     destroy(): void;
     /** 夜間狀態快照（供 harness / AI 控制器觀察狼會議進度） */

@@ -137,6 +137,11 @@ export type ServerToClientMessage = {
     from: string;
     text: string;
 } | {
+    type: 'MASON_SPEECH_SELECTED';
+    round: number;
+    from: string;
+    text: string;
+} | {
     type: 'WOLF_MEETING_ABORTED';
     count: number;
     reason: string;

@@ -53,6 +53,7 @@ export type ServerToClientMessage =
   | { type: 'WOLF_READY'; clientId: string; ready: boolean }
   | { type: 'WOLF_VOTE_SPLIT'; votes: Record<string, number> }
   | { type: 'WOLF_SPEECH_SELECTED'; round: number; from: string; text: string }
+  | { type: 'MASON_SPEECH_SELECTED'; round: number; from: string; text: string }
   | { type: 'WOLF_MEETING_ABORTED'; count: number; reason: string }
   | { type: 'NIGHT_RESULT'; peacefulNight: boolean; deaths: { clientId: string; nickname: string }[] }
   | { type: 'SEER_RESULT'; targetClientId: string; nickname: string; result: 'villager' | 'werewolf' }

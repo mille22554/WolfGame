@@ -35,12 +35,18 @@ interface WolfDraft {
   stance: string; // "投XXX" 或 "資訊不足"
 }
 
+interface MasonDraft {
+  mason: GamePlayer;
+  speech: string;
+  stance: string; // "準備好了" 或 "資訊不足"
+}
+
 export interface AiLogEntry {
   ts: number;
   clientId: string;
   characterId: string;
   role: string;
-  kind: 'WOLF_SPEECH' | 'JUDGE' | 'WOLF_STANCE' | 'WOLF_KILL' | 'SEER_CHECK' | 'GUARD_PROTECT' | 'MASON_TOGGLE' | 'WOLF_ABORT';
+  kind: 'WOLF_SPEECH' | 'JUDGE' | 'WOLF_STANCE' | 'WOLF_KILL' | 'SEER_CHECK' | 'GUARD_PROTECT' | 'MASON_TOGGLE' | 'MASON_SPEECH' | 'MASON_STANCE' | 'WOLF_ABORT';
   round: number;
   /** 第幾次嘗試（重試時 >1） */
   attempt: number;
@@ -67,6 +73,8 @@ interface AiEntry {
 
 const MAX_LLM_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
+/** 共有者會議安全上限：白板累計 N 則 MASON_MESSAGE 未收斂 → 停止討論（強制 toggle ON 避免夜間卡死） */
+const MASON_MESSAGE_CAP = 100;
 
 export class AiController {
   private entries = new Map<string, AiEntry>();
@@ -87,6 +95,14 @@ export class AiController {
   private wolfReadyMap = new Map<string, boolean>();
   /** wolf clientId -> 當前 stance（"投XXX" / "資訊不足"） */
   private wolfStanceMap = new Map<string, string>();
+  /** 共有者白板（本夜全部 MASON_MESSAGE；每夜重置） */
+  private masonBoard: { from: string; text: string }[] = [];
+  /** 共有者 judge 選言序號（MASON_SPEECH_SELECTED.round；本夜遞增） */
+  private masonSelectionSeq: number = 0;
+  /** mason clientId -> 是否 toggle ready ON（由攔截的 MASON_READY 訊息維護） */
+  private masonReadyMap = new Map<string, boolean>();
+  /** mason clientId -> 當前 stance（"準備好了" / "資訊不足"） */
+  private masonStanceMap = new Map<string, string>();
 
   constructor(defs: AiPlayerDef[], opts?: { llmTimeoutMs?: number }) {
     this.llmTimeoutMs = opts?.llmTimeoutMs ?? 60000;
@@ -146,12 +162,8 @@ export class AiController {
   onNightStepActive(step: NightStep, players: GamePlayer[]): void {
     if (this.destroyed || !this.game) return;
     if (step === 'MASON') {
-      // 共有者無需 LLM 決策：直接 toggle ON
-      for (const p of players) {
-        if (!this.isAi(p.clientId)) continue;
-        this.logEntry(p.clientId, 'MASON_TOGGLE', 0, 1, [], null, null);
-        this.game.handleToggleMasonEndTurn(p.clientId);
-      }
+      // 共有者會議（連續對話制）：驅動 AI 討論，收斂後 toggle ON
+      void this.runMasonDiscussion();
     } else if (step === 'SEER') {
       for (const p of players) {
         if (this.isAi(p.clientId)) void this.runTargetAction(p.clientId, 'SEER_CHECK');
@@ -208,6 +220,10 @@ export class AiController {
         this.boardCursor = 0;
         this.selectionSeq = 0;
         this.wolfReadyMap.clear();
+        this.masonBoard = [];
+        this.masonSelectionSeq = 0;
+        this.masonReadyMap.clear();
+        this.masonStanceMap.clear();
       }
       return;
     }
@@ -216,8 +232,15 @@ export class AiController {
       if (typeof m.clientId === 'string') this.wolfReadyMap.set(m.clientId, m.ready === true);
       return;
     }
+    if (m.type === 'MASON_READY') {
+      if (typeof m.clientId === 'string') this.masonReadyMap.set(m.clientId, m.ready === true);
+      return;
+    }
     if (m.type === 'WOLF_MESSAGE') {
       this.wolfBoard.push({ from: String(m.from ?? ''), text: String(m.text ?? '') });
+    }
+    if (m.type === 'MASON_MESSAGE') {
+      this.masonBoard.push({ from: String(m.from ?? ''), text: String(m.text ?? '') });
     }
     if (m.type !== 'WOLF_MESSAGE' && m.type !== 'MASON_MESSAGE') return;
     for (const [clientId, entry] of this.entries) {
@@ -367,6 +390,132 @@ export class AiController {
     }
   }
 
+  // --- 共有者會議（連續對話 loop，與狼會議同構） ---
+
+  /** 共有者會議：雙共有者獨立出草稿 → loop（judge 盲選發布 → 另一人回應 → 收斂判斷） */
+  private async runMasonDiscussion(): Promise<void> {
+    const masons = this.getAiMasons();
+    if (masons.length === 0 || !this.game) return;
+    if (masons.length < 2) {
+      // 存活共有者不足 2 人：無會議，直接 toggle ON
+      for (const m of masons) {
+        this.logEntry(m.clientId, 'MASON_TOGGLE', this.day, 1, [], null, null);
+        this.game.handleToggleMasonEndTurn(m.clientId);
+      }
+      return;
+    }
+
+    // ① 所有共有者各自獨立出草稿（互不可見）
+    let drafts = await this.generateMasonDrafts(masons);
+    if (drafts.length === 0) {
+      // 全部 LLM 失敗：強制 toggle ON，避免夜間卡死
+      for (const m of masons) this.game.handleToggleMasonEndTurn(m.clientId);
+      return;
+    }
+
+    // Loop：② judge 盲選發布 → ③ 另一共有者回應 → ④ 收斂判斷
+    let guard = 0;
+    while (this.game.getNightState().nightStep === 'MASON' && !this.destroyed) {
+      if (++guard > 150) break;
+      if (this.masonBoard.length >= MASON_MESSAGE_CAP) break; // 安全上限：停止討論
+
+      // ② Judge 盲選一篇 → 發布 speech 到白板
+      const selected = this.judgePickMasonDraft(drafts);
+      if (!selected) break;
+      this.game.publishMasonSpeech(selected.mason.clientId, selected.speech, this.masonSelectionSeq);
+      // 記錄發言者的 stance
+      this.masonStanceMap.set(selected.mason.clientId, selected.stance);
+      // 若發言者 stance 是「準備好了」→ toggle ready
+      if (selected.stance === '準備好了' && !this.isMasonReady(selected.mason.clientId)) {
+        this.game.handleToggleMasonEndTurn(selected.mason.clientId);
+      }
+
+      // ③ 除發言者外所有共有者讀白板 → 各自回應
+      const newDrafts: MasonDraft[] = [];
+      for (const m of masons) {
+        if (this.destroyed) return;
+        if (m.clientId === selected.mason.clientId) continue; // 發言者不讀自己的話
+        const entry = this.entries.get(m.clientId);
+        if (!entry) continue;
+        const resp = await this.masonRespond(m, entry, selected.speech);
+        if (resp.type === 'vote') {
+          this.masonStanceMap.set(m.clientId, '準備好了');
+          if (!this.isMasonReady(m.clientId)) this.game.handleToggleMasonEndTurn(m.clientId);
+        } else if (resp.type === 'speak') {
+          newDrafts.push({ mason: m, speech: resp.speech, stance: resp.stance });
+          this.masonStanceMap.set(m.clientId, resp.stance);
+          if (resp.stance !== '準備好了' && this.isMasonReady(m.clientId)) this.game.handleToggleMasonEndTurn(m.clientId); // 撤回 ready
+        }
+        // 'wait' → 不出草稿，維持等待
+      }
+
+      // ④ 收斂判斷：全部共有者 ready（引擎已推進步驟）
+      const allReady = masons.every((m) => this.isMasonReady(m.clientId));
+      if (allReady) break;
+
+      if (newDrafts.length > 0) {
+        drafts = newDrafts; // 下一輪 judge 從新草稿中選
+      } else {
+        // 沒人出新草稿、但有共有者「資訊不足」→ 強制那些共有者發言
+        const waiting = masons.filter((m) => !this.isMasonReady(m.clientId));
+        if (waiting.length === 0) break; // 安全：不該發生
+        drafts = await this.generateMasonDrafts(waiting);
+        if (drafts.length === 0) break; // 全部失敗 → 停止
+      }
+    }
+    // 討論結束（收斂或安全停止）：確保所有共有者 toggle ON，讓夜間能推進
+    for (const m of masons) {
+      if (!this.isMasonReady(m.clientId)) this.game.handleToggleMasonEndTurn(m.clientId);
+    }
+  }
+
+  /** 所有共有者獨立出草稿（平行 LLM 呼叫；互不可見；失敗的跳過） */
+  private async generateMasonDrafts(masons: GamePlayer[]): Promise<MasonDraft[]> {
+    const results = await Promise.all(masons.map(async (m) => {
+      const entry = this.entries.get(m.clientId);
+      if (!entry) return null;
+      const prompts = this.buildMasonDraftPrompts(entry);
+      const result = await this.llmWithRetry(m.clientId, 'MASON_SPEECH', this.day, prompts, (p) =>
+        typeof p.speech === 'string' && p.speech.trim() && typeof p.stance === 'string' ? 'ok' : null);
+      if (result.value === null) return null;
+      return { mason: m, speech: (result.parsed!.speech as string).trim(), stance: (result.parsed!.stance as string).trim() };
+    }));
+    return results.filter((r): r is MasonDraft => r !== null);
+  }
+
+  /** Judge 盲選一篇共有者草稿（同 wolf judge：隨機選＋記錄，避免偏見）→ 回選中的 draft */
+  private judgePickMasonDraft(drafts: MasonDraft[]): MasonDraft | null {
+    if (drafts.length === 0 || !this.game) return null;
+    if (drafts.length === 1) {
+      this.masonSelectionSeq += 1;
+      return drafts[0];
+    }
+    const idx = Math.floor(Math.random() * drafts.length);
+    this.masonSelectionSeq += 1;
+    this.logEntry('', 'JUDGE', this.day, 1, [], null, { picked: drafts[idx].mason.nickname, from: drafts.length, meeting: 'mason' });
+    return drafts[idx];
+  }
+
+  /** 非發言者共有者讀白板後回應：vote / speak / wait */
+  private async masonRespond(
+    m: GamePlayer,
+    entry: AiEntry,
+    publishedSpeech: string,
+  ): Promise<{ type: 'vote'; target: string } | { type: 'speak'; speech: string; stance: string } | { type: 'wait' }> {
+    const prompts = this.buildMasonResponsePrompts(entry, publishedSpeech);
+    const result = await this.llmWithRetry(m.clientId, 'MASON_STANCE', this.day, prompts, (p) => {
+      if (p.action === 'vote' && typeof p.target === 'string' && p.target) return 'ok';
+      if (p.action === 'speak' && typeof p.speech === 'string' && p.speech.trim() && typeof p.stance === 'string') return 'ok';
+      if (p.action === 'wait') return 'ok';
+      return null;
+    });
+    if (result.value === null) return { type: 'wait' }; // 失敗 → 視為等待（不阻塞）
+    const p = result.parsed!;
+    if (p.action === 'vote') return { type: 'vote', target: p.target as string };
+    if (p.action === 'speak') return { type: 'speak', speech: (p.speech as string).trim(), stance: (p.stance as string).trim() };
+    return { type: 'wait' };
+  }
+
   // --- Private methods ---
 
   private logEntry(clientId: string, kind: AiLogEntry['kind'], round: number, attempt: number, prompts: ChatMessage[], response: string | null, parsed: any): void {
@@ -439,8 +588,16 @@ export class AiController {
     return (this.game?.getPlayers() ?? []).filter((p) => p.role === Role.WEREWOLF && p.alive && this.isAi(p.clientId));
   }
 
+  private getAiMasons(): GamePlayer[] {
+    return (this.game?.getPlayers() ?? []).filter((p) => p.role === Role.MASON && p.alive && this.isAi(p.clientId));
+  }
+
   private isWolfReady(clientId: string): boolean {
     return this.wolfReadyMap.get(clientId) === true;
+  }
+
+  private isMasonReady(clientId: string): boolean {
+    return this.masonReadyMap.get(clientId) === true;
   }
 
   /** 引擎是否已因安全上限停止狼會議 */
@@ -462,6 +619,13 @@ export class AiController {
   private wolfBoardText(): string {
     return this.wolfBoard.length
       ? this.wolfBoard.map((m) => `${m.from}：「${m.text}」`).join('\n')
+      : '之前沒有任何討論，沒有人發過言。';
+  }
+
+  /** 共有者白板歷史（prompt 用；無則提示沒有討論） */
+  private masonBoardText(): string {
+    return this.masonBoard.length
+      ? this.masonBoard.map((m) => `${m.from}：「${m.text}」`).join('\n')
       : '之前沒有任何討論，沒有人發過言。';
   }
 
@@ -493,6 +657,22 @@ export class AiController {
     ].filter(Boolean).join('\n');
   }
 
+  /** 共有者情境（system prompt 附加：共有者夥伴 + 私頻說明） */
+  private masonContext(entry: AiEntry): string {
+    const k = entry.knowledge;
+    return [
+      '你是村人陣營的共有者。你和你的夥伴是互相知道身份的盟友。',
+      k.partners.length ? `你的共有者夥伴：${k.partners.join('、')}。` : '',
+      '現在是共有者會議（私頻），只有你和你夥伴能看到。',
+      '',
+      '策略思考：',
+      '- 你們是好人，目標是找出人狼。',
+      '- 明天白天的行動方針：誰主動發言、誰觀察、誰負責攻擊誰。',
+      '- 可以討論：誰可疑、誰可能是狼、如果被人質疑怎麼回應。',
+      '- 不要暴露「我們是共有者」——這個只有你們兩個知道。',
+    ].filter(Boolean).join('\n');
+  }
+
   /** 草稿 prompt（獨立出稿：speech + stance）；輸出 {"speech":"...", "stance":"投XXX"|"資訊不足"} */
   private buildDraftPrompts(entry: AiEntry): ChatMessage[] {
     const user = [
@@ -502,8 +682,9 @@ export class AiController {
       `白板上的對話：`,
       this.wolfBoardText(),
       ``,
-      `任務：提出你的刀人立場。你要說一句話（≤50字），並表明你的立場。`,
+      `任務：提出你的刀人立場和明天白天的行動方針。你要說一句話（≤50字），並表明你的立場。`,
       `規則：狼每晚必須刀人，不能跳過、不能「不動刀」。「資訊不足」只是表示你還在考慮，最終你必須選一個目標。`,
+      `議題包含：① 刀誰 ② 明天白天我們怎麼行動（誰裝白、誰攻擊、誰安靜）。`,
       `要求：直覺選人是可以的（「我直覺刀他」）。如果你要指認角色，要有依據，沒依據就別硬指。不要說「他怪怪的」——那是廢話。`,
       `提醒：你在跟隊友即時對話。不要說「我注意到...」「他剛被提出」。不要提「沒有發言紀錄」「沒人發言」。用你的角色語氣說話。`,
       ``,
@@ -541,6 +722,58 @@ export class AiController {
     ].join('\n');
     return [
       { role: 'system', content: `${this.buildSystemPrompt(entry)}\n${this.wolfContext(entry)}` },
+      { role: 'user', content: user },
+    ];
+  }
+
+  /** 共有者草稿 prompt（獨立出稿：speech + stance）；輸出 {"speech":"...", "stance":"準備好了"|"資訊不足"} */
+  private buildMasonDraftPrompts(entry: AiEntry): ChatMessage[] {
+    const partnerName = entry.knowledge.partners.join('、');
+    const user = [
+      `當前：第 ${this.day} 夜，共有者會議（私頻，只有你和你共有者夥伴能看到）。`,
+      `你的共有者夥伴：${partnerName}`,
+      ``,
+      `白板上的對話：`,
+      this.masonBoardText(),
+      ``,
+      `任務：提出你對明天白天會議的行動方針。你要說一句話（≤50字），並表明你的立場。`,
+      `議題：明天白天我們怎麼行動（誰主動發言、誰觀察、誰攻擊誰、被質疑時怎麼回應）。`,
+      `提醒：這是私頻，只有你和你夥伴看到。用你的角色語氣說話。`,
+      ``,
+      `回覆格式（JSON）：`,
+      `{"speech": "你要說的話", "stance": "準備好了"}`,
+      `或`,
+      `{"speech": "你要說的話", "stance": "資訊不足"}`,
+      `（stance 是「準備好了」表示你對明天有方針了；「資訊不足」表示你還沒想好）`,
+    ].join('\n');
+    return [
+      { role: 'system', content: `${this.buildSystemPrompt(entry)}\n${this.masonContext(entry)}` },
+      { role: 'user', content: user },
+    ];
+  }
+
+  /** 共有者回應 prompt（非發言者讀白板後回應）；輸出 {"action":"vote","target":"ready"} 或 {"action":"speak","speech":"...","stance":"..."} 或 {"action":"wait"} */
+  private buildMasonResponsePrompts(entry: AiEntry, publishedSpeech: string): ChatMessage[] {
+    const partnerName = entry.knowledge.partners.join('、');
+    const user = [
+      `當前：第 ${this.day} 夜，共有者會議（私頻，只有你和你共有者夥伴能看到）。`,
+      `你的共有者夥伴：${partnerName}`,
+      ``,
+      `白板上的對話：`,
+      this.masonBoardText(),
+      ``,
+      `剛發布的發言：「${publishedSpeech}」`,
+      ``,
+      `任務：看完後決定你的立場（三選一）：`,
+      `1. 準備好了 → {"action": "vote", "target": "ready"}`,
+      `2. 我要講 → {"action": "speak", "speech": "你要說的話（≤50字）", "stance": "準備好了" 或 "資訊不足"}`,
+      `3. 資訊不足、先不講 → {"action": "wait"}`,
+      ``,
+      `要求：同意就簡短（「就這麼辦」「我跟你」），不用重述隊友已經講過的理由。要講就講新的角度。`,
+      `提醒：這是私頻。用你的角色語氣說話。`,
+    ].join('\n');
+    return [
+      { role: 'system', content: `${this.buildSystemPrompt(entry)}\n${this.masonContext(entry)}` },
       { role: 'user', content: user },
     ];
   }

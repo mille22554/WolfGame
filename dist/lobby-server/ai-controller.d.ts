@@ -10,7 +10,7 @@ export interface AiLogEntry {
     clientId: string;
     characterId: string;
     role: string;
-    kind: 'WOLF_SPEECH' | 'JUDGE' | 'WOLF_STANCE' | 'WOLF_KILL' | 'SEER_CHECK' | 'GUARD_PROTECT' | 'MASON_TOGGLE' | 'WOLF_ABORT';
+    kind: 'WOLF_SPEECH' | 'JUDGE' | 'WOLF_STANCE' | 'WOLF_KILL' | 'SEER_CHECK' | 'GUARD_PROTECT' | 'MASON_TOGGLE' | 'MASON_SPEECH' | 'MASON_STANCE' | 'WOLF_ABORT';
     round: number;
     /** 第幾次嘗試（重試時 >1） */
     attempt: number;
@@ -49,6 +49,14 @@ export declare class AiController {
     private wolfReadyMap;
     /** wolf clientId -> 當前 stance（"投XXX" / "資訊不足"） */
     private wolfStanceMap;
+    /** 共有者白板（本夜全部 MASON_MESSAGE；每夜重置） */
+    private masonBoard;
+    /** 共有者 judge 選言序號（MASON_SPEECH_SELECTED.round；本夜遞增） */
+    private masonSelectionSeq;
+    /** mason clientId -> 是否 toggle ready ON（由攔截的 MASON_READY 訊息維護） */
+    private masonReadyMap;
+    /** mason clientId -> 當前 stance（"準備好了" / "資訊不足"） */
+    private masonStanceMap;
     constructor(defs: AiPlayerDef[], opts?: {
         llmTimeoutMs?: number;
     });
@@ -75,6 +83,14 @@ export declare class AiController {
     private wolfRespond;
     /** 狼會議 VOTING：每隻 AI 狼 LLM 選刀人目標 → 提交 WOLF_KILL（失敗重試；最終失敗跳過、不阻塞） */
     private runWolfVoting;
+    /** 共有者會議：雙共有者獨立出草稿 → loop（judge 盲選發布 → 另一人回應 → 收斂判斷） */
+    private runMasonDiscussion;
+    /** 所有共有者獨立出草稿（平行 LLM 呼叫；互不可見；失敗的跳過） */
+    private generateMasonDrafts;
+    /** Judge 盲選一篇共有者草稿（同 wolf judge：隨機選＋記錄，避免偏見）→ 回選中的 draft */
+    private judgePickMasonDraft;
+    /** 非發言者共有者讀白板後回應：vote / speak / wait */
+    private masonRespond;
     private logEntry;
     private sleep;
     /** 呼叫 LLM 並解析；失敗（null / parse 失敗 / 抽取不到值）重試，最多 3 次、間隔 2s */
@@ -85,20 +101,30 @@ export declare class AiController {
     private resolveWolfByNickname;
     private characterIdOf;
     private getAiWolves;
+    private getAiMasons;
     private isWolfReady;
+    private isMasonReady;
     /** 引擎是否已因安全上限停止狼會議 */
     private isAborted;
     private buildSystemPrompt;
     /** 狼白板歷史（prompt 用；無則提示沒有討論） */
     private wolfBoardText;
+    /** 共有者白板歷史（prompt 用；無則提示沒有討論） */
+    private masonBoardText;
     /** 可刀目標（排除自己、狼隊、狂人） */
     private eligibleTargets;
     /** 狼 wolf 情境（system prompt 附加：狼隊同夥 + 狂人 + 私頻說明） */
     private wolfContext;
+    /** 共有者情境（system prompt 附加：共有者夥伴 + 私頻說明） */
+    private masonContext;
     /** 草稿 prompt（獨立出稿：speech + stance）；輸出 {"speech":"...", "stance":"投XXX"|"資訊不足"} */
     private buildDraftPrompts;
     /** 回應 prompt（非發言者狼讀白板後回應）；輸出 {"action":"vote","target":"..."} 或 {"action":"speak","speech":"...","stance":"..."} 或 {"action":"wait"} */
     private buildResponsePrompts;
+    /** 共有者草稿 prompt（獨立出稿：speech + stance）；輸出 {"speech":"...", "stance":"準備好了"|"資訊不足"} */
+    private buildMasonDraftPrompts;
+    /** 共有者回應 prompt（非發言者讀白板後回應）；輸出 {"action":"vote","target":"ready"} 或 {"action":"speak","speech":"...","stance":"..."} 或 {"action":"wait"} */
+    private buildMasonResponsePrompts;
     /** 狼刀目標選擇 prompt（狼隊同夥 + 可刀目標 + 討論歷史；輸出 {"target":"<displayName>"}） */
     private buildWolfKillPrompts;
     /** 占い／守衛目標選擇 prompt（角色 + 存活玩家 + 過去行動；輸出 {"target":"<displayName>"}） */

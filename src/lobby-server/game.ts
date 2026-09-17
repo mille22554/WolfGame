@@ -300,9 +300,9 @@ export class GameEngine {
     this.callbacks.broadcast(msg, this.getAliveWolves().map((p) => p.clientId));
   }
 
-  /** 共有者私頻（僅雙方可見） */
+  /** 共有者私頻（僅 MASON step 可用、僅雙方可見） */
   handleMasonChat(clientId: string, text: string): void {
-    if (this.state.phase === 'GAME_OVER') return;
+    if (this.state.phase !== 'NIGHT' || this.state.nightStep !== 'MASON') return;
     const player = this.getPlayerByClientId(clientId);
     if (!player || player.role !== Role.MASON || !player.alive) return;
     const clean = text.trim();
@@ -311,6 +311,25 @@ export class GameEngine {
     if (player.masonPartnerId) targets.push(player.masonPartnerId);
     this.callbacks.broadcast(
       { type: 'MASON_MESSAGE', from: player.nickname, text: clean, ts: Date.now() },
+      targets,
+    );
+  }
+
+  /** 共有者會議：judge 選言發布（broadcast MASON_MESSAGE ＋ MASON_SPEECH_SELECTED，僅雙共有者可見） */
+  publishMasonSpeech(speakerClientId: string, text: string, round: number): void {
+    if (this.state.phase !== 'NIGHT' || this.state.nightStep !== 'MASON') return;
+    const player = this.getPlayerByClientId(speakerClientId);
+    if (!player || player.role !== Role.MASON || !player.alive) return;
+    const clean = text.trim();
+    if (clean.length === 0 || clean.length > MAX_MESSAGE_LEN) return;
+    const targets = [player.clientId];
+    if (player.masonPartnerId) targets.push(player.masonPartnerId);
+    this.callbacks.broadcast(
+      { type: 'MASON_MESSAGE', from: player.nickname, text: clean, ts: Date.now() },
+      targets,
+    );
+    this.callbacks.broadcast(
+      { type: 'MASON_SPEECH_SELECTED', round, from: player.nickname, text: clean },
       targets,
     );
   }
