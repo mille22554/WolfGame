@@ -424,12 +424,8 @@ export class AiController {
       const selected = this.judgePickMasonDraft(drafts);
       if (!selected) break;
       this.game.publishMasonSpeech(selected.mason.clientId, selected.speech, this.masonSelectionSeq);
-      // 記錄發言者的 stance
+      // 記錄發言者的 stance（toggle 延後到回應之後，避免引擎提前推進）
       this.masonStanceMap.set(selected.mason.clientId, selected.stance);
-      // 若發言者 stance 是「準備好了」→ toggle ready
-      if (selected.stance === '準備好了' && !this.isMasonReady(selected.mason.clientId)) {
-        this.game.handleToggleMasonEndTurn(selected.mason.clientId);
-      }
 
       // ③ 除發言者外所有共有者讀白板 → 各自回應
       const newDrafts: MasonDraft[] = [];
@@ -450,7 +446,12 @@ export class AiController {
         // 'wait' → 不出草稿，維持等待
       }
 
-      // ④ 收斂判斷：全部共有者 ready（引擎已推進步驟）
+      // ③.5 發言者 toggle（在回應之後，避免引擎在對方回應前就推進）
+      if (selected.stance === '準備好了' && !this.isMasonReady(selected.mason.clientId)) {
+        this.game.handleToggleMasonEndTurn(selected.mason.clientId);
+      }
+
+      // ④ 收斂判斷：全部共有者 ready
       const allReady = masons.every((m) => this.isMasonReady(m.clientId));
       if (allReady) break;
 
