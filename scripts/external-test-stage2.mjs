@@ -33,7 +33,7 @@ const REPORT_PATH = getArg('--report', process.env.REPORT || 'ai-trace-stage2-ou
 
 // 各階段 timeout
 const TIMEOUTS = {
-  NIGHT: 120_000,   // 夜晚：mason(3) + wolf(3) + seer/guard → 2 分鐘夠
+  NIGHT: 300_000,   // 夜晚：mason(3) + wolf(3) + seer/guard → 5 分鐘（LLM 慢時需要）
   DAY: 600_000,     // 白天：15 AI 討論 + 投票 → 10 分鐘
 };
 
