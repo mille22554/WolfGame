@@ -43,15 +43,15 @@ ai.setGame(game);
 
 // --- 3) 開始遊戲 ---
 game.start();
-console.log('[stage2] 遊戲已開始，等待狼會議收斂（安全 timeout 15 分鐘、100 則白板上限）...');
+console.log('[stage2] 遊戲已開始，等待完整夜流程（mason→wolf→seer→結算）...');
 
-// --- 4) 觀察：輪詢 getNightState() 直到收斂 / 100 則上限 / timeout ---
+// --- 4) 觀察：輪詢 getNightState() 直到 NIGHT_RESULT / 100 則上限 / timeout ---
 const deadline = Date.now() + SAFETY_TIMEOUT_MS;
 let converged = false;
 let aborted = false;
 while (Date.now() < deadline) {
   const s = game.getNightState();
-  if (s.wolfTargetId !== null) {
+  if (s.phase === 'NIGHT_RESULT' || s.phase === 'DAY_DISCUSSION' || s.phase === 'GAME_OVER') {
     converged = true;
     break;
   }
@@ -308,6 +308,25 @@ function buildReport(game, ai, events, defs, converged, aborted) {
   const wolfMsgs = events.filter((e) => e.type === 'WOLF_MESSAGE');
   if (wolfMsgs.length === 0) L.push('（無）');
   for (const m of wolfMsgs) L.push(`- [${fmtTs(m.ts)}] ${m.from}：「${m.text}」`);
+  L.push('');
+  L.push('## 夜間結算（NIGHT_RESULT）');
+  L.push('');
+  const nightResults = events.filter((e) => e.type === 'NIGHT_RESULT');
+  const eliminations = events.filter((e) => e.type === 'PLAYER_ELIMINATED');
+  if (nightResults.length === 0 && eliminations.length === 0) {
+    L.push('（尚未收到——夜流程未完成或 timeout）');
+  } else {
+    for (const nr of nightResults) {
+      L.push(`- [${fmtTs(nr.ts)}] peaceful=${nr.peacful ?? nr.peaceful ?? '?'}`);
+      const deaths = nr.deaths ?? [];
+      if (deaths.length === 0) L.push('  - 平安夜（無人死亡）');
+      for (const d of deaths) L.push(`  - ☠️ ${d.nickname}（${d.clientId}）`);
+    }
+    for (const el of eliminations) {
+      L.push(`- [${fmtTs(el.ts)}] ${el.nickname}（${el.clientId}）被淘汰，原因：${el.cause}`);
+    }
+  }
+  L.push('');
   L.push('## 投票與平票軌跡');
   L.push('');
   const voteRounds = [];
