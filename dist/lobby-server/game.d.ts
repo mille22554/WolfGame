@@ -163,6 +163,13 @@ export declare class GameEngine {
     };
     /** 全部玩家（AI 控制器用 nickname→clientId 對照 LLM 回傳的中文名） */
     getPlayers(): GamePlayer[];
+    /** 序列化目前遊戲狀態（JSON-safe；用於存檔/分階段測試 resume） */
+    saveState(): Record<string, unknown>;
+    /**
+     * 從存檔恢復狀態並直接進入 DAY_DISCUSSION（跳過 ROLE_REVEAL / NIGHT）。
+     * 用於分階段測試：先跑 night 存檔，再 resume 只跑 day。
+     */
+    restoreState(snapshot: Record<string, any>): void;
     private assignRoles;
     private transitionTo;
     /** 排定一次性 timer（fire 後自動從清單移除） */
