@@ -13,7 +13,7 @@
  * 在 server 上跑：SGLANG_API_KEY=xxx node scripts/external-test-stage2.mjs --stop-at NIGHT_RESULT
  * - import dist/lobby-server/ 編譯產物（GameEngine + AiController）
  * - 建 15 人全 AI 局
- * - 各階段獨立 timeout（night 300s / day 不限時）
+ * - 各階段不限時（night/day 皆等待收斂，無 timeout 截斷）
  * - 產出 markdown 報告（--report 或 REPORT env 或依階段預設：night/day/full）
  * - exit code：0 = 目標階段完成、1 = 未收斂（安全上限 / timeout）
  */
@@ -41,8 +41,8 @@ const RESUME_PATH = getArg('--resume', null); // 存檔路徑（從存檔恢復�
 
 // 各階段 timeout
 const TIMEOUTS = {
-  NIGHT: 300_000,   // 夜晚：mason(3) + wolf(3) + seer/guard → 5 分鐘（LLM 慢時需要）
-  DAY: 0,           // 白天：不限時（15 AI 討論 + 投票；~100s/輪，14 人 ready 需 ~20+ 分鐘）
+  NIGHT: 0,         // 夜晚：不限時（等所有夜間行動完成）
+  DAY: 0,           // 白天：不限時（等所有玩家 toggle ready + 投票）
 };
 
 // 判斷「目標階段完成」的條件
