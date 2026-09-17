@@ -201,17 +201,15 @@ export class GameEngine {
             return; // 只有房主可提前結束
         this.transitionTo('DAY_VOTING');
     }
-    /** 玩家 toggle「準備投票」（sticky：只能 ON、不可撤回）；所有存活玩家皆 ON → 推進到 DAY_VOTING */
+    /** 玩家 toggle「準備投票」（ON/OFF 可切換，同狼會議 handleToggleWolfReady）；所有存活玩家皆 ON → 推進到 DAY_VOTING */
     handleToggleVoteReady(clientId) {
         if (this.state.phase !== 'DAY_DISCUSSION')
             return;
         const player = this.getPlayerByClientId(clientId);
         if (!player || !player.alive)
             return;
-        // sticky ready：已 ON 者 no-op（不允許 toggle OFF，ready 集合只增不減）
-        if (this.state.dayReady.get(clientId) === true)
-            return;
-        this.state.dayReady.set(clientId, true);
+        const ready = !(this.state.dayReady.get(clientId) ?? false);
+        this.state.dayReady.set(clientId, ready);
         const alivePlayers = this.getAlivePlayers();
         const readyList = alivePlayers
             .filter((p) => this.state.dayReady.get(p.clientId) === true)

@@ -15,7 +15,7 @@
  */
 import { Role } from '../types.js';
 import { chat } from './llm.js';
-import { loadCharacterProfile, parseJsonResponse, } from './ai-player.js';
+import { loadCharacterProfile, parseJsonResponse, buildJudgePrompt, } from './ai-player.js';
 const MAX_LLM_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
 /** 共有者會議安全上限：白板累計 N 則 MASON_MESSAGE 未收斂 → 停止討論（強制 toggle ON 避免夜間卡死） */
@@ -235,8 +235,8 @@ export class AiController {
         while (this.game.getNightState().wolfSubphase === 'DISCUSSION' && !this.isAborted() && !this.destroyed) {
             if (++guard > 150)
                 break;
-            // ② Judge 盲選一篇 → 發布 speech 到白板
-            const selected = this.judgePickDraft(drafts, round);
+            // ② Judge 盲選一篇（LLM 盲評）→ 發布 speech 到白板
+            const selected = await this.judgePickDraft(drafts, round);
             if (!selected)
                 break;
             this.game.handleWolfChat(selected.wolf.clientId, selected.speech);
@@ -276,10 +276,11 @@ export class AiController {
                 }
                 // 'wait' → 不出草稿，維持等待
             }
-            // ④ 收斂判斷
+            // ④ 收斂判斷：全狼 ready 且沒人想再講（allReady 但仍有新草稿 → 不 break，繼續 loop 處理；安全網）
             const allReady = wolves.every((w) => this.isWolfReady(w.clientId));
-            if (allReady)
-                break; // 引擎已進 VOTING
+            const noNewDrafts = newDrafts.length === 0;
+            if (allReady && noNewDrafts)
+                break; // 收斂：全狼 stance=投XXX 且沒人想再講
             if (newDrafts.length > 0) {
                 drafts = newDrafts; // 下一輪 judge 從新草稿中選
             }
@@ -311,8 +312,31 @@ export class AiController {
         }));
         return results.filter((r) => r !== null);
     }
-    /** Judge 盲選一篇草稿（全盲評分，不告知作者）→ 回選中的 draft */
-    judgePickDraft(drafts, round) {
+    /** Judge 盲評（LLM）：給所有 speech 打分（1-10），回最高分的 index；LLM 失敗 → 隨機 fallback（不阻塞）。
+     *  LLM 呼叫本身由 llmWithRetry 記錄 log。 */
+    async judgeScoreIndex(speeches, round) {
+        if (speeches.length <= 1)
+            return 0;
+        const prompts = buildJudgePrompt(speeches);
+        const result = await this.llmWithRetry('', 'JUDGE', round, prompts, (p) => Array.isArray(p.scores) && p.scores.length === speeches.length ? 'ok' : null);
+        if (result.value !== null && result.parsed) {
+            const scores = result.parsed.scores.map((s) => (typeof s === 'number' && Number.isFinite(s) ? s : 0));
+            let maxScore = -Infinity;
+            let idx = 0;
+            for (let i = 0; i < scores.length; i++) {
+                if (scores[i] > maxScore) {
+                    maxScore = scores[i];
+                    idx = i;
+                }
+            }
+            if (maxScore > 0)
+                return idx;
+        }
+        // LLM 失敗或全 0 分 → 隨機 fallback（不阻塞）
+        return Math.floor(Math.random() * speeches.length);
+    }
+    /** Judge 盲選一篇草稿（LLM 全盲評分，不告知作者）→ 回選中的 draft */
+    async judgePickDraft(drafts, round) {
         if (drafts.length === 0 || !this.game)
             return null;
         if (drafts.length === 1) {
@@ -320,10 +344,7 @@ export class AiController {
             this.logEntry('', 'JUDGE', round, 1, [], null, { picked: drafts[0].wolf.nickname, from: 1 });
             return drafts[0];
         }
-        // 用 LLM 盲評（同步不可行，所以用簡單策略：隨機選 + 記錄）
-        // 實際上 judge 需要 LLM 呼叫，但這裡在 loop 中同步呼叫不合適
-        // 改用：隨機選一篇（避免偏見），品質由後續對話收斂
-        const idx = Math.floor(Math.random() * drafts.length);
+        const idx = await this.judgeScoreIndex(drafts.map((d) => d.speech), round);
         this.selectionSeq += 1;
         this.logEntry('', 'JUDGE', round, 1, [], null, { picked: drafts[idx].wolf.nickname, from: drafts.length });
         return drafts[idx];
@@ -395,8 +416,8 @@ export class AiController {
                 break;
             if (this.messageCap > 0 && this.masonBoard.length >= this.messageCap)
                 break; // 安全上限（僅測試）：停止討論
-            // ② Judge 盲選一篇 → 發布 speech 到白板
-            const selected = this.judgePickMasonDraft(drafts);
+            // ② Judge 盲選一篇（LLM 盲評）→ 發布 speech 到白板
+            const selected = await this.judgePickMasonDraft(drafts);
             if (!selected)
                 break;
             this.game.publishMasonSpeech(selected.mason.clientId, selected.speech, this.masonSelectionSeq);
@@ -467,15 +488,15 @@ export class AiController {
         }));
         return results.filter((r) => r !== null);
     }
-    /** Judge 盲選一篇共有者草稿（同 wolf judge：隨機選＋記錄，避免偏見）→ 回選中的 draft */
-    judgePickMasonDraft(drafts) {
+    /** Judge 盲選一篇共有者草稿（LLM 全盲評分，同 wolf judge）→ 回選中的 draft */
+    async judgePickMasonDraft(drafts) {
         if (drafts.length === 0 || !this.game)
             return null;
         if (drafts.length === 1) {
             this.masonSelectionSeq += 1;
             return drafts[0];
         }
-        const idx = Math.floor(Math.random() * drafts.length);
+        const idx = await this.judgeScoreIndex(drafts.map((d) => d.speech), this.day);
         this.masonSelectionSeq += 1;
         this.logEntry('', 'JUDGE', this.day, 1, [], null, { picked: drafts[idx].mason.nickname, from: drafts.length, meeting: 'mason' });
         return drafts[idx];
@@ -520,12 +541,12 @@ export class AiController {
         while (this.phase === 'DAY_DISCUSSION' && !this.destroyed) {
             if (++guard > 50)
                 break; // 安全上限
-            // ② Judge 盲選一篇 → 該 AI 發言（公頻）
-            const selected = this.judgePickDayDraft(drafts);
+            // ② Judge 盲選一篇（LLM 盲評）→ 該 AI 發言（公頻）
+            const selected = await this.judgePickDayDraft(drafts);
             if (!selected)
                 break;
             this.game.sendDayMessage(selected.player.clientId, selected.speech);
-            // 發言者 stance 是「準備好了」→ toggle ON（sticky：已 ON 者不再 call）
+            // 發言者已發言 → 確保 ready（同狼會議：未 ON 才 toggle；發言者被選中時必為 OFF，不會誤撤）
             if (!this.dayReadyMap.get(selected.player.clientId)) {
                 this.dayReadyMap.set(selected.player.clientId, true);
                 this.game.handleToggleVoteReady(selected.player.clientId);
@@ -542,7 +563,7 @@ export class AiController {
                     continue;
                 const resp = await this.dayRespond(p, entry, selected.speech);
                 if (resp.type === 'ready') {
-                    // sticky ready：已 ON 者不再 call（避免 toggle 語意把 ready 撤掉）
+                    // 「講完了，準備投票」→ 確保 ON（同狼會議 vote；已 ON 不再 toggle，避免已 ready 者被翻成 OFF 而擺盪）
                     if (!this.dayReadyMap.get(p.clientId)) {
                         this.dayReadyMap.set(p.clientId, true);
                         this.game.handleToggleVoteReady(p.clientId);
@@ -550,7 +571,11 @@ export class AiController {
                 }
                 else if (resp.type === 'speak') {
                     newDrafts.push({ player: p, speech: resp.speech, stance: resp.stance });
-                    // sticky ready：發言不撤回 ready（ready 集合只增不減；AI 仍可繼續發言）
+                    // 「我要補充」→ 撤回 ready（同狼會議：已 ON 者 toggle OFF；ready 集合可增可減，非 sticky）
+                    if (this.dayReadyMap.get(p.clientId) === true) {
+                        this.dayReadyMap.set(p.clientId, false);
+                        this.game.handleToggleVoteReady(p.clientId);
+                    }
                 }
                 // 'wait' → 不出草稿，維持等待
             }
@@ -1003,13 +1028,14 @@ export class AiController {
             return [];
         return [{ player: p, speech: result.parsed.speech.trim(), stance: result.parsed.stance.trim() }];
     }
-    /** Judge 盲選一篇白天草稿（隨機選） */
-    judgePickDayDraft(drafts) {
+    /** Judge 盲選一篇白天草稿（LLM 全盲評分） */
+    async judgePickDayDraft(drafts) {
         if (drafts.length === 0)
             return null;
         if (drafts.length === 1)
             return drafts[0];
-        const idx = Math.floor(Math.random() * drafts.length);
+        const idx = await this.judgeScoreIndex(drafts.map((d) => d.speech), this.day);
+        this.logEntry('', 'JUDGE', this.day, 1, [], null, { picked: drafts[idx].player.nickname, from: drafts.length, meeting: 'day' });
         return drafts[idx];
     }
     /** 非發言者 AI 讀白板後回應：ready / speak / wait */

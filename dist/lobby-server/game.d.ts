@@ -140,7 +140,7 @@ export declare class GameEngine {
     handleVote(clientId: string, targetClientId: string | null): void;
     /** 房主提前結束討論 */
     handleEndDiscussion(clientId: string): void;
-    /** 玩家 toggle「準備投票」（sticky：只能 ON、不可撤回）；所有存活玩家皆 ON → 推進到 DAY_VOTING */
+    /** 玩家 toggle「準備投票」（ON/OFF 可切換，同狼會議 handleToggleWolfReady）；所有存活玩家皆 ON → 推進到 DAY_VOTING */
     handleToggleVoteReady(clientId: string): void;
     /** AI 白天發言（broadcast MESSAGE 到公頻；复用 lobby 的 MESSAGE 協議） */
     sendDayMessage(clientId: string, text: string): void;

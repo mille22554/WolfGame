@@ -83,7 +83,10 @@ export declare class AiController {
     private runWolfDiscussion;
     /** 所有狼獨立出草稿（平行 LLM 呼叫；互不可見；失敗的狼跳過） */
     private generateAllDrafts;
-    /** Judge 盲選一篇草稿（全盲評分，不告知作者）→ 回選中的 draft */
+    /** Judge 盲評（LLM）：給所有 speech 打分（1-10），回最高分的 index；LLM 失敗 → 隨機 fallback（不阻塞）。
+     *  LLM 呼叫本身由 llmWithRetry 記錄 log。 */
+    private judgeScoreIndex;
+    /** Judge 盲選一篇草稿（LLM 全盲評分，不告知作者）→ 回選中的 draft */
     private judgePickDraft;
     /** 非發言者狼讀白板後回應：vote / speak / wait */
     private wolfRespond;
@@ -93,7 +96,7 @@ export declare class AiController {
     private runMasonDiscussion;
     /** 所有共有者獨立出草稿（平行 LLM 呼叫；互不可見；失敗的跳過） */
     private generateMasonDrafts;
-    /** Judge 盲選一篇共有者草稿（同 wolf judge：隨機選＋記錄，避免偏見）→ 回選中的 draft */
+    /** Judge 盲選一篇共有者草稿（LLM 全盲評分，同 wolf judge）→ 回選中的 draft */
     private judgePickMasonDraft;
     /** 非發言者共有者讀白板後回應：vote / speak / wait */
     private masonRespond;
@@ -151,7 +154,7 @@ export declare class AiController {
     /** 所有 AI 獨立出草稿（平行 LLM 呼叫） */
     /** 隨機選一個 AI 出草稿（避免 15 個平行 LLM 呼叫塞爆 SGLang；一次一個比較自然） */
     private generateDayDrafts;
-    /** Judge 盲選一篇白天草稿（隨機選） */
+    /** Judge 盲選一篇白天草稿（LLM 全盲評分） */
     private judgePickDayDraft;
     /** 非發言者 AI 讀白板後回應：ready / speak / wait */
     private dayRespond;
