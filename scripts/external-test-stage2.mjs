@@ -17,7 +17,7 @@
  * - 產出 markdown 報告（--report 或 REPORT env 或依階段預設：night/day/full）
  * - exit code：0 = 目標階段完成、1 = 未收斂（安全上限 / timeout）
  */
-import { writeFileSync, readFileSync } from 'node:fs';
+import { writeFileSync, readFileSync, appendFileSync } from 'node:fs';
 import { GameEngine } from '../dist/lobby-server/game.js';
 import { AiController } from '../dist/lobby-server/ai-controller.js';
 
@@ -67,6 +67,7 @@ const CHARACTERS = [
 ];
 
 const POLL_INTERVAL_MS = 500;
+const DISCUSSION_LOG = '/tmp/day-discussion.log'; // 實時討論記錄（tail -f 可看）
 
 // --- 1) 組 15 個 AiPlayerDef ---
 const defs = CHARACTERS.map(([characterId, nickname], i) => ({ clientId: `ai-${i}`, nickname, characterId }));
@@ -75,11 +76,21 @@ const defs = CHARACTERS.map(([characterId, nickname], i) => ({ clientId: `ai-${i
 const ai = new AiController(defs, { messageCap: 100 });
 const events = []; // 所有 S→C 訊息（報告用）
 
+// 清空討論 log
+writeFileSync(DISCUSSION_LOG, '', 'utf-8');
+
 const game = new GameEngine('STAGE2', defs.map((d) => ({ clientId: d.clientId, nickname: d.nickname })), {
   sendTo: (cid, m) => ai.handlePrivate(cid, m),
   broadcast: (m, targets) => {
     ai.handleBroadcast(m, targets);
     events.push({ ts: Date.now(), type: m.type, ...m });
+    // 實時寫入討論 log（DAY_MESSAGE / WOLF_MESSAGE / DAY_READY_STATUS）
+    if (m.type === 'DAY_MESSAGE' || m.type === 'WOLF_MESSAGE' || m.type === 'DAY_READY_STATUS') {
+      const line = m.type === 'DAY_READY_STATUS'
+        ? `[READY] ${m.ready.map((r) => r.nickname).join(', ')} (${m.ready.length}/${m.total})`
+        : `[${new Date().toISOString().slice(11, 19)}] ${m.from}: ${m.text}`;
+      appendFileSync(DISCUSSION_LOG, line + '\n', 'utf-8');
+    }
   },
   onNightStepActive: (step, players) => ai.onNightStepActive(step, players),
   onWolfSubphaseChange: (sub, round) => ai.onWolfSubphaseChange(sub, round),
