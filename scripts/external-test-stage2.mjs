@@ -207,6 +207,26 @@ function buildReport(game, ai, events, defs, converged, aborted) {
   if (wolfMsgs.length === 0) L.push('（無）');
   for (const m of wolfMsgs) L.push(`- [${fmtTs(m.ts)}] ${m.from}：「${m.text}」`);
   L.push('');
+  L.push('## 完整 Prompt / Response（LLM 互動逐筆）');
+  L.push('');
+  for (const e of log) {
+    if (e.kind === 'MASON_TOGGLE' || e.kind === 'WOLF_ABORT') continue;
+    const who = e.clientId ? `${nicknameOf(players, e.clientId)}（${e.characterId}）` : '（共用）';
+    L.push(`### ${e.kind} ${who}（round ${e.round}，attempt ${e.attempt}）`);
+    L.push('');
+    for (const p of e.prompts) {
+      L.push(`**${p.role} prompt：**`);
+      L.push('');
+      L.push('```');
+      L.push(p.content);
+      L.push('```');
+      L.push('');
+    }
+    L.push(`**Response：** ${e.response ?? '(null)'}`);
+    L.push('');
+    L.push(`**Parsed：** ${JSON.stringify(e.parsed ?? null)}`);
+    L.push('');
+  }
   L.push('## 投票與平票軌跡');
   L.push('');
   const voteRounds = [];
