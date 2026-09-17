@@ -94,9 +94,9 @@ function fmtJson(x) {
 /**
  * 狼會議流程（loop 制）：
  * - 初始草稿（WOLF_SPEECH log）
- * - 每次迭代：JUDGE（judge 選言）→ WOLF_STANCE（其他狼回應：vote/speak/wait）
+  * - 每輪：JUDGE（judge 選言）→ WOLF_STANCE（其他狼回應：vote/speak/wait）
  * - 投票（WOLF_KILL）
- * - 用 WOLF_SPEECH_SELECTED 事件分組迭代
+  * - 用 WOLF_SPEECH_SELECTED 事件分組輪次
  */
 function wolfMeetingFlowSection(log, events, players) {
   const L = [];
@@ -118,7 +118,7 @@ function wolfMeetingFlowSection(log, events, players) {
     L.push('');
   }
 
-  // 用 WOLF_SPEECH_SELECTED 事件分組迭代（index-based：依 log 順序分組，避免 timestamp 邊界重疊）
+  // 用 WOLF_SPEECH_SELECTED 事件分組輪次（index-based：依 log 順序分組，避免 timestamp 邊界重疊）
   const selectedEvents = events.filter((e) => e.type === 'WOLF_SPEECH_SELECTED');
   // 找出每個 JUDGE 在 log 中的 index
   const judgeIndices = [];
@@ -128,12 +128,12 @@ function wolfMeetingFlowSection(log, events, players) {
 
   for (let i = 0; i < selectedEvents.length; i++) {
     const ev = selectedEvents[i];
-    L.push(`### 迭代 ${i + 1}`);
+    L.push(`### 輪次 ${i + 1}`);
     L.push('');
     L.push(`- **Judge 選出：** ${ev.from} → 發布「${ev.text}」`);
     L.push(`- **${ev.from}：** ✅ ready`);
     L.push('');
-    // 該迭代的回應：log 中 JUDGE[i] 之後、JUDGE[i+1] 之前的 WOLF_STANCE（排除發言者；每狼只取最後一筆=最終結果）
+    // 該輪次的回應：log 中 JUDGE[i] 之後、JUDGE[i+1] 之前的 WOLF_STANCE（排除發言者；每狼只取最後一筆=最終結果）
     const speakerClientId = players.find((p) => p.nickname === ev.from)?.clientId ?? '';
     const startIdx = (i < judgeIndices.length ? judgeIndices[i] : log.length) + 1;
     const endIdx = (i + 1 < judgeIndices.length ? judgeIndices[i + 1] : log.length);
