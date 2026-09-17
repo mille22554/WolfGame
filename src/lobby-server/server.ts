@@ -274,6 +274,14 @@ export async function createLobbyServer(opts: LobbyServerOptions = {}): Promise<
         }
         break;
       }
+      case 'TOGGLE_VOTE_READY': {
+        const room = rec.roomCode ? roomManager.getRoom(rec.roomCode) : undefined;
+        if (room && room.game) {
+          room.touch();
+          room.game.handleToggleVoteReady(clientId);
+        }
+        break;
+      }
       case 'WOLF_CHAT': {
         const room = rec.roomCode ? roomManager.getRoom(rec.roomCode) : undefined;
         if (room && room.game) {

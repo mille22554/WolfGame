@@ -52,6 +52,8 @@ export type ClientToServerMessage = {
     type: 'CAST_VOTE';
     targetClientId: string | null;
 } | {
+    type: 'TOGGLE_VOTE_READY';
+} | {
     type: 'END_DISCUSSION';
 } | {
     type: 'WOLF_CHAT';
@@ -128,6 +130,13 @@ export type ServerToClientMessage = {
     type: 'WOLF_READY';
     clientId: string;
     ready: boolean;
+} | {
+    type: 'DAY_READY_STATUS';
+    ready: {
+        clientId: string;
+        nickname: string;
+    }[];
+    total: number;
 } | {
     type: 'WOLF_VOTE_SPLIT';
     votes: Record<string, number>;

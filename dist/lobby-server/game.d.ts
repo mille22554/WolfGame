@@ -77,6 +77,8 @@ export interface GameState {
     nightSteps: NightStep[];
     /** mason clientId -> 是否 toggle ON（雙人都 ON 才解鎖下一步） */
     masonReady: Map<string, boolean>;
+    /** 存活玩家 clientId -> 是否 toggle「準備投票」ON（全部 ON 才進 DAY_VOTING） */
+    dayReady: Map<string, boolean>;
     /** wolf clientId -> 是否 toggle ON（全 ready 才進 VOTING） */
     wolfReady: Map<string, boolean>;
     /** 狼會議子階段（非 WOLF step 時 null） */
@@ -133,6 +135,8 @@ export declare class GameEngine {
     handleVote(clientId: string, targetClientId: string | null): void;
     /** 房主提前結束討論 */
     handleEndDiscussion(clientId: string): void;
+    /** 玩家 toggle「準備投票」（開/關）；所有存活玩家皆 ON → 推進到 DAY_VOTING */
+    handleToggleVoteReady(clientId: string): void;
     /** 人狼私頻（僅狼會議步驟可用、僅存活人狼可見）；累計訊息數，達安全上限 → 停止並報告 */
     handleWolfChat(clientId: string, text: string): void;
     /** 狼會議安全上限觸發：標記停止＋broadcast 報告（night 停在 WOLF step，由 harness 觀察 timeout 兜底） */
@@ -196,7 +200,7 @@ export declare class GameEngine {
     private sendDawnInfo;
     /** 廣播夜間結果：NIGHT_RESULT、GUARD_RESULT（私發）、PLAYER_ELIMINATED */
     private broadcastNightResult;
-    /** 投票結算：票最高者出局（平票 → 隨機）；broadcast 結果後進 DAY_RESULT 或 GAME_OVER */
+    /** 投票結算：票最高者出局（平票 → 無人出局）；broadcast 結果後進 DAY_RESULT 或 GAME_OVER */
     private resolveVotes;
     /** 村勝：存活人狼 == 0；狼勝：存活人狼 ≥ 存活村人陣營（含狂人） */
     private checkWin;

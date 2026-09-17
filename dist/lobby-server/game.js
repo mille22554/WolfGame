@@ -47,6 +47,7 @@ export class GameEngine {
             nightStep: null,
             nightSteps: [],
             masonReady: new Map(),
+            dayReady: new Map(),
             wolfReady: new Map(),
             wolfSubphase: null,
             wolfVotes: new Map(),
@@ -198,6 +199,29 @@ export class GameEngine {
         if (hostId !== undefined && hostId !== clientId)
             return; // 只有房主可提前結束
         this.transitionTo('DAY_VOTING');
+    }
+    /** 玩家 toggle「準備投票」（開/關）；所有存活玩家皆 ON → 推進到 DAY_VOTING */
+    handleToggleVoteReady(clientId) {
+        if (this.state.phase !== 'DAY_DISCUSSION')
+            return;
+        const player = this.getPlayerByClientId(clientId);
+        if (!player || !player.alive)
+            return;
+        const ready = !(this.state.dayReady.get(clientId) ?? false);
+        this.state.dayReady.set(clientId, ready);
+        const alivePlayers = this.getAlivePlayers();
+        const readyList = alivePlayers
+            .filter((p) => this.state.dayReady.get(p.clientId) === true)
+            .map((p) => ({ clientId: p.clientId, nickname: p.nickname }));
+        this.callbacks.broadcast({
+            type: 'DAY_READY_STATUS',
+            ready: readyList,
+            total: alivePlayers.length,
+        });
+        // 所有存活玩家皆已 toggle ON → 推進
+        if (alivePlayers.every((p) => this.state.dayReady.get(p.clientId) === true)) {
+            this.transitionTo('DAY_VOTING');
+        }
     }
     /** 人狼私頻（僅狼會議步驟可用、僅存活人狼可見）；累計訊息數，達安全上限 → 停止並報告 */
     handleWolfChat(clientId, text) {
@@ -364,8 +388,16 @@ export class GameEngine {
                 }, 10_000);
                 break;
             case 'DAY_DISCUSSION':
-                this.startCountdown(120);
-                this.schedule(() => this.transitionTo('DAY_VOTING'), 120_000);
+                // 初始化所有存活玩家的 dayReady 為 false
+                this.state.dayReady = new Map();
+                for (const p of this.getAlivePlayers()) {
+                    this.state.dayReady.set(p.clientId, false);
+                }
+                this.callbacks.broadcast({
+                    type: 'DAY_READY_STATUS',
+                    ready: [],
+                    total: this.getAlivePlayers().length,
+                });
                 break;
             case 'DAY_VOTING':
                 this.state.votes = [];
@@ -623,7 +655,7 @@ export class GameEngine {
             });
         }
     }
-    /** 投票結算：票最高者出局（平票 → 隨機）；broadcast 結果後進 DAY_RESULT 或 GAME_OVER */
+    /** 投票結算：票最高者出局（平票 → 無人出局）；broadcast 結果後進 DAY_RESULT 或 GAME_OVER */
     resolveVotes() {
         if (this.state.phase !== 'DAY_VOTING')
             return; // 已提前結算過
@@ -647,8 +679,11 @@ export class GameEngine {
                 if (c === maxCount)
                     leaders.push(id);
             tie = leaders.length > 1;
-            const chosen = leaders[Math.floor(Math.random() * leaders.length)];
-            eliminated = this.getPlayerByClientId(chosen) ?? null;
+            if (!tie) {
+                const chosen = leaders[0];
+                eliminated = this.getPlayerByClientId(chosen) ?? null;
+            }
+            // tie → eliminated stays null (無人出局)
         }
         if (eliminated) {
             eliminated.alive = false;
