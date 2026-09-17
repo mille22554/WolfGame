@@ -18,7 +18,6 @@ export interface ChatMessage {
 
 export interface ChatOptions {
   temperature?: number;
-  maxTokens?: number;
   timeoutMs?: number;
 }
 
@@ -27,7 +26,7 @@ export interface ChatOptions {
  * 失敗回 null。
  */
 export async function chat(messages: ChatMessage[], options: ChatOptions = {}): Promise<string | null> {
-  const { temperature = 1.0, maxTokens, timeoutMs = LLM_TIMEOUT_MS } = options;
+  const { temperature = 1.0, timeoutMs = LLM_TIMEOUT_MS } = options;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -38,9 +37,6 @@ export async function chat(messages: ChatMessage[], options: ChatOptions = {}): 
       messages,
       temperature,
     };
-    if (maxTokens && maxTokens > 0) {
-      body.max_tokens = maxTokens;
-    }
 
     const res = await fetch(`http://${SGLANG_HOST}:${SGLANG_PORT}/v1/chat/completions`, {
       method: 'POST',

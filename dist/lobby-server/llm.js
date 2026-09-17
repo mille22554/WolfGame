@@ -14,7 +14,7 @@ const LLM_TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS ?? '60000');
  * 失敗回 null。
  */
 export async function chat(messages, options = {}) {
-    const { temperature = 1.0, maxTokens, timeoutMs = LLM_TIMEOUT_MS } = options;
+    const { temperature = 1.0, timeoutMs = LLM_TIMEOUT_MS } = options;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -23,9 +23,6 @@ export async function chat(messages, options = {}) {
             messages,
             temperature,
         };
-        if (maxTokens && maxTokens > 0) {
-            body.max_tokens = maxTokens;
-        }
         const res = await fetch(`http://${SGLANG_HOST}:${SGLANG_PORT}/v1/chat/completions`, {
             method: 'POST',
             headers: {
