@@ -445,7 +445,7 @@ export class AiController {
         } else if (resp.type === 'speak') {
           newDrafts.push({ mason: m, speech: resp.speech, stance: resp.stance });
           this.masonStanceMap.set(m.clientId, resp.stance);
-          if (resp.stance !== '準備好了' && this.isMasonReady(m.clientId)) this.game.handleToggleMasonEndTurn(m.clientId); // 撤回 ready
+          if (this.isMasonReady(m.clientId)) this.game.handleToggleMasonEndTurn(m.clientId); // 發言＝還沒結束，撤回 ready 讓對方有機會回應
         }
         // 'wait' → 不出草稿，維持等待
       }
