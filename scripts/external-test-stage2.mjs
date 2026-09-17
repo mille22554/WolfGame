@@ -27,7 +27,7 @@ const POLL_INTERVAL_MS = 500;
 const defs = CHARACTERS.map(([characterId, nickname], i) => ({ clientId: `ai-${i}`, nickname, characterId }));
 
 // --- 2) AI 控制器 + 遊戲引擎（engine callback 接進 AI 控制器） ---
-const ai = new AiController(defs);
+const ai = new AiController(defs, { messageCap: 100 });
 const events = []; // 所有 S→C 訊息（報告用：WOLF_SPEECH_SELECTED / WOLF_READY / WOLF_MESSAGE ...）
 
 const game = new GameEngine('STAGE2', defs.map((d) => ({ clientId: d.clientId, nickname: d.nickname })), {
@@ -38,7 +38,7 @@ const game = new GameEngine('STAGE2', defs.map((d) => ({ clientId: d.clientId, n
   },
   onNightStepActive: (step, players) => ai.onNightStepActive(step, players),
   onWolfSubphaseChange: (sub, round) => ai.onWolfSubphaseChange(sub, round),
-});
+}, 100);
 ai.setGame(game);
 
 // --- 3) 開始遊戲 ---

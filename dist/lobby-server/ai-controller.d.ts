@@ -57,8 +57,10 @@ export declare class AiController {
     private masonReadyMap;
     /** mason clientId -> 當前 stance（"準備好了" / "資訊不足"） */
     private masonStanceMap;
+    private readonly messageCap;
     constructor(defs: AiPlayerDef[], opts?: {
         llmTimeoutMs?: number;
+        messageCap?: number;
     });
     /** 建立後由 harness 設定遊戲引擎 */
     setGame(game: GameEngine): void;

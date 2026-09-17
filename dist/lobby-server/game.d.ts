@@ -110,13 +110,14 @@ export declare class GameEngine {
     private roomCode;
     private players;
     private callbacks;
+    private wolfMessageCap;
     private state;
     private timers;
     private countdownInterval?;
     constructor(roomCode: string, players: {
         clientId: string;
         nickname: string;
-    }[], callbacks: GameCallbacks);
+    }[], callbacks: GameCallbacks, wolfMessageCap?: number);
     /** 開始遊戲：分配角色、私發 ROLE_REVEALED、進入 phase 循環 */
     start(): void;
     /** 處理夜間行動提交（依序解鎖：各行動只在對應 nightStep 時受理） */

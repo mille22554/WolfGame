@@ -104,8 +104,10 @@ export class AiController {
   /** mason clientId -> 當前 stance（"準備好了" / "資訊不足"） */
   private masonStanceMap = new Map<string, string>();
 
-  constructor(defs: AiPlayerDef[], opts?: { llmTimeoutMs?: number }) {
+  private readonly messageCap: number;
+  constructor(defs: AiPlayerDef[], opts?: { llmTimeoutMs?: number; messageCap?: number }) {
     this.llmTimeoutMs = opts?.llmTimeoutMs ?? 60000;
+    this.messageCap = opts?.messageCap ?? 0; // 0 = 無上限（正式）；>0 = 測試用安全上限
     for (const def of defs) {
       this.entries.set(def.clientId, {
         def,
@@ -418,7 +420,7 @@ export class AiController {
     let guard = 0;
     while (this.game.getNightState().nightStep === 'MASON' && !this.destroyed) {
       if (++guard > 150) break;
-      if (this.masonBoard.length >= MASON_MESSAGE_CAP) break; // 安全上限：停止討論
+      if (this.messageCap > 0 && this.masonBoard.length >= this.messageCap) break; // 安全上限（僅測試）：停止討論
 
       // ② Judge 盲選一篇 → 發布 speech 到白板
       const selected = this.judgePickMasonDraft(drafts);

@@ -21,18 +21,20 @@
  * - NIGHT 不限時：等待所有夜間步驟完成才結算（無 timeout 截斷）
  */
 import { Role, Team, ROLE_CONFIG, ROLE_TEAM, getDisplayName, getDescription, seerSeesAs } from '../types.js';
-import { MAX_MESSAGE_LEN, WOLF_MESSAGE_CAP } from './types.js';
+import { MAX_MESSAGE_LEN } from './types.js';
 export class GameEngine {
     roomCode;
     players;
     callbacks;
+    wolfMessageCap;
     state;
     timers = [];
     countdownInterval;
-    constructor(roomCode, players, callbacks) {
+    constructor(roomCode, players, callbacks, wolfMessageCap = 0) {
         this.roomCode = roomCode;
         this.players = players;
         this.callbacks = callbacks;
+        this.wolfMessageCap = wolfMessageCap;
         this.state = {
             phase: 'ROLE_REVEAL',
             day: 1,
@@ -211,8 +213,8 @@ export class GameEngine {
             return;
         this.state.wolfMessageCount += 1;
         this.callbacks.broadcast({ type: 'WOLF_MESSAGE', from: player.nickname, text: clean, ts: Date.now() }, this.getAliveWolves().map((p) => p.clientId));
-        // 安全上限（測試用）：累計 100 則未收斂 → 立即停止並報告（不自動收斂、不強制決選）
-        if (this.state.wolfMessageCount >= WOLF_MESSAGE_CAP)
+        // 安全上限（僅測試用；wolfMessageCap > 0 時啟用）
+        if (this.wolfMessageCap > 0 && this.state.wolfMessageCount >= this.wolfMessageCap)
             this.abortWolfMeeting();
     }
     /** 狼會議安全上限觸發：標記停止＋broadcast 報告（night 停在 WOLF step，由 harness 觀察 timeout 兜底） */

@@ -125,6 +125,7 @@ export class GameEngine {
     private roomCode: string,
     private players: { clientId: string; nickname: string }[],
     private callbacks: GameCallbacks,
+    private wolfMessageCap: number = 0, // 0 = 無上限（正式）；>0 = 測試用安全上限
   ) {
     this.state = {
       phase: 'ROLE_REVEAL',
@@ -282,8 +283,8 @@ export class GameEngine {
       { type: 'WOLF_MESSAGE', from: player.nickname, text: clean, ts: Date.now() },
       this.getAliveWolves().map((p) => p.clientId),
     );
-    // 安全上限（測試用）：累計 100 則未收斂 → 立即停止並報告（不自動收斂、不強制決選）
-    if (this.state.wolfMessageCount >= WOLF_MESSAGE_CAP) this.abortWolfMeeting();
+    // 安全上限（僅測試用；wolfMessageCap > 0 時啟用）
+    if (this.wolfMessageCap > 0 && this.state.wolfMessageCount >= this.wolfMessageCap) this.abortWolfMeeting();
   }
 
   /** 狼會議安全上限觸發：標記停止＋broadcast 報告（night 停在 WOLF step，由 harness 觀察 timeout 兜底） */
