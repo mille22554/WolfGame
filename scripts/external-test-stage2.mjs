@@ -134,7 +134,7 @@ function wolfMeetingFlowSection(log, events, players) {
     const tEnd = (i + 1 < selectedEvents.length ? selectedEvents[i + 1].ts : Infinity);
     const lastByWolf = new Map();
     for (const entry of log) {
-      if (entry.kind === 'WOLF_STANCE' && entry.clientId !== '' && entry.clientId !== speakerClientId && entry.ts >= tStart && entry.ts < tEnd) {
+      if (entry.kind === 'WOLF_STANCE' && entry.clientId !== '' && entry.clientId !== speakerClientId && entry.ts >= tStart && entry.ts <= tEnd) {
         lastByWolf.set(entry.clientId, entry); // 後面的覆蓋前面的 → 保留最後一筆
       }
     }
