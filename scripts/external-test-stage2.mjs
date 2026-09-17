@@ -306,7 +306,8 @@ function buildReport(game, ai, events, defs, converged, aborted) {
     else if (e.type === 'NIGHT_RESULT') L.push(`- [${fmtTs(e.ts)}] NIGHT_RESULT peaceful=${e.peacefulNight} deaths=${JSON.stringify(e.deaths)}`);
     else if (e.type === 'WOLF_SPEECH_SELECTED') L.push(`- [${fmtTs(e.ts)}] WOLF_SPEECH_SELECTED round=${e.round} from=${e.from} text=「${e.text}」`);
     else if (e.type === 'WOLF_MEETING_ABORTED') L.push(`- [${fmtTs(e.ts)}] WOLF_MEETING_ABORTED count=${e.count} reason=${e.reason}`);
-    else if (e.type === 'WOLF_MESSAGE' || e.type === 'WOLF_READY' || e.type === 'MASON_READY' || e.type === 'WOLF_VOTE_SPLIT') {
+    else if (e.type === 'MASON_SPEECH_SELECTED') L.push(`- [${fmtTs(e.ts)}] MASON_SPEECH_SELECTED round=${e.round} from=${e.from} text=「${e.text}」`);
+    else if (e.type === 'WOLF_MESSAGE' || e.type === 'MASON_MESSAGE' || e.type === 'WOLF_READY' || e.type === 'MASON_READY' || e.type === 'WOLF_VOTE_SPLIT') {
       L.push(`- [${fmtTs(e.ts)}] ${e.type} ${JSON.stringify(e)}`);
     }
   }
