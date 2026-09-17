@@ -133,7 +133,7 @@ function wolfMeetingFlowSection(log, events, players) {
     // 該迭代的回應（WOLF_STANCE 中，ts 在該 WOLF_SPEECH_SELECTED 之後、下一個之前的；排除發言者）
     const speakerClientId = players.find((p) => p.nickname === ev.from)?.clientId ?? '';
     const nextEvTs = i + 1 < selectedEvents.length ? selectedEvents[i + 1].ts : Infinity;
-    const responses = stances.filter((s) => s.ts >= ev.ts && s.ts < nextEvTs && s.clientId !== '' && s.clientId !== speakerClientId);
+    const responses = stances.filter((s) => s.ts >= ev.ts - 1000 && s.ts <= nextEvTs + 1000 && s.clientId !== '' && s.clientId !== speakerClientId);
     if (responses.length > 0) {
       L.push('- **其他狼回應：**');
       for (const r of responses) {
