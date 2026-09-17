@@ -149,6 +149,7 @@ export declare class AiController {
     /** 占い／守衛：LLM 選目標 → 提交夜間行動（失敗重試；最終失敗跳過、不阻塞） */
     private runTargetAction;
     /** 所有 AI 獨立出草稿（平行 LLM 呼叫） */
+    /** 隨機選一個 AI 出草稿（避免 15 個平行 LLM 呼叫塞爆 SGLang；一次一個比較自然） */
     private generateDayDrafts;
     /** Judge 盲選一篇白天草稿（隨機選） */
     private judgePickDayDraft;

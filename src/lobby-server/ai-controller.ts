@@ -1052,17 +1052,17 @@ export class AiController {
   }
 
   /** 所有 AI 獨立出草稿（平行 LLM 呼叫） */
+  /** 隨機選一個 AI 出草稿（避免 15 個平行 LLM 呼叫塞爆 SGLang；一次一個比較自然） */
   private async generateDayDrafts(players: GamePlayer[]): Promise<DayDraft[]> {
-    const results = await Promise.all(players.map(async (p) => {
-      const entry = this.entries.get(p.clientId);
-      if (!entry) return null;
-      const prompts = this.buildDayDraftPrompts(entry);
-      const result = await this.llmWithRetry(p.clientId, 'WOLF_SPEECH', this.day, prompts, (p2) =>
-        typeof p2.speech === 'string' && p2.speech.trim() && typeof p2.stance === 'string' ? 'ok' : null);
-      if (result.value === null) return null;
-      return { player: p, speech: (result.parsed!.speech as string).trim(), stance: (result.parsed!.stance as string).trim() };
-    }));
-    return results.filter((r): r is DayDraft => r !== null);
+    if (players.length === 0) return [];
+    const p = players[Math.floor(Math.random() * players.length)];
+    const entry = this.entries.get(p.clientId);
+    if (!entry) return [];
+    const prompts = this.buildDayDraftPrompts(entry);
+    const result = await this.llmWithRetry(p.clientId, 'WOLF_SPEECH', this.day, prompts, (p2) =>
+      typeof p2.speech === 'string' && p2.speech.trim() && typeof p2.stance === 'string' ? 'ok' : null);
+    if (result.value === null) return [];
+    return [{ player: p, speech: (result.parsed!.speech as string).trim(), stance: (result.parsed!.stance as string).trim() }];
   }
 
   /** Judge 盲選一篇白天草稿（隨機選） */
