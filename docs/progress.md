@@ -5,14 +5,37 @@
 
 ## 目前狀態
 
-**卡在哪：** 白天（DAY_DISCUSSION）尚未驗證。Night 已通過（`--stop-at NIGHT_RESULT` ✅）。下一步是用 `--resume` 從存檔接白天，確認 AI 討論/投票/toggle 正常。
+**卡在哪：** 白天（DAY_DISCUSSION）外部測試進行中。已確認：
+- ✅ MESSAGE 有出現（裕子、良子有發言）
+- ✅ ready 有增有減（toggle ON/OFF 正常，非 sticky）
+- ⏳ 尚未完成（14 人全 ready → DAY_VOTING → 投票 → DAY_RESULT）
+
+**已修（本 session）：**
+- 移除 DAY_VOTING 60s timeout（spec：不限時，等全員投票）
+- 移除 harness NIGHT 300s timeout（全階段不限時）
+- 移除 spec 中 2 處 token 上限（≤100 token）
+- 修正 spec DAY_DISCUSSION 描述（120s 定時器→不限時 toggle）
+- harness 每 10 分鐘輸出進度（ready/votes/wolfRound）
+- harness 實時討論 log（`/tmp/day-discussion.log`，tail -f 可看）
+- fix：discussion log 抓 `MESSAGE`（非 `DAY_MESSAGE`）
 
 **下一步（依序）：**
-1. Server 上跑 `--stop-at NIGHT_RESULT --save-state /tmp/night1.json`（~3 min）
-2. Server 上跑 `--resume /tmp/night1.json --stop-at DAY_RESULT`（≤10 min，跳過 night）
-3. 取回報告確認：AI 有發言（MESSAGE）、有 toggle（DAY_READY_STATUS）、有投票（VOTE_RESULT）
-4. 若 day 有 bug → 修 → 重跑 step 2（不用重跑 night）
+1. Server 上重跑 `--resume /tmp/night1.json --stop-at DAY_RESULT`（不限時，可能 30-60 min）
+2. 用 `tail -f /tmp/day-discussion.log` 觀察討論過程
+3. 確認：AI 有發言（MESSAGE）、有 toggle 增減（DAY_READY_STATUS）、有投票（VOTE_RESULT）
+4. 若 day 有 bug → 修 → 重跑（不用重跑 night）
 5. 全部通過 → Step 5（AI 接 production server）
+
+**Server 上跑測試的正確方式：**
+```bash
+# 先 kill 舊 process
+ssh ssh.morowin.win "pkill -f external-test-stage2"
+# 用 nohup + disown 跑（SSH 斷線不會 kill）
+ssh ssh.morowin.win "bash -c 'cd /opt/wolfgame && SGLANG_API_KEY=<REDACTED> node scripts/external-test-stage2.mjs --resume /tmp/night1.json --stop-at DAY_RESULT --report /tmp/day-test-report.md > /tmp/day-test.log 2>&1 & disown; echo ok'"
+# 觀察
+ssh ssh.morowin.win "tail -20 /tmp/day-discussion.log"
+ssh ssh.morowin.win "cat /tmp/day-test.log"
+```
 
 ## 已完成
 
@@ -29,10 +52,18 @@
 | NIGHT timeout 調高 | `4dbf085` | 120s→300s（LLM 慢時 120s 不夠） |
 | 存檔/恢復機制 | `1867954` | `GameEngine.saveState()`/`restoreState()` + 測試腳本 `--save-state`/`--resume` |
 | NIGHT 驗證通過 | — | `--stop-at NIGHT_RESULT` ✅（狼刀健太，3 則白板，round 1） |
+| 移除 DAY_VOTING 60s timeout | `4602ec3` | spec：不限時，等全員投票（handleVote 內檢查） |
+| harness 全階段不限時 | `742b9e4` | NIGHT=0, DAY=0（無 timeout 截斷） |
+| spec 清理 token 上限 | `4602ec3` | 移除 §13.4/§13.6 的「≤100 token」 |
+| harness 10 分鐘進度輸出 | `50218d0` | ready/votes/wolfRound 定期 log |
+| harness 實時討論 log | `506ddd8` | `/tmp/day-discussion.log`（MESSAGE + READY） |
+| fix: log 抓 MESSAGE | `d25ee5d` | sendDayMessage broadcast type 是 MESSAGE 非 DAY_MESSAGE |
 
 ## 待做
 
-1. **[HIGH] 外部測試驗證白天** → `--resume /tmp/night1.json --stop-at DAY_RESULT`
+1. **[HIGH] 外部測試驗證白天（進行中）** → `--resume /tmp/night1.json --stop-at DAY_RESULT`（不限時）
+   - 已確認 MESSAGE 有出現、ready 有增有減
+   - 尚未完成：等 14 人全 ready → 投票 → DAY_RESULT
 2. **[MED] Step 5：AI 接 production server** → `server.ts` 實例化 `AiController`
 3. **[LOW] 前端（ubuntu-web/）** → 等外部測試跑通完整一局再開
 
@@ -52,7 +83,7 @@ node scripts/external-test-stage2.mjs --stop-at DAY_RESULT
 node scripts/external-test-stage2.mjs --stop-at GAME_OVER
 ```
 
-各階段 timeout：NIGHT=300s、DAY=600s。超時會明確報錯是哪個階段。
+各階段 timeout：NIGHT=0（不限時）、DAY=0（不限時）。無 timeout 截斷，等到收斂或 process 被 kill。
 
 ## 關鍵檔案
 
