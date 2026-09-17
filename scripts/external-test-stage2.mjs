@@ -128,17 +128,12 @@ function wolfMeetingFlowSection(log, events, players) {
     L.push(`### 迭代 ${i + 1}`);
     L.push('');
     L.push(`- **Judge 選出：** ${ev.from} → 發布「${ev.text}」`);
-    // 該發言者的 stance（從 WOLF_READY 事件或 JUDGE parsed 推斷）
-    const judge = judges[i];
-    if (judge?.parsed?.stance) {
-      L.push(`- **${ev.from} stance：** ${judge.parsed.stance} → ✅ ready`);
-    } else {
-      L.push(`- **${ev.from}：** ✅ ready（stance: 投${ev.from === '鈴' ? '太助' : '?'}）`);
-    }
+    L.push(`- **${ev.from}：** ✅ ready`);
     L.push('');
-    // 該迭代的回應（WOLF_STANCE 中，ts 在該 WOLF_SPEECH_SELECTED 之後、下一個之前的）
+    // 該迭代的回應（WOLF_STANCE 中，ts 在該 WOLF_SPEECH_SELECTED 之後、下一個之前的；排除發言者）
+    const speakerClientId = players.find((p) => p.nickname === ev.from)?.clientId ?? '';
     const nextEvTs = i + 1 < selectedEvents.length ? selectedEvents[i + 1].ts : Infinity;
-    const responses = stances.filter((s) => s.ts >= ev.ts && s.ts < nextEvTs && s.clientId !== '');
+    const responses = stances.filter((s) => s.ts >= ev.ts && s.ts < nextEvTs && s.clientId !== '' && s.clientId !== speakerClientId);
     if (responses.length > 0) {
       L.push('- **其他狼回應：**');
       for (const r of responses) {
