@@ -212,7 +212,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | `ROLE_REVEAL` | 各玩家看到自己的角色（私發）；人狼互見、共有者互見 | 10 秒（固定） |
 | `NIGHT` | 收集夜間行動：人狼刀人、占い師查人、守衛護人 | 所有有行動的玩家皆已提交 |
 | `NIGHT_RESULT` | 公布昨晚結果（死者/平安夜）；霊能者收到黎明資訊 | 10 秒（固定） |
-| `DAY_DISCUSSION` | 全存活玩家自由發言（复用 lobby chat） | 所有存活玩家 toggle「準備投票」ON |
+| `DAY_DISCUSSION` | 全存活玩家自由發言（复用 lobby chat） | 所有存活玩家 toggle「準備投票」ON（**目標態**；目前引擎用 120s 定時器） |
 | `DAY_VOTING` | 全存活玩家投票（含棄票） | 所有存活玩家皆已投票 |
 | `DAY_RESULT` | 公布投票結果（死者身分不公開）；霊能者得知票死者身分 | 10 秒（固定） |
 | `GAME_OVER` | 公布所有角色、勝負結果 | 永久（直到房間解散/重開） |
@@ -253,7 +253,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 
 **狼會議流程**（step 3 的內部流程，連續對話制）：
 
-狼會議是一場**持續的對話 loop**（沒有「輪次/round」概念）。議題包含兩項：**刀人目標**（刀誰）＋**明天白天的行動方針**（誰裝白、誰攻擊、誰安靜）。兩項議題在同一場對話中自然帶出，不分開成兩個階段。每隻狼的草稿包含 `speech`（要說的話）+ `stance`（「投XXX」或「資訊不足」），狼自己宣告自己的狀態。
+狼會議是一場**持續的對話 loop**。平票時 round+1 重新討論（非平票不增）。議題包含兩項：**刀人目標**（刀誰）＋**明天白天的行動方針**（誰裝白、誰攻擊、誰安靜）。兩項議題在同一場對話中自然帶出，不分開成兩個階段。每隻狼的草稿包含 `speech`（要說的話）+ `stance`（「投XXX」或「資訊不足」），狼自己宣告自己的狀態。
 
 **草稿格式：**
 ```json
@@ -339,7 +339,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 
 - 复用 lobby 的 `SEND_MESSAGE` / `MESSAGE`（公頻）
 - **無私頻**：WOLF_CHAT / MASON_CHAT 僅 NIGHT 可用，白天只有公頻
-- 結束方式：所有存活玩家 toggle「準備投票」ON → 進入投票（同狼會議模式，可隨時 toggle 開/關）
+- 結束方式：所有存活玩家 toggle「準備投票」ON → 進入投票（同狼會議模式，可隨時 toggle 開/關）（**目標態**；目前引擎用 120s 定時器）
 - 已死亡玩家不能發言
 
 ### 12.5 投票（DAY_VOTING）
@@ -347,7 +347,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 - 全存活玩家各投 1 票：`CAST_VOTE { targetId }` 或 `CAST_VOTE { targetId: null }`（棄票）
 - 不可投自己
 - 等待所有存活玩家皆已投票（含棄票）→ 立即結算
-- 結算：票最高者出局；**平票→無人出局**（不隨機）
+- 結算：票最高者出局；**平票→無人出局**（不隨機）（**目標態**；目前引擎平票 random 淘汰一人）
 - 被票死者身分不公開（僅霊能者得知）
 
 ### 12.6 勝利判定
@@ -380,11 +380,11 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | C→S | `MASON_CHAT` | `{ text }` | 共有者私頻發言 |
 | S→C | `PHASE_CHANGED` | `{ phase, day }` | phase 切換通知（broadcast 全房） |
 | S→C | `NIGHT_STEP_CHANGED` | `{ step: 'guard'\|'mason'\|'wolf'\|'seer' }` | NIGHT 內部子步驟切換（broadcast） |
-| S→C | `MASON_END_TURN_STATUS` | `{ ended: [{ id, nickname }] }` | 哪些共有者已 toggle ON（僅發給共有者） |
-| S→C | `WOLF_READY_STATUS` | `{ ready: [{ id, nickname }], voting: bool }` | 哪些狼已準備投票 + 是否進入投票環節（僅發給狼） |
+| S→C | `MASON_END_TURN_STATUS` | `{ ended: [{ id, nickname }] }` | 哪些共有者已 toggle ON（僅發給共有者）（**待實作**；目前用個別 `MASON_READY` 事件） |
+| S→C | `WOLF_READY_STATUS` | `{ ready: [{ id, nickname }], voting: bool }` | 哪些狼已準備投票 + 是否進入投票環節（僅發給狼）（**待實作**；目前用個別 `WOLF_READY` 事件） |
 | S→C | `WOLF_VOTE_SPLIT` | `{ votes: Record<number, number> }` | 狼投票平票→回討論（僅發給狼） |
 | S→C | `WOLF_SPEECH_SELECTED` | `{ round, from, text }` | judge 選出的代表發言（狀態 0.5；僅發給狼，其他狼讀完表態） |
-| S→C | `DAY_READY_STATUS` | `{ ready: [{ id, nickname }], total: number }` | 哪些玩家已準備投票（broadcast 存活玩家） |
+| S→C | `DAY_READY_STATUS` | `{ ready: [{ id, nickname }], total: number }` | 哪些玩家已準備投票（broadcast 存活玩家）（**待實作**） |
 | S→C | `ROLE_REVEALED` | `{ role, displayName, description, partners? }` | 私發各玩家自己的角色 |
 | S→C | `NIGHT_RESULT` | `{ peacefulNight: bool, deaths: [{ id, nickname }] }` | 夜間結果（broadcast） |
 | S→C | `SEER_RESULT` | `{ targetId, nickname, result: 'villager'\|'werewolf' }` | 私發占い師 |
@@ -521,7 +521,7 @@ User（夜間行動）:
 
 ### 13.6 AI 排程（沿用 main 分支 SpeechScheduler 管線）
 
-#### 白天討論發言（SpeechScheduler 管線）
+#### 白天討論發言（SpeechScheduler 管線）（**待實作**；目前引擎用 120s 定時器推進，無 AI 發言排程）
 
 ```
 IDLE →（60s 無訊息 或 全真人跳過）→ PRE_SPEECH → JUDGE → SELECT → EXPAND → BROADCAST → IDLE
