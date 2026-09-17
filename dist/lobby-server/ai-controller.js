@@ -47,6 +47,10 @@ export class AiController {
     masonReadyMap = new Map();
     /** mason clientId -> 當前 stance（"準備好了" / "資訊不足"） */
     masonStanceMap = new Map();
+    /** 白天公頻訊息（本天；AI 知識用） */
+    dayBoard = [];
+    /** AI clientId -> 是否 toggle 準備投票 ON */
+    dayReadyMap = new Map();
     messageCap;
     constructor(defs, opts) {
         this.llmTimeoutMs = opts?.llmTimeoutMs ?? 60000;
@@ -171,6 +175,14 @@ export class AiController {
                 this.masonReadyMap.clear();
                 this.masonStanceMap.clear();
             }
+            if (m.phase === 'DAY_DISCUSSION') {
+                this.dayBoard = [];
+                this.dayReadyMap.clear();
+                void this.runDayDiscussion();
+            }
+            if (m.phase === 'DAY_VOTING') {
+                void this.runDayVoting();
+            }
             return;
         }
         if (m.type === 'NIGHT_RESULT')
@@ -191,7 +203,13 @@ export class AiController {
         if (m.type === 'MASON_MESSAGE') {
             this.masonBoard.push({ from: String(m.from ?? ''), text: String(m.text ?? '') });
         }
-        if (m.type !== 'WOLF_MESSAGE' && m.type !== 'MASON_MESSAGE')
+        if (m.type === 'MESSAGE') {
+            this.dayBoard.push({ from: String(m.from ?? ''), text: String(m.text ?? '') });
+            if (this.dayBoard.length > 50)
+                this.dayBoard.shift();
+            return;
+        }
+        if (m.type !== 'WOLF_MESSAGE' && m.type !== 'MASON_MESSAGE' && m.type !== 'MESSAGE')
             return;
         for (const [clientId, entry] of this.entries) {
             if (targetClientIds && !targetClientIds.includes(clientId))
@@ -483,6 +501,109 @@ export class AiController {
             return { type: 'speak', speech: p.speech.trim(), stance: p.stance.trim() };
         return { type: 'wait' };
     }
+    // --- 白天討論（SpeechScheduler 簡化版：AI 輪流發言 → 全 toggle ON → 結束） ---
+    /** 白天討論：AI 輪流發言（judge 盲選），收斂（全 AI toggle ON）後結束 */
+    async runDayDiscussion() {
+        const aiPlayers = this.getAiAlivePlayers();
+        if (aiPlayers.length === 0 || !this.game)
+            return;
+        // ① 所有 AI 各自獨立出草稿
+        let drafts = await this.generateDayDrafts(aiPlayers);
+        if (drafts.length === 0) {
+            // 全部 LLM 失敗：強制 toggle ON，避免卡死
+            for (const p of aiPlayers)
+                this.game.handleToggleVoteReady(p.clientId);
+            return;
+        }
+        // Loop：② judge 盲選發布 → ③ 其他 AI 回應 → ④ 收斂判斷
+        let guard = 0;
+        while (this.phase === 'DAY_DISCUSSION' && !this.destroyed) {
+            if (++guard > 50)
+                break; // 安全上限
+            // ② Judge 盲選一篇 → 該 AI 發言（公頻）
+            const selected = this.judgePickDayDraft(drafts);
+            if (!selected)
+                break;
+            this.game.sendDayMessage(selected.player.clientId, selected.speech);
+            // 發言者 stance 是「準備好了」→ toggle ON
+            this.dayReadyMap.set(selected.player.clientId, true);
+            this.game.handleToggleVoteReady(selected.player.clientId);
+            // ③ 除發言者外所有 AI 讀白板 → 各自回應
+            const newDrafts = [];
+            for (const p of aiPlayers) {
+                if (this.destroyed)
+                    return;
+                if (p.clientId === selected.player.clientId)
+                    continue;
+                const entry = this.entries.get(p.clientId);
+                if (!entry)
+                    continue;
+                const resp = await this.dayRespond(p, entry, selected.speech);
+                if (resp.type === 'ready') {
+                    this.dayReadyMap.set(p.clientId, true);
+                    this.game.handleToggleVoteReady(p.clientId);
+                }
+                else if (resp.type === 'speak') {
+                    newDrafts.push({ player: p, speech: resp.speech, stance: resp.stance });
+                    // 發言＝還沒結束，撤回 ready
+                    if (this.dayReadyMap.get(p.clientId)) {
+                        this.dayReadyMap.set(p.clientId, false);
+                        this.game.handleToggleVoteReady(p.clientId);
+                    }
+                }
+                // 'wait' → 不出草稿，維持等待
+            }
+            // ④ 收斂判斷：全部 AI ready
+            if (aiPlayers.every((p) => this.dayReadyMap.get(p.clientId)))
+                break;
+            if (newDrafts.length > 0) {
+                drafts = newDrafts;
+            }
+            else {
+                // 沒人出新草稿、但有 AI 還沒 ready → 強制那些 AI 發言
+                const waiting = aiPlayers.filter((p) => !this.dayReadyMap.get(p.clientId));
+                if (waiting.length === 0)
+                    break;
+                drafts = await this.generateDayDrafts(waiting);
+                if (drafts.length === 0)
+                    break;
+            }
+        }
+        // 討論結束：確保所有 AI toggle ON
+        for (const p of aiPlayers) {
+            if (!this.dayReadyMap.get(p.clientId)) {
+                this.dayReadyMap.set(p.clientId, true);
+                this.game.handleToggleVoteReady(p.clientId);
+            }
+        }
+    }
+    /** 白天投票：每個 AI 玩家 LLM 決定投誰（或棄票）→ 提交 CAST_VOTE */
+    async runDayVoting() {
+        const aiPlayers = this.getAiAlivePlayers();
+        for (const p of aiPlayers) {
+            if (this.destroyed || !this.game)
+                return;
+            const entry = this.entries.get(p.clientId);
+            if (!entry)
+                continue;
+            const prompts = this.buildDayVotePrompts(entry);
+            const extract = (parsed) => {
+                const target = parsed.target;
+                if (target === null || target === undefined || target === '')
+                    return 'ABSTAIN';
+                return this.resolveClientId(String(target), (p2) => p2.clientId !== p.clientId);
+            };
+            const result = await this.llmWithRetry(p.clientId, 'WOLF_KILL', this.day, prompts, extract);
+            if (result.value !== null) {
+                if (result.value === 'ABSTAIN') {
+                    this.game.handleVote(p.clientId, null); // 棄票
+                }
+                else {
+                    this.game.handleVote(p.clientId, result.value);
+                }
+            }
+        }
+    }
     // --- Private methods ---
     logEntry(clientId, kind, round, attempt, prompts, response, parsed) {
         const entry = this.entries.get(clientId);
@@ -549,6 +670,9 @@ export class AiController {
     }
     getAiMasons() {
         return (this.game?.getPlayers() ?? []).filter((p) => p.role === Role.MASON && p.alive && this.isAi(p.clientId));
+    }
+    getAiAlivePlayers() {
+        return (this.game?.getPlayers() ?? []).filter((p) => p.alive && this.isAi(p.clientId));
     }
     isWolfReady(clientId) {
         return this.wolfReadyMap.get(clientId) === true;
@@ -724,6 +848,62 @@ export class AiController {
             { role: 'user', content: user },
         ];
     }
+    /** 白天討論草稿 prompt；輸出 {"speech":"...", "stance":"準備好了"|"資訊不足"} */
+    buildDayDraftPrompts(entry) {
+        const k = entry.knowledge;
+        const aliveList = (this.game?.getPlayers() ?? []).filter((p) => p.alive).map((p) => p.nickname).join('、');
+        const boardText = this.dayBoard.length
+            ? this.dayBoard.map((m) => `${m.from}：「${m.text}」`).join('\n')
+            : '目前沒有人發過言。';
+        const user = [
+            `當前：第 ${this.day} 天 白天討論。`,
+            `存活玩家：${aliveList}`,
+            k.privateInfo ? `你的情報：${k.privateInfo}` : '',
+            ``,
+            `目前的討論：`,
+            boardText,
+            ``,
+            `任務：發表你的看法（一句話，≤50字），並表明你是否準備投票了。`,
+            `要求：用你的角色語氣說話。不要說「沒人發言」「目前沒人發言」。要有具體內容（質疑、分析、表態）。`,
+            ``,
+            `回覆格式（JSON）：`,
+            `{"speech": "你要說的話", "stance": "準備好了"}`,
+            `或`,
+            `{"speech": "你要說的話", "stance": "資訊不足"}`,
+            `（「準備好了」＝你講完了，準備投票；「資訊不足」＝你還想再聽聽）`,
+        ].filter(Boolean).join('\n');
+        return [
+            { role: 'system', content: this.buildSystemPrompt(entry) },
+            { role: 'user', content: user },
+        ];
+    }
+    /** 白天討論回應 prompt；輸出 {"action":"ready"} 或 {"action":"speak","speech":"...","stance":"..."} 或 {"action":"wait"} */
+    buildDayResponsePrompts(entry, publishedSpeech) {
+        const k = entry.knowledge;
+        const boardText = this.dayBoard.length
+            ? this.dayBoard.map((m) => `${m.from}：「${m.text}」`).join('\n')
+            : '目前沒有人發過言。';
+        const user = [
+            `當前：第 ${this.day} 天 白天討論。`,
+            `存活玩家：${(this.game?.getPlayers() ?? []).filter((p) => p.alive).map((p) => p.nickname).join('、')}`,
+            ``,
+            `目前的討論：`,
+            boardText,
+            ``,
+            `剛發表的發言：「${publishedSpeech}」`,
+            ``,
+            `任務：看完後決定你的反應（三選一）：`,
+            `1. 我講完了，準備投票 → {"action": "ready"}`,
+            `2. 我要補充 → {"action": "speak", "speech": "你要說的話（≤50字）", "stance": "準備好了" 或 "資訊不足"}`,
+            `3. 我先聽聽 → {"action": "wait"}`,
+            ``,
+            `要求：同意就簡短。要講就講新的角度，不要重複別人講過的。用你的角色語氣。`,
+        ].join('\n');
+        return [
+            { role: 'system', content: this.buildSystemPrompt(entry) },
+            { role: 'user', content: user },
+        ];
+    }
     /** 狼刀目標選擇 prompt（狼隊同夥 + 可刀目標 + 討論歷史；輸出 {"target":"<displayName>"}） */
     buildWolfKillPrompts(entry) {
         const k = entry.knowledge;
@@ -741,6 +921,32 @@ export class AiController {
             ``,
             `任務：選一個你要刀的人。`,
             `回覆格式：{"target": "<displayName>"}`,
+        ].filter(Boolean).join('\n');
+        return [
+            { role: 'system', content: this.buildSystemPrompt(entry) },
+            { role: 'user', content: user },
+        ];
+    }
+    /** 白天投票 prompt；輸出 {"target":"<displayName>"} 或 {"target":null}（棄票） */
+    buildDayVotePrompts(entry) {
+        const k = entry.knowledge;
+        const aliveList = (this.game?.getPlayers() ?? [])
+            .filter((p) => p.alive && p.clientId !== entry.def.clientId)
+            .map((p) => p.nickname)
+            .join('、');
+        const boardText = this.dayBoard.length
+            ? this.dayBoard.map((m) => `${m.from}：「${m.text}」`).join('\n')
+            : '今天沒有討論。';
+        const user = [
+            `當前：第 ${this.day} 天 投票階段。你是 ${k.displayName}。`,
+            `存活玩家（可投票對象）：${aliveList}`,
+            k.privateInfo ? `你的情報：${k.privateInfo}` : '',
+            ``,
+            `今天的討論：`,
+            boardText,
+            ``,
+            `任務：選一個你要投票淘汰的玩家。如果你不確定，可以棄票。`,
+            `回覆格式：{"target": "<displayName>"} 或 {"target": null}（棄票）`,
         ].filter(Boolean).join('\n');
         return [
             { role: 'system', content: this.buildSystemPrompt(entry) },
@@ -780,6 +986,50 @@ export class AiController {
         if (result.value !== null) {
             this.game.handleNightAction(clientId, { type: kind, targetClientId: result.value });
         }
+    }
+    /** 所有 AI 獨立出草稿（平行 LLM 呼叫） */
+    async generateDayDrafts(players) {
+        const results = await Promise.all(players.map(async (p) => {
+            const entry = this.entries.get(p.clientId);
+            if (!entry)
+                return null;
+            const prompts = this.buildDayDraftPrompts(entry);
+            const result = await this.llmWithRetry(p.clientId, 'WOLF_SPEECH', this.day, prompts, (p2) => typeof p2.speech === 'string' && p2.speech.trim() && typeof p2.stance === 'string' ? 'ok' : null);
+            if (result.value === null)
+                return null;
+            return { player: p, speech: result.parsed.speech.trim(), stance: result.parsed.stance.trim() };
+        }));
+        return results.filter((r) => r !== null);
+    }
+    /** Judge 盲選一篇白天草稿（隨機選） */
+    judgePickDayDraft(drafts) {
+        if (drafts.length === 0)
+            return null;
+        if (drafts.length === 1)
+            return drafts[0];
+        const idx = Math.floor(Math.random() * drafts.length);
+        return drafts[idx];
+    }
+    /** 非發言者 AI 讀白板後回應：ready / speak / wait */
+    async dayRespond(p, entry, publishedSpeech) {
+        const prompts = this.buildDayResponsePrompts(entry, publishedSpeech);
+        const result = await this.llmWithRetry(p.clientId, 'WOLF_STANCE', this.day, prompts, (p2) => {
+            if (p2.action === 'ready')
+                return 'ok';
+            if (p2.action === 'speak' && typeof p2.speech === 'string' && p2.speech.trim() && typeof p2.stance === 'string')
+                return 'ok';
+            if (p2.action === 'wait')
+                return 'ok';
+            return null;
+        });
+        if (result.value === null)
+            return { type: 'wait' };
+        const p2 = result.parsed;
+        if (p2.action === 'ready')
+            return { type: 'ready' };
+        if (p2.action === 'speak')
+            return { type: 'speak', speech: p2.speech.trim(), stance: p2.stance.trim() };
+        return { type: 'wait' };
     }
 }
 //# sourceMappingURL=ai-controller.js.map

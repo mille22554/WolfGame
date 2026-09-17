@@ -57,6 +57,10 @@ export declare class AiController {
     private masonReadyMap;
     /** mason clientId -> 當前 stance（"準備好了" / "資訊不足"） */
     private masonStanceMap;
+    /** 白天公頻訊息（本天；AI 知識用） */
+    private dayBoard;
+    /** AI clientId -> 是否 toggle 準備投票 ON */
+    private dayReadyMap;
     private readonly messageCap;
     constructor(defs: AiPlayerDef[], opts?: {
         llmTimeoutMs?: number;
@@ -93,6 +97,10 @@ export declare class AiController {
     private judgePickMasonDraft;
     /** 非發言者共有者讀白板後回應：vote / speak / wait */
     private masonRespond;
+    /** 白天討論：AI 輪流發言（judge 盲選），收斂（全 AI toggle ON）後結束 */
+    private runDayDiscussion;
+    /** 白天投票：每個 AI 玩家 LLM 決定投誰（或棄票）→ 提交 CAST_VOTE */
+    private runDayVoting;
     private logEntry;
     private sleep;
     /** 呼叫 LLM 並解析；失敗（null / parse 失敗 / 抽取不到值）重試，最多 3 次、間隔 2s */
@@ -104,6 +112,7 @@ export declare class AiController {
     private characterIdOf;
     private getAiWolves;
     private getAiMasons;
+    private getAiAlivePlayers;
     private isWolfReady;
     private isMasonReady;
     /** 引擎是否已因安全上限停止狼會議 */
@@ -127,11 +136,23 @@ export declare class AiController {
     private buildMasonDraftPrompts;
     /** 共有者回應 prompt（非發言者讀白板後回應）；輸出 {"action":"vote","target":"ready"} 或 {"action":"speak","speech":"...","stance":"..."} 或 {"action":"wait"} */
     private buildMasonResponsePrompts;
+    /** 白天討論草稿 prompt；輸出 {"speech":"...", "stance":"準備好了"|"資訊不足"} */
+    private buildDayDraftPrompts;
+    /** 白天討論回應 prompt；輸出 {"action":"ready"} 或 {"action":"speak","speech":"...","stance":"..."} 或 {"action":"wait"} */
+    private buildDayResponsePrompts;
     /** 狼刀目標選擇 prompt（狼隊同夥 + 可刀目標 + 討論歷史；輸出 {"target":"<displayName>"}） */
     private buildWolfKillPrompts;
+    /** 白天投票 prompt；輸出 {"target":"<displayName>"} 或 {"target":null}（棄票） */
+    private buildDayVotePrompts;
     /** 占い／守衛目標選擇 prompt（角色 + 存活玩家 + 過去行動；輸出 {"target":"<displayName>"}） */
     private buildTargetPrompts;
     /** 占い／守衛：LLM 選目標 → 提交夜間行動（失敗重試；最終失敗跳過、不阻塞） */
     private runTargetAction;
+    /** 所有 AI 獨立出草稿（平行 LLM 呼叫） */
+    private generateDayDrafts;
+    /** Judge 盲選一篇白天草稿（隨機選） */
+    private judgePickDayDraft;
+    /** 非發言者 AI 讀白板後回應：ready / speak / wait */
+    private dayRespond;
 }
 //# sourceMappingURL=ai-controller.d.ts.map

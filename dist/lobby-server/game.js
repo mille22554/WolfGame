@@ -223,6 +223,13 @@ export class GameEngine {
             this.transitionTo('DAY_VOTING');
         }
     }
+    /** AI 白天發言（broadcast MESSAGE 到公頻；复用 lobby 的 MESSAGE 協議） */
+    sendDayMessage(clientId, text) {
+        const player = this.getPlayerByClientId(clientId);
+        if (!player)
+            return;
+        this.callbacks.broadcast({ type: 'MESSAGE', from: player.nickname, text, ts: Date.now() });
+    }
     /** 人狼私頻（僅狼會議步驟可用、僅存活人狼可見）；累計訊息數，達安全上限 → 停止並報告 */
     handleWolfChat(clientId, text) {
         if (this.state.phase !== 'NIGHT' || this.state.nightStep !== 'WOLF')

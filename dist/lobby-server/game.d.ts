@@ -137,6 +137,8 @@ export declare class GameEngine {
     handleEndDiscussion(clientId: string): void;
     /** 玩家 toggle「準備投票」（開/關）；所有存活玩家皆 ON → 推進到 DAY_VOTING */
     handleToggleVoteReady(clientId: string): void;
+    /** AI 白天發言（broadcast MESSAGE 到公頻；复用 lobby 的 MESSAGE 協議） */
+    sendDayMessage(clientId: string, text: string): void;
     /** 人狼私頻（僅狼會議步驟可用、僅存活人狼可見）；累計訊息數，達安全上限 → 停止並報告 */
     handleWolfChat(clientId: string, text: string): void;
     /** 狼會議安全上限觸發：標記停止＋broadcast 報告（night 停在 WOLF step，由 harness 觀察 timeout 兜底） */
