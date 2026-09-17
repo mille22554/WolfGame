@@ -133,16 +133,17 @@ function wolfMeetingFlowSection(log, events, players) {
     L.push(`- **Judge 選出：** ${ev.from} → 發布「${ev.text}」`);
     L.push(`- **${ev.from}：** ✅ ready`);
     L.push('');
-    // 該迭代的回應：log 中 JUDGE[i] 之後、JUDGE[i+1] 之前的所有 WOLF_STANCE（排除發言者）
+    // 該迭代的回應：log 中 JUDGE[i] 之後、JUDGE[i+1] 之前的 WOLF_STANCE（排除發言者；每狼只取最後一筆=最終結果）
     const speakerClientId = players.find((p) => p.nickname === ev.from)?.clientId ?? '';
     const startIdx = (i < judgeIndices.length ? judgeIndices[i] : log.length) + 1;
     const endIdx = (i + 1 < judgeIndices.length ? judgeIndices[i + 1] : log.length);
-    const responses = [];
+    const lastByWolf = new Map();
     for (let j = startIdx; j < endIdx; j++) {
       if (log[j].kind === 'WOLF_STANCE' && log[j].clientId !== '' && log[j].clientId !== speakerClientId) {
-        responses.push(log[j]);
+        lastByWolf.set(log[j].clientId, log[j]); // 後面的覆蓋前面的 → 保留最後一筆
       }
     }
+    const responses = [...lastByWolf.values()];
     if (responses.length > 0) {
       L.push('- **其他狼回應：**');
       for (const r of responses) {
