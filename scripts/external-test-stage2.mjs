@@ -190,6 +190,58 @@ function wolfMeetingFlowSection(log, events, players) {
   return L;
 }
 
+/**
+ * 共有者會議流程（loop 制，與狼會議同構）：
+ * - 每輪：MASON_SPEECH_SELECTED（judge 發布）→ MASON_STANCE（另一人回應）
+ * - 用 MASON_SPEECH_SELECTED 事件分組輪次（timestamp-based）
+ */
+function masonMeetingFlowSection(log, events, players) {
+  const L = [];
+  L.push('## 共有者會議流程');
+  L.push('');
+  const selectedEvents = events.filter((e) => e.type === 'MASON_SPEECH_SELECTED');
+  if (selectedEvents.length === 0) {
+    L.push('（無共有者會議——可能共有者不足 2 人或未觸發）');
+    L.push('');
+    return L;
+  }
+  for (let i = 0; i < selectedEvents.length; i++) {
+    const ev = selectedEvents[i];
+    L.push(`### 輪次 ${i + 1}`);
+    L.push('');
+    L.push(`- **Judge 選出：** ${ev.from} → 發布「${ev.text}」`);
+    L.push(`- **${ev.from}：** ✅ ready`);
+    L.push('');
+    const speakerClientId = players.find((p) => p.nickname === ev.from)?.clientId ?? '';
+    const tStart = ev.ts;
+    const tEnd = (i + 1 < selectedEvents.length ? selectedEvents[i + 1].ts : Infinity);
+    const lastByMason = new Map();
+    for (const entry of log) {
+      if (entry.kind === 'MASON_STANCE' && entry.clientId !== '' && entry.clientId !== speakerClientId && entry.ts >= tStart && entry.ts <= tEnd) {
+        lastByMason.set(entry.clientId, entry);
+      }
+    }
+    const responses = [...lastByMason.values()];
+    if (responses.length > 0) {
+      L.push('- **其他共有者回應：**');
+      for (const r of responses) {
+        const who = nicknameOf(players, r.clientId);
+        if (r.parsed?.action === 'vote') {
+          L.push(`  - ${who}：✅ 準備好了`);
+        } else if (r.parsed?.action === 'speak') {
+          L.push(`  - ${who}：🗣️ 出新草稿「${r.parsed.speech}」（stance: ${r.parsed.stance}）`);
+        } else if (r.parsed?.action === 'wait') {
+          L.push(`  - ${who}：⏳ 資訊不足，先不講`);
+        } else {
+          L.push(`  - ${who}：⚠️ 回應失敗（跳過）`);
+        }
+      }
+      L.push('');
+    }
+  }
+  return L;
+}
+
 /** 某 engine round 的投票（WOLF_KILL log） */
 function voteRoundSection(round, log, players) {
   const L = [];
@@ -248,6 +300,8 @@ function buildReport(game, ai, events, defs, converged, aborted) {
   }
   L.push('');
   L.push(...wolfMeetingFlowSection(log, events, players));
+  L.push('');
+  L.push(...masonMeetingFlowSection(log, events, players));
   L.push('');
   L.push('## 狼白板（WOLF_MESSAGE）');
   L.push('');
