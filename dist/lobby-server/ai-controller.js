@@ -234,6 +234,8 @@ export class AiController {
                 else if (resp.type === 'speak') {
                     newDrafts.push({ wolf: w, speech: resp.speech, stance: resp.stance });
                     this.wolfStanceMap.set(w.clientId, resp.stance);
+                    if (this.isWolfReady(w.clientId))
+                        this.game.handleToggleWolfReady(w.clientId); // 撤回 ready
                 }
                 // 'wait' → 不出草稿，維持等待
             }
