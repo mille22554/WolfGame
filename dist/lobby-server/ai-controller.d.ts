@@ -38,7 +38,6 @@ export declare class AiController {
     private timers;
     private phase;
     private day;
-    private readonly llmTimeoutMs;
     /** 狼白板（本夜全部 WOLF_MESSAGE；每夜重置） */
     private wolfBoard;
     /** 白板游標：「最新一輪」= wolfBoard.slice(boardCursor)（judge 選完後推進） */
@@ -63,7 +62,6 @@ export declare class AiController {
     private dayReadyMap;
     private readonly messageCap;
     constructor(defs: AiPlayerDef[], opts?: {
-        llmTimeoutMs?: number;
         messageCap?: number;
     });
     /** 建立後由 harness 設定遊戲引擎 */
@@ -83,7 +81,7 @@ export declare class AiController {
     private runWolfDiscussion;
     /** 所有狼獨立出草稿（平行 LLM 呼叫；互不可見；失敗的狼跳過） */
     private generateAllDrafts;
-    /** 組裝 judge 盲評 prompt：system「你是裁判，全盲評分」；user 列出所有 speech（不標作者），要求 JSON 回 {"scores":[...],"best":index} */
+    /** 組裝 judge 盲評 prompt：system「你是裁判，全盲評分以下發言，不考慮作者」；user 列出所有 speech（編號，不標作者），要求 JSON 回 {"scores":[...],"best":index} */
     private buildJudgePrompts;
     /** Judge 盲評（LLM）：給所有 speech 打分（1-10），回最高分的 index；LLM 失敗 → 隨機 fallback（不阻塞）。
      *  LLM 呼叫本身由 llmWithRetry 記錄 log。 */

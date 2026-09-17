@@ -89,7 +89,6 @@ export class AiController {
   private timers: NodeJS.Timeout[] = [];
   private phase: string = 'ROLE_REVEAL';
   private day: number = 1;
-  private readonly llmTimeoutMs: number;
   /** 狼白板（本夜全部 WOLF_MESSAGE；每夜重置） */
   private wolfBoard: { from: string; text: string }[] = [];
   /** 白板游標：「最新一輪」= wolfBoard.slice(boardCursor)（judge 選完後推進） */
@@ -114,8 +113,7 @@ export class AiController {
   private dayReadyMap = new Map<string, boolean>();
 
   private readonly messageCap: number;
-  constructor(defs: AiPlayerDef[], opts?: { llmTimeoutMs?: number; messageCap?: number }) {
-    this.llmTimeoutMs = opts?.llmTimeoutMs ?? 60000;
+  constructor(defs: AiPlayerDef[], opts?: { messageCap?: number }) {
     this.messageCap = opts?.messageCap ?? 0; // 0 = 無上限（正式）；>0 = 測試用安全上限
     for (const def of defs) {
       this.entries.set(def.clientId, {
@@ -360,7 +358,7 @@ export class AiController {
     return results.filter((r): r is WolfDraft => r !== null);
   }
 
-  /** 組裝 judge 盲評 prompt：system「你是裁判，全盲評分」；user 列出所有 speech（不標作者），要求 JSON 回 {"scores":[...],"best":index} */
+  /** 組裝 judge 盲評 prompt：system「你是裁判，全盲評分以下發言，不考慮作者」；user 列出所有 speech（編號，不標作者），要求 JSON 回 {"scores":[...],"best":index} */
   private buildJudgePrompts(speeches: string[]): ChatMessage[] {
     const numbered = speeches.map((s, i) => `[${i + 1}]: ${s}`).join('\n');
     const user = [
@@ -371,7 +369,7 @@ export class AiController {
       `（index 從 0 開始）`,
     ].join('\n');
     return [
-      { role: 'system', content: '你是裁判，全盲評分。' },
+      { role: 'system', content: '你是裁判，全盲評分以下發言，不考慮作者' },
       { role: 'user', content: user },
     ];
   }
@@ -709,7 +707,7 @@ export class AiController {
     let parsed: Record<string, any> | null = null;
     for (let attempt = 1; attempt <= MAX_LLM_RETRIES; attempt++) {
       if (this.destroyed) break;
-      response = await chat(prompts, { temperature: 1.0, timeoutMs: this.llmTimeoutMs });
+      response = await chat(prompts, { temperature: 1.0 });
       parsed = parseJsonResponse(response);
       this.logEntry(clientId, kind, round, attempt, prompts, response, parsed);
       if (parsed === null) {

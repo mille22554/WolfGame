@@ -10,10 +10,10 @@ export interface ChatMessage {
 }
 export interface ChatOptions {
     temperature?: number;
-    timeoutMs?: number;
 }
 /**
  * 呼叫 SGLang /v1/chat/completions，回傳 assistant 回覆文字。
+ * 不設 timeout：等待 LLM 回傳（reasoning model 長 prompt 可能 >60s）。
  * 失敗回 null。
  */
 export declare function chat(messages: ChatMessage[], options?: ChatOptions): Promise<string | null>;

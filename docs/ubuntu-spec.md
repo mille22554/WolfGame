@@ -460,8 +460,8 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | 認證 | `Authorization: Bearer ${SGLANG_API_KEY}`（env 變數，部署時注入） |
 | 環境變數 | `SGLANG_API_KEY`、`LLM_MODEL`（model name，預設 `qwen3.8-27b`） |
 | 併發限制 | `--max-running-requests 2`（與 PRE_SPEECH 每批 2 個吻合，不需排隊） |
-| 呼叫 timeout | 單次 HTTP 請求 60 秒（GPU 27B + DSpark，100 token ≈ 3-8 秒） |
-| 失敗處理 | LLM 呼叫失敗（timeout / 5xx / parse error）→ **重試**取得回覆（記錄重試次數）。若 SGLang server 本身掛掉，遊戲無法繼續（所有 AI 呼叫都會失敗）→ 開新局 |
+| 呼叫 timeout | 無（LLM 呼叫不設 timeout，等待回傳；reasoning model 長 prompt 可能 >60s） |
+| 失敗處理 | LLM 呼叫失敗（5xx / parse error）→ **重試**取得回覆（記錄重試次數）。若 SGLang server 本身掛掉，遊戲無法繼續（所有 AI 呼叫都會失敗）→ 開新局 |
 
 ### 13.3 AI 玩家數量
 
@@ -590,7 +590,7 @@ AI 狼依 §12.3 的 loop 驅動（非 SpeechScheduler 管線，是持續對話�
 
 | 檔案 | 說明 |
 |---|---|
-| `src/lobby-server/llm.ts` | LLM client：`chat(messages, { timeout })` → `fetch(localhost:9090/v1/chat/completions)`（Bearer auth）；回傳 `string \| null` |
+| `src/lobby-server/llm.ts` | LLM client：`chat(messages, { temperature })` → `fetch(localhost:9090/v1/chat/completions)`（Bearer auth）；回傳 `string \| null` |
 | `src/lobby-server/ai-player.ts` | AI 玩家邏輯：`generateSpeech()`、`generateVote()`、`generateNightAction()` → 組裝 prompt → 呼叫 llm → parse JSON → 回傳行動 |
 
 ### 13.8 GameEngine 整合點
@@ -610,7 +610,6 @@ AI 狼依 §12.3 的 loop 驅動（非 SpeechScheduler 管線，是持續對話�
 | `SGLANG_HOST` | `127.0.0.1` | SGLang host（同機） |
 | `SGLANG_API_KEY` | —（部署時注入） | Bearer token |
 | `LLM_MODEL` | `qwen3.8-27b` | model name（`--served-model-name`） |
-| `LLM_TIMEOUT_MS` | `60000` | 單次 LLM 呼叫 timeout |
 | `AI_ENABLED` | `true` | 設 `false` 可停用 AI 補位（純真人模式） |
 
 ### 13.10 systemd 部署
