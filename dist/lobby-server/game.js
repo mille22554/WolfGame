@@ -55,6 +55,7 @@ export class GameEngine {
             wolfTargetId: null,
             wolfMessageCount: 0,
             wolfMeetingAborted: false,
+            wolfBoard: [],
         };
     }
     /** 開始遊戲：分配角色、私發 ROLE_REVEALED、進入 phase 循環 */
@@ -200,15 +201,17 @@ export class GameEngine {
             return; // 只有房主可提前結束
         this.transitionTo('DAY_VOTING');
     }
-    /** 玩家 toggle「準備投票」（開/關）；所有存活玩家皆 ON → 推進到 DAY_VOTING */
+    /** 玩家 toggle「準備投票」（sticky：只能 ON、不可撤回）；所有存活玩家皆 ON → 推進到 DAY_VOTING */
     handleToggleVoteReady(clientId) {
         if (this.state.phase !== 'DAY_DISCUSSION')
             return;
         const player = this.getPlayerByClientId(clientId);
         if (!player || !player.alive)
             return;
-        const ready = !(this.state.dayReady.get(clientId) ?? false);
-        this.state.dayReady.set(clientId, ready);
+        // sticky ready：已 ON 者 no-op（不允許 toggle OFF，ready 集合只增不減）
+        if (this.state.dayReady.get(clientId) === true)
+            return;
+        this.state.dayReady.set(clientId, true);
         const alivePlayers = this.getAlivePlayers();
         const readyList = alivePlayers
             .filter((p) => this.state.dayReady.get(p.clientId) === true)
@@ -243,6 +246,7 @@ export class GameEngine {
         if (clean.length === 0 || clean.length > MAX_MESSAGE_LEN)
             return;
         this.state.wolfMessageCount += 1;
+        this.state.wolfBoard.push({ from: player.nickname, text: clean });
         this.callbacks.broadcast({ type: 'WOLF_MESSAGE', from: player.nickname, text: clean, ts: Date.now() }, this.getAliveWolves().map((p) => p.clientId));
         // 安全上限（僅測試用；wolfMessageCap > 0 時啟用）
         if (this.wolfMessageCap > 0 && this.state.wolfMessageCount >= this.wolfMessageCap)
@@ -315,6 +319,7 @@ export class GameEngine {
     saveState() {
         return {
             day: this.state.day,
+            phase: this.state.phase,
             players: this.state.players.map((p) => ({
                 clientId: p.clientId,
                 nickname: p.nickname,
@@ -330,6 +335,10 @@ export class GameEngine {
             deathHistory: this.state.deathHistory,
             lastVoteDeathClientId: this.state.lastVoteDeathClientId,
             winner: this.state.winner,
+            wolfMeetingRound: this.state.wolfMeetingRound,
+            wolfMessageCount: this.state.wolfMessageCount,
+            wolfMeetingAborted: this.state.wolfMeetingAborted,
+            wolfBoard: this.state.wolfBoard,
         };
     }
     /**
@@ -338,6 +347,7 @@ export class GameEngine {
      */
     restoreState(snapshot) {
         this.state.day = snapshot.day;
+        this.state.phase = snapshot.phase ?? this.state.phase;
         this.state.players = snapshot.players.map((p) => ({
             clientId: p.clientId,
             nickname: p.nickname,
@@ -353,6 +363,11 @@ export class GameEngine {
         this.state.deathHistory = snapshot.deathHistory ?? [];
         this.state.lastVoteDeathClientId = snapshot.lastVoteDeathClientId ?? null;
         this.state.winner = snapshot.winner ?? null;
+        // 狼會議狀態（舊存檔缺欄位時用預設值，保持向後相容）
+        this.state.wolfMeetingRound = snapshot.wolfMeetingRound ?? 1;
+        this.state.wolfMessageCount = snapshot.wolfMessageCount ?? 0;
+        this.state.wolfMeetingAborted = snapshot.wolfMeetingAborted ?? false;
+        this.state.wolfBoard = snapshot.wolfBoard ?? [];
         // 直接跳進 DAY_DISCUSSION
         this.transitionTo('DAY_DISCUSSION');
     }
@@ -422,6 +437,7 @@ export class GameEngine {
                 this.state.wolfMeetingRound = 1;
                 this.state.wolfMessageCount = 0;
                 this.state.wolfMeetingAborted = false;
+                this.state.wolfBoard = [];
                 // 依序解鎖（GUARD→MASON→WOLF→SEER）；規格 §12.3：NIGHT 不限時（無 timeout 截斷）
                 this.state.nightSteps = this.computeNightSteps();
                 this.state.nightStep = this.state.nightSteps[0] ?? null;

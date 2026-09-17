@@ -37,7 +37,8 @@ function makeHarness() {
 function makeNightGame(): { game: GameEngine; cap: Captured } {
   const { cap, callbacks } = makeHarness();
   const players = Array.from({ length: 15 }, (_, i) => ({ clientId: `p${i}`, nickname: `N${i}` }));
-  const game = new GameEngine('TEST', players, callbacks);
+  // wolfMessageCap=100：e95f5d6 後預設 0=停用，本測試要測上限行為需明確開啟
+  const game = new GameEngine('TEST', players, callbacks, 100);
   game.start();
   // 手動推進到 NIGHT（start 已分配角色；pending 的 ROLE_REVEAL timer 由 destroy 清除）
   (game as any).transitionTo('NIGHT');
