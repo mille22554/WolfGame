@@ -398,17 +398,20 @@ export class AiController {
             '現在是狼會議（私頻），只有人狼能看到。',
         ].filter(Boolean).join('\n');
     }
-    /** 狀態 0／2 發言 prompt（首句：提刀人目標＋理由；接著聊：回應隊友）；輸出 {"speech"} */
+    /** 狀態 0／2 發言 prompt（首句：獨立提案，看不到隊友；接著聊：回應隊友）；輸出 {"speech"} */
     buildWolfSpeechPrompts(entry, isFirstRound) {
         const task = isFirstRound
-            ? '任務：提出一個刀人目標並簡述理由（≤50字）。'
+            ? '任務：獨立提出一個刀人目標並簡述理由（≤50字）。你現在看不到隊友的發言，請獨立判斷。'
             : '任務：回應你的隊友剛才說的話，表明你的立場（≤50字）。';
+        const conversation = isFirstRound
+            ? '（你是第一個發言的，目前沒有其他人的發言。）'
+            : this.wolfBoardText();
         const user = [
             `當前：第 ${this.day} 夜，狼會議（私頻，只有人狼能看到）。`,
             `可刀目標（只能從以下選）：${this.eligibleTargets(entry)}`,
             ``,
             `剛才的對話：`,
-            this.wolfBoardText(),
+            conversation,
             ``,
             task,
             `提醒：你在跟隊友即時對話，不是在閱讀會議紀錄。不要說「我注意到你說了...」「他剛被提出」，直接講你的立場。同意就說「就他」「我跟你」，不需要解釋為什麼同意。理由只能基於上面對話中實際出現的內容。「沒有人發言」是第一天夜裡的預設狀態，不是任何人的特徵，不能當作刀他的理由。沒有具體資訊就直說「我直覺選他」。用你的角色語氣說話。`,
