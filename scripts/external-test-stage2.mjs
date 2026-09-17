@@ -13,7 +13,7 @@
  * 在 server 上跑：SGLANG_API_KEY=xxx node scripts/external-test-stage2.mjs --stop-at NIGHT_RESULT
  * - import dist/lobby-server/ 編譯產物（GameEngine + AiController）
  * - 建 15 人全 AI 局
- * - 各階段獨立 timeout（night 120s / day 600s）
+ * - 各階段獨立 timeout（night 300s / day 不限時）
  * - 產出 markdown 報告（--report 或 REPORT env 或依階段預設：night/day/full）
  * - exit code：0 = 目標階段完成、1 = 未收斂（安全上限 / timeout）
  */
@@ -42,7 +42,7 @@ const RESUME_PATH = getArg('--resume', null); // 存檔路徑（從存檔恢復�
 // 各階段 timeout
 const TIMEOUTS = {
   NIGHT: 300_000,   // 夜晚：mason(3) + wolf(3) + seer/guard → 5 分鐘（LLM 慢時需要）
-  DAY: 600_000,     // 白天：15 AI 討論 + 投票 → 10 分鐘
+  DAY: 0,           // 白天：不限時（15 AI 討論 + 投票；~100s/輪，14 人 ready 需 ~20+ 分鐘）
 };
 
 // 判斷「目標階段完成」的條件
@@ -112,7 +112,7 @@ while (true) {
     lastMajorPhase = major;
     phaseStarted = Date.now();
     phaseTimeout = TIMEOUTS[major] ?? TIMEOUTS.DAY;
-    console.log(`[stage2] 進入 ${s.phase}（timeout ${phaseTimeout / 1000}s）`);
+    console.log(`[stage2] 進入 ${s.phase}（timeout ${phaseTimeout > 0 ? phaseTimeout / 1000 + 's' : '不限時'}）`);
   }
 
   // 目標達成
@@ -125,8 +125,8 @@ while (true) {
     aborted = true;
     break;
   }
-  // 當前階段 timeout
-  if (Date.now() - phaseStarted > phaseTimeout) {
+  // 當前階段 timeout（0 = 不限時：直接等到 phase 推進或 process 被 kill）
+  if (phaseTimeout > 0 && Date.now() - phaseStarted > phaseTimeout) {
     console.error(`[stage2] ⚠️ ${s.phase} 階段超時（${phaseTimeout / 1000}s）`);
     break;
   }
