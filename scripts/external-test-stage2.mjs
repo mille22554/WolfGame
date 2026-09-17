@@ -299,9 +299,9 @@ function buildReport(game, ai, events, defs, converged, aborted) {
     L.push(`| ${p.clientId} | ${p.nickname} | ${defByClient.get(p.clientId)?.characterId ?? '?'} | ${p.role} | ${p.alive} |`);
   }
   L.push('');
-  L.push(...wolfMeetingFlowSection(log, events, players));
-  L.push('');
   L.push(...masonMeetingFlowSection(log, events, players));
+  L.push('');
+  L.push(...wolfMeetingFlowSection(log, events, players));
   L.push('');
   L.push('## 狼白板（WOLF_MESSAGE）');
   L.push('');
