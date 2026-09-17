@@ -567,9 +567,11 @@ export class AiController {
       const selected = this.judgePickDayDraft(drafts);
       if (!selected) break;
       this.game.sendDayMessage(selected.player.clientId, selected.speech);
-      // 發言者 stance 是「準備好了」→ toggle ON
-      this.dayReadyMap.set(selected.player.clientId, true);
-      this.game.handleToggleVoteReady(selected.player.clientId);
+      // 發言者 stance 是「準備好了」→ toggle ON（sticky：已 ON 者不再 call）
+      if (!this.dayReadyMap.get(selected.player.clientId)) {
+        this.dayReadyMap.set(selected.player.clientId, true);
+        this.game.handleToggleVoteReady(selected.player.clientId);
+      }
 
       // ③ 除發言者外所有 AI 讀白板 → 各自回應
       const newDrafts: DayDraft[] = [];
@@ -580,15 +582,14 @@ export class AiController {
         if (!entry) continue;
         const resp = await this.dayRespond(p, entry, selected.speech);
         if (resp.type === 'ready') {
-          this.dayReadyMap.set(p.clientId, true);
-          this.game.handleToggleVoteReady(p.clientId);
-        } else if (resp.type === 'speak') {
-          newDrafts.push({ player: p, speech: resp.speech, stance: resp.stance });
-          // 發言＝還沒結束，撤回 ready
-          if (this.dayReadyMap.get(p.clientId)) {
-            this.dayReadyMap.set(p.clientId, false);
+          // sticky ready：已 ON 者不再 call（避免 toggle 語意把 ready 撤掉）
+          if (!this.dayReadyMap.get(p.clientId)) {
+            this.dayReadyMap.set(p.clientId, true);
             this.game.handleToggleVoteReady(p.clientId);
           }
+        } else if (resp.type === 'speak') {
+          newDrafts.push({ player: p, speech: resp.speech, stance: resp.stance });
+          // sticky ready：發言不撤回 ready（ready 集合只增不減；AI 仍可繼續發言）
         }
         // 'wait' → 不出草稿，維持等待
       }

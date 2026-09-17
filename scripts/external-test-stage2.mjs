@@ -14,7 +14,7 @@
  * - import dist/lobby-server/ 編譯產物（GameEngine + AiController）
  * - 建 15 人全 AI 局
  * - 各階段獨立 timeout（night 120s / day 600s）
- * - 產出 markdown 報告（--report 或 REPORT env 或預設 ai-trace-stage2-output.md）
+ * - 產出 markdown 報告（--report 或 REPORT env 或依階段預設：night/day/full）
  * - exit code：0 = 目標階段完成、1 = 未收斂（安全上限 / timeout）
  */
 import { writeFileSync, readFileSync } from 'node:fs';
@@ -29,7 +29,13 @@ function getArg(flag, defaultValue) {
   return defaultValue;
 }
 const STOP_AT = getArg('--stop-at', 'DAY_RESULT'); // NIGHT_RESULT | DAY_RESULT | GAME_OVER
-const REPORT_PATH = getArg('--report', process.env.REPORT || 'ai-trace-stage2-output.md');
+// 未指定 --report 時依階段用不同預設路徑（避免 night/day 報告互相覆蓋）
+const DEFAULT_REPORT_BY_PHASE = {
+  NIGHT_RESULT: 'ai-trace-stage2-night.md',
+  DAY_RESULT: 'ai-trace-stage2-day.md',
+  GAME_OVER: 'ai-trace-stage2-full.md',
+};
+const REPORT_PATH = getArg('--report', process.env.REPORT || DEFAULT_REPORT_BY_PHASE[STOP_AT] || 'ai-trace-stage2-output.md');
 const SAVE_STATE_PATH = getArg('--save-state', null); // 存檔路徑（跑完目標階段後存檔）
 const RESUME_PATH = getArg('--resume', null); // 存檔路徑（從存檔恢復，跳過 night）
 
