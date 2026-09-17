@@ -210,7 +210,7 @@ function buildReport(game, ai, events, defs, converged, aborted) {
   L.push('## 完整 Prompt / Response（LLM 互動逐筆）');
   L.push('');
   for (const e of log) {
-    if (e.kind === 'MASON_TOGGLE' || e.kind === 'WOLF_ABORT') continue;
+    if (e.kind === 'MASON_TOGGLE' || e.kind === 'WOLF_ABORT' || e.kind === 'JUDGE') continue;
     const who = e.clientId ? `${nicknameOf(players, e.clientId)}（${e.characterId}）` : '（共用）';
     L.push(`### ${e.kind} ${who}（round ${e.round}，attempt ${e.attempt}）`);
     L.push('');
