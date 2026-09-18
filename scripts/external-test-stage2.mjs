@@ -41,8 +41,8 @@ const RESUME_PATH = getArg('--resume', null); // 存檔路徑（從存檔恢復�
 
 // 各階段 timeout
 const TIMEOUTS = {
-  NIGHT: 0,         // 夜晚：不限時（等所有夜間行動完成）
-  DAY: 0,           // 白天：不限時（等所有玩家 toggle ready + 投票）
+  NIGHT: 300_000,   // 夜晚：5 分鐘（LLM 慢時需要時間）
+  DAY: 600_000,     // 白天：10 分鐘
 };
 
 // 判斷「目標階段完成」的條件
