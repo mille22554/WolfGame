@@ -12,8 +12,10 @@
 - ✅ Wolf prompt 重構（Two-Level Split + 防幻覺 + 防重複 + 防假設性回應 + 防前綴）
 - ✅ 白天討論 prompt 加「純口頭推論」限制（防 Among Us 路徑/軌跡/不在場證明）
 - ✅ 報告完整合併（events 存 .events.json，resume 時載入前段一起出報告）
-- ⏳ 白天討論 5 分鐘分段跑中（`/tmp/day1.json` 已存，可接續）
+- ⏳ 白天討論 5 分鐘分段跑中（`/tmp/day2.json` 已存，可接續）
 - ✅ 全併發 LLM 呼叫（strategy/drafts/responses/voting 全部 `Promise.all`）
+- ✅ `x-override-priority` header（併發時 100+i 錯開，SGLang 依 priority 排程）
+- ❌ 第一次 day 跑：14 個 DAY_STRATEGY 全回 null（無 priority header，SGLang 可能 reject）
 
 **本 session 修的東西：**
 - `isWolfReady`/`isMasonReady` 改回讀本地 map（不讀 game.state——private）
@@ -32,6 +34,9 @@
 - 測試腳本：DAY timeout = 300s（5 分鐘，測試方便；非正式需求）
 - 報告完整合併：events 存進 `.events.json`，resume 時載入前段 events 一起出報告
 - 全併發 LLM 呼叫：`generateDayStrategies`/`generateDayDrafts`/day responses/wolf responses/wolf voting/day voting 全部改 `Promise.all`（SGLang 端自動排隊）
+- `x-override-priority` header：所有併發 LLM 呼叫加 priority（100+i），SGLang 依 priority 排序處理
+  - `llm.ts`：`ChatOptions` 加 `priority?: number`；fetch headers 加 `x-override-priority`
+  - `ai-controller.ts`：`llmWithRetry` 加 `priority` 參數；所有 `Promise.all` 的 map 回調用 `100 + i`
 
 **下一步（依序）：**
 1. 繼續跑白天 5 分鐘分段（`--resume /tmp/day1.json --stop-at DAY_RESULT --save-state /tmp/day2.json`）
@@ -86,6 +91,7 @@ scp ssh.morowin.win:/opt/wolfgame/ai-trace-stage2-day.md "C:\Users\user\Desktop\
 | 白天 5 分鐘 timeout | `e9e6a24` | 測試方便；超時→存檔+報告，可 --resume 接續 |
 | 防 Among Us prompt | `09c9887` | 「純口頭推論遊戲。沒有路徑、軌跡、不在場證明、操作記錄。」 |
 | 報告完整合併 | `e3d6787` | events 存 .events.json；resume 時載入前段 events 一起出報告 |
+| x-override-priority | `17df6c4` | 併發 LLM 呼叫加 priority header（100+i）；SGLang 依 priority 排程 |
 
 ## 待做
 
