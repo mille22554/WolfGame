@@ -101,7 +101,10 @@ ai.setGame(game);
 if (RESUME_PATH) {
   const snapshot = JSON.parse(readFileSync(RESUME_PATH, 'utf-8'));
   game.restoreState(snapshot);
-  console.log(`[stage2] 從存檔恢復（${RESUME_PATH}），day=${snapshot.day}，直接進入 DAY_DISCUSSION`);
+  // 載入前段 events（報告用）
+  const eventsPath = RESUME_PATH.replace(/\.json$/, '.events.json');
+  try { events.push(...JSON.parse(readFileSync(eventsPath, 'utf-8'))); } catch {}
+  console.log(`[stage2] 從存檔恢復（${RESUME_PATH}），day=${snapshot.day}，events=${events.length}，直接進入 DAY_DISCUSSION`);
 } else {
   game.start();
   console.log(`[stage2] 遊戲已開始，目標：--stop-at ${STOP_AT}`);
@@ -183,16 +186,17 @@ while (true) {
 // 給引擎一點時間把剩餘 broadcast 送完
 await new Promise((r) => setTimeout(r, 3000));
 
-// --- 5) 報告 ---
+// --- 5) 報告（完整：含前段 events + 本段 events） ---
 const report = buildReport(game, ai, events, defs, converged, aborted, STOP_AT, stopPhase);
 writeFileSync(REPORT_PATH, report, 'utf-8');
 const status = converged ? `${STOP_AT} 達成` : aborted ? '未收斂（100 則白板上限）' : '未收斂（階段 timeout）';
 console.log(`[stage2] ${status}；報告已寫入 ${REPORT_PATH}`);
 
-// --- 5.5) 存檔（若指定 --save-state；converged 或 externalStop 時皆存） ---
+// --- 5.5) 存檔（若指定 --save-state；含 events 供下次 resume 合併報告） ---
 if (SAVE_STATE_PATH) {
   const snapshot = game.saveState();
   writeFileSync(SAVE_STATE_PATH, JSON.stringify(snapshot, null, 2), 'utf-8');
+  writeFileSync(SAVE_STATE_PATH.replace(/\.json$/, '.events.json'), JSON.stringify(events, null, 2), 'utf-8');
   console.log(`[stage2] 狀態存檔已寫入 ${SAVE_STATE_PATH}（可用 --resume ${SAVE_STATE_PATH} 接續）`);
 }
 
