@@ -503,7 +503,7 @@ function buildReport(game, ai, events, defs, converged, aborted, stopAt, stopPha
   L.push(`- 產生時間：${new Date().toISOString()}`);
   L.push(`- 目標階段：${stopAt}`);
   L.push(`- 結果：${converged ? '✅ 達成' : aborted ? '❌ 未收斂（100 則白板上限）' : '❌ 未收斂（階段 timeout）'}`);
-  L.push(`- 最終 phase：${stopPhase ?? state.phase}`);
+  L.push(`- 最終 phase：${converged ? stopAt : (stopPhase ?? state.phase)}`);
   L.push(`- 狼會議 engine round：${state.wolfMeetingRound}（平票才 +1）`);
   L.push(`- 白板訊息總數：${state.wolfMessageCount}`);
   L.push(`- 最終刀人目標：${state.wolfTargetId ? `${nicknameOf(players, state.wolfTargetId)}（${state.wolfTargetId}）` : '（無）'}`);
