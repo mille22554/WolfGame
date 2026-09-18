@@ -37,6 +37,7 @@
 - `x-override-priority` header：所有併發 LLM 呼叫加 priority（100+i），SGLang 依 priority 排序處理
   - `llm.ts`：`ChatOptions` 加 `priority?: number`；fetch headers 加 `x-override-priority`
   - `ai-controller.ts`：`llmWithRetry` 加 `priority` 參數；所有 `Promise.all` 的 map 回調用 `100 + i`
+- Day log kind 修正：`generateDayDrafts` 從 `'WOLF_SPEECH'`→`'DAY_SPEECH'`；`dayRespond` 從 `'WOLF_STANCE'`→`'DAY_STANCE'`；`runDayVoting` 從 `'WOLF_KILL'`→`'DAY_VOTE'`（修報告把 day 輸出歸到狼會議的 bug）
 
 **下一步（依序）：**
 1. 繼續跑白天 5 分鐘分段（`--resume /tmp/day1.json --stop-at DAY_RESULT --save-state /tmp/day2.json`）
