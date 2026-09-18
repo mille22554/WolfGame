@@ -706,7 +706,7 @@ export class AiController {
                     return 'ABSTAIN';
                 return this.resolveClientId(String(target), (p2) => p2.clientId !== p.clientId);
             };
-            const result = await this.llmWithRetry(p.clientId, 'WOLF_KILL', this.day, prompts, extract, 100 + i);
+            const result = await this.llmWithRetry(p.clientId, 'DAY_VOTE', this.day, prompts, extract, 100 + i);
             if (result.value !== null) {
                 if (result.value === 'ABSTAIN') {
                     this.game.handleVote(p.clientId, null);
@@ -1142,7 +1142,7 @@ export class AiController {
             if (!entry)
                 return null;
             const prompts = this.buildDayDraftPrompts(entry);
-            const result = await this.llmWithRetry(p.clientId, 'WOLF_SPEECH', this.day, prompts, (p2) => typeof p2.speech === 'string' && p2.speech.trim() && typeof p2.stance === 'string' ? 'ok' : null, 100 + i);
+            const result = await this.llmWithRetry(p.clientId, 'DAY_SPEECH', this.day, prompts, (p2) => typeof p2.speech === 'string' && p2.speech.trim() && typeof p2.stance === 'string' ? 'ok' : null, 100 + i);
             if (result.parsed?.strategy_update && typeof result.parsed.strategy_update === 'string') {
                 this.appendMemory(p.clientId, `[Day${this.day}] ${result.parsed.strategy_update.trim()}`);
             }
@@ -1165,7 +1165,7 @@ export class AiController {
     /** 非發言者 AI 讀白板後回應：ready / speak / wait */
     async dayRespond(p, entry, publishedSpeech, priority) {
         const prompts = this.buildDayResponsePrompts(entry, publishedSpeech);
-        const result = await this.llmWithRetry(p.clientId, 'WOLF_STANCE', this.day, prompts, (p2) => {
+        const result = await this.llmWithRetry(p.clientId, 'DAY_STANCE', this.day, prompts, (p2) => {
             if (p2.action === 'ready')
                 return 'ok';
             if (p2.action === 'speak' && typeof p2.speech === 'string' && p2.speech.trim() && typeof p2.stance === 'string')

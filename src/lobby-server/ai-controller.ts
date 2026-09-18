@@ -51,7 +51,7 @@ export interface AiLogEntry {
   clientId: string;
   characterId: string;
   role: string;
-  kind: 'WOLF_SPEECH' | 'JUDGE' | 'WOLF_STANCE' | 'WOLF_KILL' | 'SEER_CHECK' | 'GUARD_PROTECT' | 'MASON_TOGGLE' | 'MASON_SPEECH' | 'MASON_STANCE' | 'WOLF_ABORT' | 'DAY_STRATEGY';
+  kind: 'WOLF_SPEECH' | 'JUDGE' | 'WOLF_STANCE' | 'WOLF_KILL' | 'SEER_CHECK' | 'GUARD_PROTECT' | 'MASON_TOGGLE' | 'MASON_SPEECH' | 'MASON_STANCE' | 'WOLF_ABORT' | 'DAY_STRATEGY' | 'DAY_SPEECH' | 'DAY_STANCE' | 'DAY_VOTE';
   round: number;
   /** 第幾次嘗試（重試時 >1） */
   attempt: number;
@@ -740,7 +740,7 @@ export class AiController {
         if (target === null || target === undefined || target === '') return 'ABSTAIN';
         return this.resolveClientId(String(target), (p2) => p2.clientId !== p.clientId);
       };
-      const result = await this.llmWithRetry(p.clientId, 'WOLF_KILL', this.day, prompts, extract, 100 + i);
+      const result = await this.llmWithRetry(p.clientId, 'DAY_VOTE', this.day, prompts, extract, 100 + i);
       if (result.value !== null) {
         if (result.value === 'ABSTAIN') {
           this.game.handleVote(p.clientId, null);
@@ -1204,7 +1204,7 @@ export class AiController {
       const entry = this.entries.get(p.clientId);
       if (!entry) return null;
       const prompts = this.buildDayDraftPrompts(entry);
-      const result = await this.llmWithRetry(p.clientId, 'WOLF_SPEECH', this.day, prompts, (p2) =>
+      const result = await this.llmWithRetry(p.clientId, 'DAY_SPEECH', this.day, prompts, (p2) =>
         typeof p2.speech === 'string' && p2.speech.trim() && typeof p2.stance === 'string' ? 'ok' : null, 100 + i);
       if (result.parsed?.strategy_update && typeof result.parsed.strategy_update === 'string') {
         this.appendMemory(p.clientId, `[Day${this.day}] ${result.parsed.strategy_update.trim()}`);
@@ -1232,7 +1232,7 @@ export class AiController {
     priority?: number,
   ): Promise<{ type: 'ready' } | { type: 'speak'; speech: string; stance: string } | { type: 'wait' }> {
     const prompts = this.buildDayResponsePrompts(entry, publishedSpeech);
-    const result = await this.llmWithRetry(p.clientId, 'WOLF_STANCE', this.day, prompts, (p2) => {
+    const result = await this.llmWithRetry(p.clientId, 'DAY_STANCE', this.day, prompts, (p2) => {
       if (p2.action === 'ready') return 'ok';
       if (p2.action === 'speak' && typeof p2.speech === 'string' && p2.speech.trim() && typeof p2.stance === 'string') return 'ok';
       if (p2.action === 'wait') return 'ok';
