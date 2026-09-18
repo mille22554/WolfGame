@@ -42,7 +42,7 @@ const RESUME_PATH = getArg('--resume', null); // 存檔路徑（從存檔恢復�
 // 各階段 timeout
 const TIMEOUTS = {
   NIGHT: 0,         // 夜晚：不限時
-  DAY: 300_000,     // 白天：5 分鐘（測試用；超時 → 存檔+報告，可 --resume 接續）
+  DAY: 0,           // 白天：不限時
 };
 
 // 判斷「目標階段完成」的條件
