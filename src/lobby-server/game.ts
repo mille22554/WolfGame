@@ -103,6 +103,8 @@ export interface GameState {
   wolfMeetingAborted: boolean;
   /** 白板訊息歷史（WOLF_MESSAGE 文字；存檔/恢復用） */
   wolfBoard: { from: string; text: string }[];
+  /** 白天討論訊息歷史（存檔/恢復用；AI 控制器接續用） */
+  dayMessages: { from: string; text: string }[];
 }
 
 export interface GameCallbacks {
@@ -152,6 +154,7 @@ export class GameEngine {
       wolfMessageCount: 0,
       wolfMeetingAborted: false,
       wolfBoard: [],
+      dayMessages: [],
     };
   }
 
@@ -302,6 +305,8 @@ export class GameEngine {
   sendDayMessage(clientId: string, text: string): void {
     const player = this.getPlayerByClientId(clientId);
     if (!player) return;
+    this.state.dayMessages.push({ from: player.nickname, text });
+    if (this.state.dayMessages.length > 50) this.state.dayMessages.shift();
     this.callbacks.broadcast({ type: 'MESSAGE', from: player.nickname, text, ts: Date.now() });
   }
 
@@ -428,6 +433,16 @@ export class GameEngine {
       wolfMessageCount: this.state.wolfMessageCount,
       wolfMeetingAborted: this.state.wolfMeetingAborted,
       wolfBoard: this.state.wolfBoard,
+      dayReady: Object.fromEntries(this.state.dayReady),
+      dayMessages: this.state.dayMessages,
+    };
+  }
+
+  /** AI 控制器用：取得白天討論狀態（dayReady + dayMessages） */
+  getDayState(): { dayReady: Map<string, boolean>; dayMessages: { from: string; text: string }[] } {
+    return {
+      dayReady: this.state.dayReady,
+      dayMessages: this.state.dayMessages,
     };
   }
 
@@ -458,6 +473,11 @@ export class GameEngine {
     this.state.wolfMessageCount = snapshot.wolfMessageCount ?? 0;
     this.state.wolfMeetingAborted = snapshot.wolfMeetingAborted ?? false;
     this.state.wolfBoard = snapshot.wolfBoard ?? [];
+    // 白天討論狀態（resume 接續用）
+    if (snapshot.dayReady) {
+      this.state.dayReady = new Map(Object.entries(snapshot.dayReady as Record<string, boolean>));
+    }
+    this.state.dayMessages = snapshot.dayMessages ?? [];
     // 直接跳進 DAY_DISCUSSION
     this.transitionTo('DAY_DISCUSSION');
   }
