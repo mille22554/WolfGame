@@ -925,8 +925,9 @@ export class AiController {
             `2. 我要補充 → {"action": "speak", "speech": "≤50字", "stance": "投XXX"}`,
             `3. 先不講 → {"action": "wait"}`,
             ``,
-            `⚠️ 刀人目標明天不在場。白天計畫只針對存活玩家。用名字，不用代詞。同意就簡短，要講就講新角度。`,
+            `⚠️ 刀人目標明天不在場。白天計畫只針對存活玩家。用名字，不用代詞。`,
             `⚠️ 此頻道只有狼。不要引用沒在白板上出現的發言。`,
+            `⚠️ 如果你之前已在白板上發過言（看白板歷史），且新發言只是重複你已講過的內容（換句話說同一件事），回 action="wait"。只有出現新資訊、新角度、或你要改變立場時才 speak。`,
         ].join('\n');
         return [
             { role: 'system', content: `${this.buildSystemPrompt(entry)}\n${this.wolfContext(entry)}` },
