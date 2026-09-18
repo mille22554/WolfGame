@@ -393,6 +393,96 @@ function splitSection(events, players) {
   return L;
 }
 
+/**
+ * 白天討論流程（用 DAY_DISCUSSION PHASE_CHANGED 時間戳分界；
+ * 用 MESSAGE 事件分組輪次；每輪顯示發言者 + 所有 AI 的 respond 決策）
+ */
+function dayDiscussionSection(log, events, players) {
+  const L = [];
+  L.push('## 白天討論流程（DAY_DISCUSSION）');
+  L.push('');
+
+  // 找 DAY_DISCUSSION 開始時間戳
+  const dayStartEvent = events.find((e) => e.type === 'PHASE_CHANGED' && e.phase === 'DAY_DISCUSSION');
+  if (!dayStartEvent) {
+    L.push('（無 DAY_DISCUSSION 事件——未進入白天討論）');
+    L.push('');
+    return L;
+  }
+  const dayStartTs = dayStartEvent.ts;
+
+  // 只取 day 之後的 log entries
+  const dayLog = log.filter((e) => e.ts >= dayStartTs);
+  if (dayLog.length === 0) {
+    L.push('（無 AI log entries——AI 控制器未觸發白天邏輯）');
+    L.push('');
+    return L;
+  }
+
+  // 用 MESSAGE 事件分組輪次
+  const dayMessages = events.filter((e) => e.type === 'MESSAGE' && e.ts >= dayStartTs);
+  const readyEvents = events.filter((e) => e.type === 'DAY_READY_STATUS' && e.ts >= dayStartTs);
+
+  if (dayMessages.length === 0) {
+    L.push('（無 MESSAGE 事件——沒有 AI 發言）');
+    L.push('');
+    return L;
+  }
+
+  for (let i = 0; i < dayMessages.length; i++) {
+    const msg = dayMessages[i];
+    const tEnd = (i + 1 < dayMessages.length ? dayMessages[i + 1].ts : Infinity);
+
+    L.push(`### 第 ${i + 1} 輪：${msg.from} 發言`);
+    L.push('');
+    L.push(`- [${fmtTs(msg.ts)}] 「${msg.text}」`);
+    L.push('');
+
+    // 該輪的 respond 決策（WOLF_STANCE entries 在 [msg.ts, tEnd) 範圍內，排除發言者）
+    const speakerClientId = players.find((p) => p.nickname === msg.from)?.clientId ?? '';
+    const responses = dayLog.filter((e) =>
+      e.kind === 'WOLF_STANCE' &&
+      e.clientId !== '' &&
+      e.clientId !== speakerClientId &&
+      e.ts >= msg.ts &&
+      e.ts < tEnd
+    );
+
+    if (responses.length > 0) {
+      L.push('- **其他 AI 回應：**');
+      for (const r of responses) {
+        const who = nicknameOf(players, r.clientId);
+        if (r.parsed?.action === 'ready') {
+          L.push(`  - ${who}：✅ ready`);
+        } else if (r.parsed?.action === 'speak') {
+          L.push(`  - ${who}：🗣️ 出新草稿「${r.parsed.speech}」（stance: ${r.parsed.stance}）`);
+        } else if (r.parsed?.action === 'wait') {
+          L.push(`  - ${who}：⏳ wait`);
+        } else {
+          L.push(`  - ${who}：⚠️ 回應失敗（parsed=${r.parsed === null ? 'null' : JSON.stringify(r.parsed)}）`);
+        }
+      }
+      L.push('');
+    }
+
+    // 該輪後的 ready 狀態變化
+    const readyAfter = readyEvents.filter((e) => e.ts >= msg.ts && e.ts < tEnd);
+    if (readyAfter.length > 0) {
+      const last = readyAfter[readyAfter.length - 1];
+      L.push(`- Ready 狀態：[${last.ready.map((r) => r.nickname).join(', ')}] ${last.ready.length}/${last.total}`);
+      L.push('');
+    }
+  }
+
+  // 最終 ready 狀態
+  const lastReady = readyEvents[readyEvents.length - 1];
+  if (lastReady) {
+    L.push(`**最終：** ${lastReady.ready.length}/${lastReady.total} ready（${lastReady.ready.map((r) => r.nickname).join(', ')}）`);
+  }
+  L.push('');
+  return L;
+}
+
 function buildReport(game, ai, events, defs, converged, aborted, stopAt) {
   const players = game.getPlayers();
   const state = game.getNightState();
@@ -422,6 +512,8 @@ function buildReport(game, ai, events, defs, converged, aborted, stopAt) {
   L.push(...masonMeetingFlowSection(log, events, players));
   L.push('');
   L.push(...wolfMeetingFlowSection(log, events, players));
+  L.push('');
+  L.push(...dayDiscussionSection(log, events, players));
   L.push('');
   L.push('## 狼白板（WOLF_MESSAGE）');
   L.push('');
