@@ -133,7 +133,7 @@ export declare class AiController {
     private masonBoardText;
     /** 可刀目標（排除自己、狼隊、狂人） */
     private eligibleTargets;
-    /** 狼 wolf 情境（system prompt 附加：狼隊同夥 + 狂人 + 私頻說明） */
+    /** 狼 wolf 情境（system prompt 附加：Two-Level Split 結構） */
     private wolfContext;
     /** 共有者情境（system prompt 附加：共有者夥伴 + 私頻說明） */
     private masonContext;
