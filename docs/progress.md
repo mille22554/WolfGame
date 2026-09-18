@@ -16,6 +16,7 @@
 - ✅ 全併發 LLM 呼叫（strategy/drafts/responses/voting 全部 `Promise.all`）
 - ✅ `x-override-priority` header（併發時 100+i 錯開，SGLang 依 priority 排程）
 - ❌ 第一次 day 跑：14 個 DAY_STRATEGY 全回 null（無 priority header，SGLang 可能 reject）
+- ⏸️ 第二次從 `/tmp/day2.json` 接續：300s timeout 於 resume 後立即觸發（harness bug）；已改 `DAY=0`，本次測試已在 server 停止
 
 **本 session 修的東西：**
 - `isWolfReady`/`isMasonReady` 改回讀本地 map（不讀 game.state——private）
