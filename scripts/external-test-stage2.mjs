@@ -42,7 +42,7 @@ const RESUME_PATH = getArg('--resume', null); // 存檔路徑（從存檔恢復�
 // 各階段 timeout
 const TIMEOUTS = {
   NIGHT: 0,         // 夜晚：不限時
-  DAY: 0,           // 白天：不限時
+  DAY: 300_000,     // 白天：5 分鐘（測試用；超時 → 存檔+報告，可 --resume 接續）
 };
 
 // 判斷「目標階段完成」的條件
@@ -190,7 +190,7 @@ const status = converged ? `${STOP_AT} 達成` : aborted ? '未收斂（100 則�
 console.log(`[stage2] ${status}；報告已寫入 ${REPORT_PATH}`);
 
 // --- 5.5) 存檔（若指定 --save-state；converged 或 externalStop 時皆存） ---
-if (SAVE_STATE_PATH && (converged || externalStop)) {
+if (SAVE_STATE_PATH) {
   const snapshot = game.saveState();
   writeFileSync(SAVE_STATE_PATH, JSON.stringify(snapshot, null, 2), 'utf-8');
   console.log(`[stage2] 狀態存檔已寫入 ${SAVE_STATE_PATH}（可用 --resume ${SAVE_STATE_PATH} 接續）`);
