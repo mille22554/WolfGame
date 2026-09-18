@@ -945,6 +945,7 @@ export class AiController {
       ``,
       `⚠️ 你選的刀人目標今晚就死，明天不在場。你的白天動作只能針對其他存活玩家。`,
       `⚠️ 用名字，不用代詞。具體動作，不用模糊觀察。`,
+      `⚠️ 這個頻道只有狼。不要引用「某人剛才說...」——只有白板上出現的狼發言才算數。村民不在這裡。`,
       ``,
       `JSON：{"speech": "...", "stance": "投XXX"}`,
     ].join('\n');
@@ -970,6 +971,7 @@ export class AiController {
       `3. 先不講 → {"action": "wait"}`,
       ``,
       `⚠️ 刀人目標明天不在場。白天計畫只針對存活玩家。用名字，不用代詞。同意就簡短，要講就講新角度。`,
+      `⚠️ 此頻道只有狼。不要引用沒在白板上出現的發言。`,
     ].join('\n');
     return [
       { role: 'system', content: `${this.buildSystemPrompt(entry)}\n${this.wolfContext(entry)}` },
