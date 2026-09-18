@@ -299,11 +299,11 @@ export class AiController {
         from: selected.wolf.nickname,
         text: selected.speech,
       });
-      // 記錄發言者的 stance
+      // 記錄發言者的 stance + 本地 ready 追蹤（不呼叫 game.handleToggleWolfReady——會觸發 premature VOTING）
       this.wolfStanceMap.set(selected.wolf.clientId, selected.stance);
-      // 若發言者 stance 是「投XXX」→ toggle ready
-      if (selected.stance.startsWith('投') && !this.isWolfReady(selected.wolf.clientId)) {
-        this.game.handleToggleWolfReady(selected.wolf.clientId);
+      if (selected.stance.startsWith('投')) {
+        this.wolfReadyMap.set(selected.wolf.clientId, true);
+        this.game.broadcastToWolves({ type: 'WOLF_READY', clientId: selected.wolf.clientId, ready: true });
       }
 
       // ③ 除發言者外所有狼讀白板 → 各自回應
@@ -316,18 +316,20 @@ export class AiController {
         const resp = await this.wolfRespond(w, entry, selected.speech, round);
         if (resp.type === 'vote') {
           this.wolfStanceMap.set(w.clientId, `投${resp.target}`);
-          if (!this.isWolfReady(w.clientId)) this.game.handleToggleWolfReady(w.clientId);
+          this.wolfReadyMap.set(w.clientId, true);
+          this.game.broadcastToWolves({ type: 'WOLF_READY', clientId: w.clientId, ready: true });
         } else if (resp.type === 'speak') {
           newDrafts.push({ wolf: w, speech: resp.speech, stance: resp.stance });
           this.wolfStanceMap.set(w.clientId, resp.stance);
-          if (this.isWolfReady(w.clientId)) this.game.handleToggleWolfReady(w.clientId); // 撤回 ready
+          this.wolfReadyMap.set(w.clientId, false); // 想講 = 不是 ready
+          this.game.broadcastToWolves({ type: 'WOLF_READY', clientId: w.clientId, ready: false });
         }
         // 'wait' → 不出草稿，維持等待
       }
 
-      // ④ 收斂判斷：全狼 ready 且沒人想再講（allReady 但仍有新草稿 → 不 break，繼續 loop 處理；安全網）
+      // ④ 收斂判斷：全狼 ready 且沒人想再講
       const allReady = wolves.every((w) => this.isWolfReady(w.clientId));
-      if (allReady && newDrafts.length === 0) break; // 收斂：全狼 stance=投XXX 且沒人想再講
+      if (allReady && newDrafts.length === 0) break; // 收斂
 
       if (newDrafts.length > 0) {
         drafts = newDrafts; // 下一輪 judge 從新草稿中選
@@ -337,6 +339,12 @@ export class AiController {
         if (waiting.length === 0) break; // 安全：不該發生
         drafts = await this.generateAllDrafts(waiting, round);
         if (drafts.length === 0) break; // 全部失敗 → 停止
+      }
+    }
+    // 收斂後：同步 game state（觸發 VOTING 轉換）
+    for (const w of wolves) {
+      if (this.wolfReadyMap.get(w.clientId) === true) {
+        this.game.handleToggleWolfReady(w.clientId);
       }
     }
     if (this.isAborted()) {
