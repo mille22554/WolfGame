@@ -460,7 +460,8 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | API 格式 | OpenAI-compatible（`POST /v1/chat/completions`） |
 | 認證 | `Authorization: Bearer ${SGLANG_API_KEY}`（env 變數，部署時注入） |
 | 環境變數 | `SGLANG_API_KEY`、`LLM_MODEL`（model name，預設 `qwen3.8-27b`） |
-| 併發限制 | `--max-running-requests 2`（與 PRE_SPEECH 每批 2 個吻合，不需排隊） |
+| 併發排程 | `x-override-priority` header（併發呼叫時 100+i 錯開；SGLang 依 priority 排序處理） |
+| 併發限制 | `--max-running-requests 2`（多請求自動排隊，依 priority 順序處理） |
 | 呼叫 timeout | 無（LLM 呼叫不設 timeout，等待回傳；reasoning model 長 prompt 可能 >60s） |
 | 失敗處理 | LLM 呼叫失敗（5xx / parse error）→ **重試**取得回覆（記錄重試次數）。若 SGLang server 本身掛掉，遊戲無法繼續（所有 AI 呼叫都會失敗）→ 開新局 |
 
