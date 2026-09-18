@@ -13,6 +13,7 @@
 - ✅ 白天討論 prompt 加「純口頭推論」限制（防 Among Us 路徑/軌跡/不在場證明）
 - ✅ 報告完整合併（events 存 .events.json，resume 時載入前段一起出報告）
 - ⏳ 白天討論 5 分鐘分段跑中（`/tmp/day1.json` 已存，可接續）
+- ✅ 全併發 LLM 呼叫（strategy/drafts/responses/voting 全部 `Promise.all`）
 
 **本 session 修的東西：**
 - `isWolfReady`/`isMasonReady` 改回讀本地 map（不讀 game.state——private）
@@ -30,6 +31,7 @@
 - 白天討論 prompt 加：「⚠️ 純口頭推論遊戲。沒有路徑、軌跡、不在場證明、操作記錄。」
 - 測試腳本：DAY timeout = 300s（5 分鐘，測試方便；非正式需求）
 - 報告完整合併：events 存進 `.events.json`，resume 時載入前段 events 一起出報告
+- 全併發 LLM 呼叫：`generateDayStrategies`/`generateDayDrafts`/day responses/wolf responses/wolf voting/day voting 全部改 `Promise.all`（SGLang 端自動排隊）
 
 **下一步（依序）：**
 1. 繼續跑白天 5 分鐘分段（`--resume /tmp/day1.json --stop-at DAY_RESULT --save-state /tmp/day2.json`）
