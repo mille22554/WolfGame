@@ -90,7 +90,7 @@ export declare class AiController {
     private judgePickDraft;
     /** 非發言者狼讀白板後回應：vote / speak / wait */
     private wolfRespond;
-    /** 狼會議 VOTING：每隻 AI 狼 LLM 選刀人目標 → 提交 WOLF_KILL（失敗重試；最終失敗跳過、不阻塞） */
+    /** 狼會議 VOTING：每隻 AI 狼 LLM 選刀人目標 → 提交 WOLF_KILL（全併發） */
     private runWolfVoting;
     /** 共有者會議：雙共有者獨立出草稿 → loop（judge 盲選發布 → 另一人回應 → 收斂判斷） */
     private runMasonDiscussion;
@@ -100,7 +100,7 @@ export declare class AiController {
     private judgePickMasonDraft;
     /** 非發言者共有者讀白板後回應：vote / speak / wait */
     private masonRespond;
-    /** 白天開始時：每個 AI 依角色生成策略 → 寫入全局 memory */
+    /** 白天開始時：每個 AI 依角色生成策略 → 寫入全局 memory（全併發） */
     private generateDayStrategies;
     /** 依角色生成策略 prompt */
     private buildStrategyPrompt;
@@ -157,8 +157,7 @@ export declare class AiController {
     private buildTargetPrompts;
     /** 占い／守衛：LLM 選目標 → 提交夜間行動（失敗重試；最終失敗跳過、不阻塞） */
     private runTargetAction;
-    /** 所有 AI 獨立出草稿（平行 LLM 呼叫） */
-    /** 隨機選一個 AI 出草稿（避免 15 個平行 LLM 呼叫塞爆 SGLang；一次一個比較自然） */
+    /** 所有 AI 獨立出草稿（全併發 LLM 呼叫） */
     private generateDayDrafts;
     /** Judge 盲選一篇白天草稿（LLM 全盲評分） */
     private judgePickDayDraft;
