@@ -110,6 +110,9 @@ if (RESUME_PATH) {
 // --- 4) 觀察：分階段 timeout 輪詢 ---
 let converged = false;
 let aborted = false;
+let externalStop = false;
+process.on('SIGTERM', () => { externalStop = true; console.log('[stage2] 收到 SIGTERM，準備寫報告退出'); });
+process.on('SIGINT', () => { externalStop = true; console.log('[stage2] 收到 SIGINT，準備寫報告退出'); });
 let phaseTimeout = TIMEOUTS.NIGHT;
 let phaseStarted = Date.now();
 let lastMajorPhase = 'NIGHT';
@@ -137,6 +140,7 @@ function logProgress(s) {
 }
 
 while (true) {
+  if (externalStop) break;
   const s = game.getNightState();
   const major = currentMajorPhase(s.phase);
 
