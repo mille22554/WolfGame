@@ -98,6 +98,11 @@ export interface GameState {
         from: string;
         text: string;
     }[];
+    /** 白天討論訊息歷史（存檔/恢復用；AI 控制器接續用） */
+    dayMessages: {
+        from: string;
+        text: string;
+    }[];
 }
 export interface GameCallbacks {
     /** 發送訊息給特定 client */
@@ -170,6 +175,14 @@ export declare class GameEngine {
     getPlayers(): GamePlayer[];
     /** 序列化目前遊戲狀態（JSON-safe；用於存檔/分階段測試 resume） */
     saveState(): Record<string, unknown>;
+    /** AI 控制器用：取得白天討論狀態（dayReady + dayMessages） */
+    getDayState(): {
+        dayReady: Map<string, boolean>;
+        dayMessages: {
+            from: string;
+            text: string;
+        }[];
+    };
     /**
      * 從存檔恢復狀態並直接進入 DAY_DISCUSSION（跳過 ROLE_REVEAL / NIGHT）。
      * 用於分階段測試：先跑 night 存檔，再 resume 只跑 day。

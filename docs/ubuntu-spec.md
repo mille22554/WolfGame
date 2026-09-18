@@ -339,8 +339,9 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 
 - 复用 lobby 的 `SEND_MESSAGE` / `MESSAGE`（公頻）
 - **無私頻**：WOLF_CHAT / MASON_CHAT 僅 NIGHT 可用，白天只有公頻
-- 結束方式：所有存活玩家 toggle「準備投票」ON → 進入投票（同狼會議模式，可隨時 toggle 開/關）（**目標態**；目前引擎用 120s 定時器）
+- 結束方式：所有存活玩家 toggle「準備投票」ON → 進入投票（同狼會議模式，可隨時 toggle 開/關）
 - 已死亡玩家不能發言
+- **AI 驅動**：AI 玩家走「策略先行 + toggle 制」loop（見 §13.6a）
 
 ### 12.5 投票（DAY_VOTING）
 
@@ -585,6 +586,103 @@ AI 狼依 §12.3 的 loop 驅動（非 SpeechScheduler 管線，是持續對話�
 #### 清理
 
 - 遊戲解散（room destroy）時：cancel 管線 + abort 進行中的 LLM 呼叫
+
+#### 13.6a 白天討論（AI toggle 制 + 策略先行）
+
+AI 白天討論採用「策略先行 + 逐輪發言 + 全員回應」的 loop 結構：
+
+**全局 Memory（跨階段不重置）：**
+
+- 每個 AI 玩家有 `profile.memory`（string），遊戲開始時從 `character/<id>/memory.md` 初始化
+- 整局遊戲持續 append，**不在 phase 切換時重置**
+- 所有 prompt 的 system 段都包含 `entry.profile.memory`
+- 安全上限 4000 字（超出砍最舊）
+- 用途：存策略筆記、關鍵觀察、跨天回憶
+
+**策略先行（白天開始時）：**
+
+進入 `DAY_DISCUSSION` 時，先對每個存活 AI 做一次 LLM 呼叫（`DAY_STRATEGY`），依角色生成策略：
+
+| 角色 | 策略 prompt 核心 |
+|---|---|
+| 占卜師 | 「你是占卜師。你的情報：{privateInfo}。今天怎麼引導會議讓村民贏？要不要 CO？什麼時機 CO 最有利？」 |
+| 共有者 | 「你是共有者。昨晚和{partner}的方針：{masonBoard}。今天怎麼發話執行？CO 是否有利？」 |
+| 狼 | 「你是狼。昨晚刀了{target}。狼隊：{wolves}。會議結論：{wolfBoard}。怎麼引導讓狼隊存活？要不要假 CO？嫌疑導向誰？」 |
+| 村民/狂人 | 「你是{role}。昨晚死的是{deaths}。你觀察到什麼？今天發言要達成什麼效果？」 |
+
+- 輸出：`{"strategy": "一句話策略（≤50字）"}`
+- 結果 append 到該 AI 的 `profile.memory`（格式：`[Day{N} 策略] {strategy}`）
+- 14 個 AI 各一次 LLM（sequential，避免 SGLang 併發爆掉）
+- **策略生成完成後才進入討論 loop**
+
+**討論 Loop（逐輪發言 + 回應）：**
+
+```
+while (not all AI ready):
+  ① 從未 ready 的 AI 中隨機選一個 → 生成發言（draft）
+  ② 發布發言到 dayBoard（broadcast MESSAGE）
+  ③ 發言者 auto toggle ON（ready）
+  ④ 其他存活 AI 逐一 respond（sequential）：
+     - 可回 ready / speak（出新草稿）/ wait
+     - 回應時可附帶 strategy_update（滾動調整）
+  ⑤ 收斂判斷：全部 AI ready → break
+  ⑥ 有 speak → 新草稿進入下一輪 ①
+  ⑦ 無 speak 但有未 ready → 強制那些 AI 發言（回 ①）
+```
+
+**滾動策略調整（融入 respond/speak，不加額外 LLM 呼叫）：**
+
+- respond prompt 加：「聽完這段發言，你的策略需要調整嗎？需要就寫出更新。」
+- draft prompt 加：「發言前，根據目前白板狀況，策略要微調嗎？」
+- 輸出多一個 `strategy_update` 欄位（string 或 null）
+- 若非 null → `appendMemory(clientId, "[Day{N}] {update}")`
+- 若為 null → 策略不變
+
+**Prompt 結構（白天發言）：**
+
+```
+System:
+  你是「{nickname}」，在狼人殺遊戲中扮演「{roleDisplayName}」。
+  {persona 前 600 字}
+  你的記憶：
+  {profile.memory}          ← 全局 memory（含策略、觀察、跨天回憶）
+  硬規則：...
+
+User:
+  當前：第 {day} 天 白天討論。
+  存活玩家：{playerList}
+  你的情報：{privateInfo}
+  目前的討論：
+  {dayBoard}
+  任務：發表你的看法（一句話，≤50字），並表明你是否準備投票了。
+  發言前：根據目前白板狀況，你的策略要微調嗎？要的話先更新。
+  回覆格式：
+  {"strategy_update": "..." 或 null, "speech": "...", "stance": "準備好了|資訊不足"}
+```
+
+**Prompt 結構（白天回應）：**
+
+```
+User:
+  {nickname} 剛說：「{publishedSpeech}」
+  目前的討論：
+  {dayBoard}
+  聽完這段發言，你的策略需要調整嗎？需要就寫出更新。
+  然後決定：ready（準備投票）/ speak（你要補充發言）/ wait（再等等）
+  回覆格式：
+  {"strategy_update": "..." 或 null, "action": "ready|speak|wait", "speech": "..." (speak時), "stance": "..." (speak時)}
+```
+
+**5 分鐘中斷存檔／接續（外部測試用）：**
+
+- 測試腳本收到 SIGINT/SIGTERM → 寫報告 + `game.saveState()` 存檔
+- 下次 `--resume <savefile>` → 恢復 game state（含 dayReady、dayBoard）
+- AI controller 的 `runDayDiscussion` 接續邏輯：
+  - 從 `game.state.dayBoard` 重建「誰已發言」
+  - 從 `game.state.dayReady` 重建 dayReadyMap
+  - 跳過已 ready 的 AI，只處理未 ready 的
+  - 重新生成策略（因為可能過了一輪，風向有變）
+- 測試流程：跑 5 min → SIGINT → 存檔 → 下次接續 → 重複直到收斂
 
 ### 13.7 新增模組
 

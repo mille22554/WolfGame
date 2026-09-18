@@ -51,7 +51,7 @@ export interface AiLogEntry {
   clientId: string;
   characterId: string;
   role: string;
-  kind: 'WOLF_SPEECH' | 'JUDGE' | 'WOLF_STANCE' | 'WOLF_KILL' | 'SEER_CHECK' | 'GUARD_PROTECT' | 'MASON_TOGGLE' | 'MASON_SPEECH' | 'MASON_STANCE' | 'WOLF_ABORT';
+  kind: 'WOLF_SPEECH' | 'JUDGE' | 'WOLF_STANCE' | 'WOLF_KILL' | 'SEER_CHECK' | 'GUARD_PROTECT' | 'MASON_TOGGLE' | 'MASON_SPEECH' | 'MASON_STANCE' | 'WOLF_ABORT' | 'DAY_STRATEGY';
   round: number;
   /** 第幾次嘗試（重試時 >1） */
   attempt: number;
@@ -573,18 +573,94 @@ export class AiController {
     return { type: 'wait' };
   }
 
-  // --- 白天討論（SpeechScheduler 簡化版：AI 輪流發言 → 全 toggle ON → 結束） ---
+  // --- 白天討論（策略先行 + toggle 制） ---
 
-  /** 白天討論：AI 輪流發言（judge 盲選），收斂（全 AI toggle ON）後結束 */
+  /** 白天開始時：每個 AI 依角色生成策略 → 寫入全局 memory */
+  private async generateDayStrategies(aiPlayers: GamePlayer[]): Promise<void> {
+    for (const p of aiPlayers) {
+      if (this.destroyed) return;
+      const entry = this.entries.get(p.clientId);
+      if (!entry) continue;
+      const prompts = this.buildStrategyPrompt(entry, p);
+      const result = await this.llmWithRetry(p.clientId, 'DAY_STRATEGY', this.day, prompts, (p2) => {
+        return typeof p2.strategy === 'string' && p2.strategy.trim() ? 'ok' : null;
+      });
+      if (result.value === 'ok' && result.parsed) {
+        const strategy = (result.parsed.strategy as string).trim();
+        this.appendMemory(p.clientId, `[Day${this.day} 策略] ${strategy}`);
+        this.logEntry(p.clientId, 'DAY_STRATEGY', this.day, 0, [], null, { strategy });
+      }
+    }
+  }
+
+  /** 依角色生成策略 prompt */
+  private buildStrategyPrompt(entry: AiEntry, player: GamePlayer): ChatMessage[] {
+    const k = entry.knowledge;
+    const aliveList = (this.game?.getPlayers() ?? []).filter((p) => p.alive).map((p) => p.nickname).join('、');
+    const role = player.role;
+    let roleSpecific: string;
+    if (role === 'seer') {
+      roleSpecific = `你是占卜師。你的情報：${k.privateInfo || '（尚無查驗結果）'}。今天白天討論，你該怎麼引導會議讓村民贏？要不要公開身份（CO）？什麼時機 CO 最有利？`;
+    } else if (role === 'mason') {
+      const partner = (this.game?.getPlayers() ?? []).find((p) => p.clientId === player.masonPartnerId);
+      const masonCtx = this.masonBoard.length ? this.masonBoard.map((m) => `${m.from}：「${m.text}」`).join('\n') : '（昨晚未討論）';
+      roleSpecific = `你是共有者，夥伴是${partner?.nickname ?? '（未知）'}。昨晚你們的討論：\n${masonCtx}\n今天白天你怎麼發話執行方針？CO 是否有利？`;
+    } else if (role === 'werewolf') {
+      const wolves = (this.game?.getPlayers() ?? []).filter((p) => p.role === 'werewolf' && p.alive).map((p) => p.nickname).join('、');
+      const wolfCtx = this.wolfBoard.length ? this.wolfBoard.map((m) => `${m.from}：「${m.text}」`).join('\n') : '（無）';
+      const target = this.game?.getNightState().wolfTargetId;
+      const targetName = target ? (this.game?.getPlayers() ?? []).find((p) => p.clientId === target)?.nickname : '（未定）';
+      roleSpecific = `你是狼。狼隊：${wolves}。昨晚刀了${targetName}。狼隊會議結論：\n${wolfCtx}\n今天白天你怎麼引導討論讓狼隊存活？要不要假 CO？把嫌疑導向誰？`;
+    } else {
+      roleSpecific = `你是${k.displayName}。目前存活：${aliveList}。${k.privateInfo ? `你的情報：${k.privateInfo}` : ''}你從目前情況觀察到什麼？今天發言要達成什麼效果——自保、指人、還是跟風？`;
+    }
+    const user = [
+      `當前：第 ${this.day} 天 白天討論開始。`,
+      `存活玩家：${aliveList}`,
+      k.privateInfo ? `你的情報：${k.privateInfo}` : '',
+      roleSpecific,
+      ``,
+      `用一句話（≤50字）寫下你今天白天的策略。`,
+      `回覆格式（JSON）：{"strategy": "你的策略"}`,
+    ].filter(Boolean).join('\n');
+    return [
+      { role: 'system', content: this.buildSystemPrompt(entry) },
+      { role: 'user', content: user },
+    ];
+  }
+
+  /** 白天討論：策略先行 → AI 輪流發言（judge 盲選）→ 收斂（全 AI toggle ON）後結束 */
   private async runDayDiscussion(): Promise<void> {
     const aiPlayers = this.getAiAlivePlayers();
     if (aiPlayers.length === 0 || !this.game) return;
 
-    // ① 所有 AI 各自獨立出草稿
-    let drafts = await this.generateDayDrafts(aiPlayers);
+    // 接續模式：從 game state 重建 dayBoard + dayReadyMap（resume 時已有內容）
+    const dayState = this.game.getDayState();
+    for (const m of dayState.dayMessages) {
+      if (!this.dayBoard.some((b) => b.from === m.from && b.text === m.text)) {
+        this.dayBoard.push({ from: m.from, text: m.text });
+      }
+    }
+    for (const p of aiPlayers) {
+      const ready = dayState.dayReady.get(p.clientId);
+      if (ready !== undefined) this.dayReadyMap.set(p.clientId, ready);
+    }
+
+    // 策略先行：每個 AI 生成/更新策略寫入 memory
+    await this.generateDayStrategies(aiPlayers);
+
+    // 接續：跳過已 ready 的 AI，只讓未 ready 的出草稿
+    const pendingPlayers = aiPlayers.filter((p) => !this.dayReadyMap.get(p.clientId));
+    if (pendingPlayers.length === 0) {
+      // 全部已 ready（resume 後直接收斂）
+      return;
+    }
+
+    // ① 未 ready 的 AI 各自獨立出草稿
+    let drafts = await this.generateDayDrafts(pendingPlayers);
     if (drafts.length === 0) {
       // 全部 LLM 失敗：強制 toggle ON，避免卡死
-      for (const p of aiPlayers) this.game.handleToggleVoteReady(p.clientId);
+      for (const p of pendingPlayers) this.game.handleToggleVoteReady(p.clientId);
       return;
     }
 
@@ -767,10 +843,21 @@ export class AiController {
     return [
       `你是「${entry.def.nickname}」，在狼人殺遊戲中扮演「${entry.knowledge.displayName}」。`,
       entry.profile ? entry.profile.persona.slice(0, 600) : '',
+      entry.profile?.memory ? `你的記憶：\n${entry.profile.memory}` : '',
       '硬規則：使用繁體中文。你只能回覆 JSON，不要多餘文字。不要 markdown。',
       '禁止：「我先講...」「讓我說...」等前言；「不是...而是...」等對立修正句型；不適用於當前情境的抽象策略語言。',
       '你的角色語氣要符合當下社交情境。如果大家都同意，不要製造不存在的衝突。',
     ].filter(Boolean).join('\n');
+  }
+
+  /** 追加到 AI 的全局 memory（跨階段不重置；4000 字上限，超出砍最舊） */
+  appendMemory(clientId: string, text: string): void {
+    const entry = this.entries.get(clientId);
+    if (!entry?.profile) return;
+    entry.profile.memory += `\n${text}`;
+    if (entry.profile.memory.length > 4000) {
+      entry.profile.memory = entry.profile.memory.slice(-4000);
+    }
   }
 
   /** 狼白板歷史（prompt 用；無則提示沒有討論） */
@@ -955,11 +1042,13 @@ export class AiController {
       `任務：發表你的看法（一句話，≤50字），並表明你是否準備投票了。`,
       `要求：用你的角色語氣說話。不要說「沒人發言」「目前沒人發言」。要有具體內容（質疑、分析、表態）。`,
       ``,
+      `發言前：根據目前白板狀況，你的策略要微調嗎？要的話先寫出更新。`,
+      ``,
       `回覆格式（JSON）：`,
-      `{"speech": "你要說的話", "stance": "準備好了"}`,
+      `{"strategy_update": "更新後的策略" 或 null, "speech": "你要說的話", "stance": "準備好了"}`,
       `或`,
-      `{"speech": "你要說的話", "stance": "資訊不足"}`,
-      `（「準備好了」＝你講完了，準備投票；「資訊不足」＝你還想再聽聽）`,
+      `{"strategy_update": null, "speech": "你要說的話", "stance": "資訊不足"}`,
+      `（「準備好了」＝你講完了，準備投票；「資訊不足」＝你還想再聽聽；strategy_update 為 null 表示策略不變）`,
     ].filter(Boolean).join('\n');
     return [
       { role: 'system', content: this.buildSystemPrompt(entry) },
@@ -967,7 +1056,7 @@ export class AiController {
     ];
   }
 
-  /** 白天討論回應 prompt；輸出 {"action":"ready"} 或 {"action":"speak","speech":"...","stance":"..."} 或 {"action":"wait"} */
+  /** 白天討論回應 prompt；輸出含 strategy_update + action(ready/speak/wait) */
   private buildDayResponsePrompts(entry: AiEntry, publishedSpeech: string): ChatMessage[] {
     const k = entry.knowledge;
     const boardText = this.dayBoard.length
@@ -982,12 +1071,18 @@ export class AiController {
       ``,
       `剛發表的發言：「${publishedSpeech}」`,
       ``,
-      `任務：看完後決定你的反應（三選一）：`,
+      `聽完這段發言，你的策略需要調整嗎？需要就寫出更新。`,
+      `然後決定你的反應（三選一）：`,
       `1. 我講完了，準備投票 → {"action": "ready"}`,
       `2. 我要補充 → {"action": "speak", "speech": "你要說的話（≤50字）", "stance": "準備好了" 或 "資訊不足"}`,
       `3. 我先聽聽 → {"action": "wait"}`,
       ``,
       `要求：同意就簡短。要講就講新的角度，不要重複別人講過的。用你的角色語氣。`,
+      ``,
+      `回覆格式（JSON）：`,
+      `{"strategy_update": "更新後的策略" 或 null, "action": "ready"}`,
+      `或 {"strategy_update": null, "action": "speak", "speech": "...", "stance": "..."}`,
+      `或 {"strategy_update": null, "action": "wait"}`,
     ].join('\n');
     return [
       { role: 'system', content: this.buildSystemPrompt(entry) },
@@ -1092,6 +1187,10 @@ export class AiController {
     const prompts = this.buildDayDraftPrompts(entry);
     const result = await this.llmWithRetry(p.clientId, 'WOLF_SPEECH', this.day, prompts, (p2) =>
       typeof p2.speech === 'string' && p2.speech.trim() && typeof p2.stance === 'string' ? 'ok' : null);
+    // 滾動策略調整：發言者也可能更新策略
+    if (result.parsed?.strategy_update && typeof result.parsed.strategy_update === 'string') {
+      this.appendMemory(p.clientId, `[Day${this.day}] ${result.parsed.strategy_update.trim()}`);
+    }
     if (result.value === null) return [];
     return [{ player: p, speech: (result.parsed!.speech as string).trim(), stance: (result.parsed!.stance as string).trim() }];
   }
@@ -1118,6 +1217,10 @@ export class AiController {
       if (p2.action === 'wait') return 'ok';
       return null;
     });
+    // 滾動策略調整：若 LLM 回傳 strategy_update，append 到 memory
+    if (result.parsed?.strategy_update && typeof result.parsed.strategy_update === 'string') {
+      this.appendMemory(p.clientId, `[Day${this.day}] ${result.parsed.strategy_update.trim()}`);
+    }
     if (result.value === null) return { type: 'wait' };
     const p2 = result.parsed!;
     if (p2.action === 'ready') return { type: 'ready' };

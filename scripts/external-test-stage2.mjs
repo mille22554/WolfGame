@@ -185,11 +185,11 @@ writeFileSync(REPORT_PATH, report, 'utf-8');
 const status = converged ? `${STOP_AT} 達成` : aborted ? '未收斂（100 則白板上限）' : '未收斂（階段 timeout）';
 console.log(`[stage2] ${status}；報告已寫入 ${REPORT_PATH}`);
 
-// --- 5.5) 存檔（若指定 --save-state） ---
-if (SAVE_STATE_PATH && converged) {
+// --- 5.5) 存檔（若指定 --save-state；converged 或 externalStop 時皆存） ---
+if (SAVE_STATE_PATH && (converged || externalStop)) {
   const snapshot = game.saveState();
   writeFileSync(SAVE_STATE_PATH, JSON.stringify(snapshot, null, 2), 'utf-8');
-  console.log(`[stage2] 狀態存檔已寫入 ${SAVE_STATE_PATH}（可用 --resume ${SAVE_STATE_PATH} 接白天）`);
+  console.log(`[stage2] 狀態存檔已寫入 ${SAVE_STATE_PATH}（可用 --resume ${SAVE_STATE_PATH} 接續）`);
 }
 
 // --- 6) 結束 ---

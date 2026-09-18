@@ -10,7 +10,7 @@ export interface AiLogEntry {
     clientId: string;
     characterId: string;
     role: string;
-    kind: 'WOLF_SPEECH' | 'JUDGE' | 'WOLF_STANCE' | 'WOLF_KILL' | 'SEER_CHECK' | 'GUARD_PROTECT' | 'MASON_TOGGLE' | 'MASON_SPEECH' | 'MASON_STANCE' | 'WOLF_ABORT';
+    kind: 'WOLF_SPEECH' | 'JUDGE' | 'WOLF_STANCE' | 'WOLF_KILL' | 'SEER_CHECK' | 'GUARD_PROTECT' | 'MASON_TOGGLE' | 'MASON_SPEECH' | 'MASON_STANCE' | 'WOLF_ABORT' | 'DAY_STRATEGY';
     round: number;
     /** 第幾次嘗試（重試時 >1） */
     attempt: number;
@@ -100,7 +100,11 @@ export declare class AiController {
     private judgePickMasonDraft;
     /** 非發言者共有者讀白板後回應：vote / speak / wait */
     private masonRespond;
-    /** 白天討論：AI 輪流發言（judge 盲選），收斂（全 AI toggle ON）後結束 */
+    /** 白天開始時：每個 AI 依角色生成策略 → 寫入全局 memory */
+    private generateDayStrategies;
+    /** 依角色生成策略 prompt */
+    private buildStrategyPrompt;
+    /** 白天討論：策略先行 → AI 輪流發言（judge 盲選）→ 收斂（全 AI toggle ON）後結束 */
     private runDayDiscussion;
     /** 白天投票：每個 AI 玩家 LLM 決定投誰（或棄票）→ 提交 CAST_VOTE */
     private runDayVoting;
@@ -121,6 +125,8 @@ export declare class AiController {
     /** 引擎是否已因安全上限停止狼會議 */
     private isAborted;
     private buildSystemPrompt;
+    /** 追加到 AI 的全局 memory（跨階段不重置；4000 字上限，超出砍最舊） */
+    appendMemory(clientId: string, text: string): void;
     /** 狼白板歷史（prompt 用；無則提示沒有討論） */
     private wolfBoardText;
     /** 共有者白板歷史（prompt 用；無則提示沒有討論） */
@@ -141,7 +147,7 @@ export declare class AiController {
     private buildMasonResponsePrompts;
     /** 白天討論草稿 prompt；輸出 {"speech":"...", "stance":"準備好了"|"資訊不足"} */
     private buildDayDraftPrompts;
-    /** 白天討論回應 prompt；輸出 {"action":"ready"} 或 {"action":"speak","speech":"...","stance":"..."} 或 {"action":"wait"} */
+    /** 白天討論回應 prompt；輸出含 strategy_update + action(ready/speak/wait) */
     private buildDayResponsePrompts;
     /** 狼刀目標選擇 prompt（狼隊同夥 + 可刀目標 + 討論歷史；輸出 {"target":"<displayName>"}） */
     private buildWolfKillPrompts;

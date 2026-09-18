@@ -56,6 +56,7 @@ export class GameEngine {
             wolfMessageCount: 0,
             wolfMeetingAborted: false,
             wolfBoard: [],
+            dayMessages: [],
         };
     }
     /** 開始遊戲：分配角色、私發 ROLE_REVEALED、進入 phase 循環 */
@@ -229,6 +230,9 @@ export class GameEngine {
         const player = this.getPlayerByClientId(clientId);
         if (!player)
             return;
+        this.state.dayMessages.push({ from: player.nickname, text });
+        if (this.state.dayMessages.length > 50)
+            this.state.dayMessages.shift();
         this.callbacks.broadcast({ type: 'MESSAGE', from: player.nickname, text, ts: Date.now() });
     }
     /** 人狼私頻（僅狼會議步驟可用、僅存活人狼可見）；累計訊息數，達安全上限 → 停止並報告 */
@@ -337,6 +341,15 @@ export class GameEngine {
             wolfMessageCount: this.state.wolfMessageCount,
             wolfMeetingAborted: this.state.wolfMeetingAborted,
             wolfBoard: this.state.wolfBoard,
+            dayReady: Object.fromEntries(this.state.dayReady),
+            dayMessages: this.state.dayMessages,
+        };
+    }
+    /** AI 控制器用：取得白天討論狀態（dayReady + dayMessages） */
+    getDayState() {
+        return {
+            dayReady: this.state.dayReady,
+            dayMessages: this.state.dayMessages,
         };
     }
     /**
@@ -366,6 +379,11 @@ export class GameEngine {
         this.state.wolfMessageCount = snapshot.wolfMessageCount ?? 0;
         this.state.wolfMeetingAborted = snapshot.wolfMeetingAborted ?? false;
         this.state.wolfBoard = snapshot.wolfBoard ?? [];
+        // 白天討論狀態（resume 接續用）
+        if (snapshot.dayReady) {
+            this.state.dayReady = new Map(Object.entries(snapshot.dayReady));
+        }
+        this.state.dayMessages = snapshot.dayMessages ?? [];
         // 直接跳進 DAY_DISCUSSION
         this.transitionTo('DAY_DISCUSSION');
     }
