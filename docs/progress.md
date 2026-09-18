@@ -1,40 +1,58 @@
 # 進度追蹤（ubuntu 分支）
 
-> 更新：2026-09-17
+> 更新：2026-09-18
 > 用途：新 session 接手時讀此文件即可無縫繼續。
 
 ## 目前狀態
 
-**卡在哪：** 白天（DAY_DISCUSSION）外部測試進行中。已確認：
-- ✅ MESSAGE 有出現（裕子、良子有發言）
-- ✅ ready 有增有減（toggle ON/OFF 正常，非 sticky）
-- ⏳ 尚未完成（14 人全 ready → DAY_VOTING → 投票 → DAY_RESULT）
+**卡在哪：** 白天（DAY_DISCUSSION）外部測試進行中，用 5 分鐘分段跑。
 
-**已修（本 session）：**
-- 移除 DAY_VOTING 60s timeout（spec：不限時，等全員投票）
-- 移除 harness NIGHT 300s timeout（全階段不限時）
-- 移除 spec 中 2 處 token 上限（≤100 token）
-- 修正 spec DAY_DISCUSSION 描述（120s 定時器→不限時 toggle）
-- harness 每 10 分鐘輸出進度（ready/votes/wolfRound）
-- harness 實時討論 log（`/tmp/day-discussion.log`，tail -f 可看）
-- fix：discussion log 抓 `MESSAGE`（非 `DAY_MESSAGE`）
+- ✅ 夜流程（NIGHT_RESULT）已通過多次驗證
+- ✅ 狼會議收斂邏輯修好（不再 premature VOTING）
+- ✅ Wolf prompt 重構（Two-Level Split + 防幻覺 + 防重複 + 防假設性回應 + 防前綴）
+- ✅ 白天討論 prompt 加「純口頭推論」限制（防 Among Us 路徑/軌跡/不在場證明）
+- ✅ 報告完整合併（events 存 .events.json，resume 時載入前段一起出報告）
+- ⏳ 白天討論 5 分鐘分段跑中（`/tmp/day1.json` 已存，可接續）
+
+**本 session 修的東西：**
+- `isWolfReady`/`isMasonReady` 改回讀本地 map（不讀 game.state——private）
+- Wolf loop 不再在 loop 中呼叫 `game.handleToggleWolfReady`（會觸發 premature VOTING 轉換）
+  - loop 中只用 `wolfReadyMap` 本地追蹤 + `broadcastToWolves` 通知
+  - loop 收斂後才呼叫 `game.handleToggleWolfReady` 同步 state 觸發 VOTING
+- Wolf prompt 重構為 Two-Level Split（照 `docs/ai-rp-prompt-research.md`）
+  - Level 1：策略核心（MANDATORY）——刀人優先序、Dead Players、禁止/正確做法對照
+  - Level 2：角色語氣（2-4 句）
+- 防幻覺：「此頻道只有狼。不要引用沒在白板上出現的發言。」
+- 防重複：「不要重複你已講過的內容。沒有新東西就 vote 確認。」
+- 防假設性回應：「如果有人問我我就說...」→ 禁止，直接說明天要怎麼做
+- 防前綴：「speech 裡出現 P1、P13、#1 等任何編號/前綴」→ 禁止
+- `wait` 語意修正：已表態的狼用 `vote` 確認，`wait` 只給還沒表態過的狼
+- 白天討論 prompt 加：「⚠️ 純口頭推論遊戲。沒有路徑、軌跡、不在場證明、操作記錄。」
+- 測試腳本：DAY timeout = 300s（5 分鐘，測試方便；非正式需求）
+- 報告完整合併：events 存進 `.events.json`，resume 時載入前段 events 一起出報告
 
 **下一步（依序）：**
-1. Server 上重跑 `--resume /tmp/night1.json --stop-at DAY_RESULT`（不限時，可能 30-60 min）
-2. 用 `tail -f /tmp/day-discussion.log` 觀察討論過程
-3. 確認：AI 有發言（MESSAGE）、有 toggle 增減（DAY_READY_STATUS）、有投票（VOTE_RESULT）
-4. 若 day 有 bug → 修 → 重跑（不用重跑 night）
-5. 全部通過 → Step 5（AI 接 production server）
+1. 繼續跑白天 5 分鐘分段（`--resume /tmp/day1.json --stop-at DAY_RESULT --save-state /tmp/day2.json`）
+2. 觀察白天討論品質（發言內容、收斂速度、狼的表現）
+3. 若 AI 品質有問題 → 調 prompt → 重跑
+4. 全部通過 → Step 5（AI 接 production server）
 
 **Server 上跑測試的正確方式：**
 ```bash
 # 先 kill 舊 process
 ssh ssh.morowin.win "pkill -f external-test-stage2"
-# 用 nohup + disown 跑（SSH 斷線不會 kill）
-ssh ssh.morowin.win "bash -c 'cd /opt/wolfgame && SGLANG_API_KEY=ec1f8d... node scripts/external-test-stage2.mjs --resume /tmp/night1.json --stop-at DAY_RESULT --report /tmp/day-test-report.md > /tmp/day-test.log 2>&1 & disown; echo ok'"
-# 觀察
-ssh ssh.morowin.win "tail -20 /tmp/day-discussion.log"
-ssh ssh.morowin.win "cat /tmp/day-test.log"
+
+# 跑夜晚 + 存檔（~3 min）
+ssh ssh.morowin.win "cd /opt/wolfgame && SGLANG_API_KEY=ec1f8d... node scripts/external-test-stage2.mjs --stop-at NIGHT_RESULT --save-state /tmp/night1.json"
+
+# 從存檔接白天（5 分鐘一段，可多次接續）
+ssh ssh.morowin.win "cd /opt/wolfgame && SGLANG_API_KEY=ec1f8d... node scripts/external-test-stage2.mjs --resume /tmp/night1.json --stop-at DAY_RESULT --save-state /tmp/day1.json"
+
+# 接續下一段（報告會合併前段 events）
+ssh ssh.morowin.win "cd /opt/wolfgame && SGLANG_API_KEY=ec1f8d... node scripts/external-test-stage2.mjs --resume /tmp/day1.json --stop-at DAY_RESULT --save-state /tmp/day2.json"
+
+# 取回報告
+scp ssh.morowin.win:/opt/wolfgame/ai-trace-stage2-day.md "C:\Users\user\Desktop\FrankTests\Temp\ai-trace-stage2-day.md"
 ```
 
 ## 已完成
@@ -49,21 +67,30 @@ ssh ssh.morowin.win "cat /tmp/day-test.log"
 | Fix：一次一個 AI 發言 | `c1f65ad` | `generateDayDrafts` 從 15 平行→隨機選 1 個 |
 | docs/ai-rp-prompt-research.md | `c19c5e5` | 社群 RP 指南（prompt engineering 研究彙整） |
 | 外部測試分階段 | `b657509` | `--stop-at`（NIGHT_RESULT/DAY_RESULT/GAME_OVER）+ 各階段獨立 timeout |
-| NIGHT timeout 調高 | `4dbf085` | 120s→300s（LLM 慢時 120s 不夠） |
 | 存檔/恢復機制 | `1867954` | `GameEngine.saveState()`/`restoreState()` + 測試腳本 `--save-state`/`--resume` |
-| NIGHT 驗證通過 | — | `--stop-at NIGHT_RESULT` ✅（狼刀健太，3 則白板，round 1） |
-| 移除 DAY_VOTING 60s timeout | `4602ec3` | spec：不限時，等全員投票（handleVote 內檢查） |
+| 移除 DAY_VOTING 60s timeout | `4602ec3` | spec：不限時，等全員投票 |
 | harness 全階段不限時 | `742b9e4` | NIGHT=0, DAY=0（無 timeout 截斷） |
-| spec 清理 token 上限 | `4602ec3` | 移除 §13.4/§13.6 的「≤100 token」 |
 | harness 10 分鐘進度輸出 | `50218d0` | ready/votes/wolfRound 定期 log |
 | harness 實時討論 log | `506ddd8` | `/tmp/day-discussion.log`（MESSAGE + READY） |
 | fix: log 抓 MESSAGE | `d25ee5d` | sendDayMessage broadcast type 是 MESSAGE 非 DAY_MESSAGE |
+| 白天策略先行+全局memory+滾動調整 | `d6b8e99` | `generateDayStrategies` + `appendMemory`（4000 字上限）+ `strategy_update` |
+| 報告 phase 修正 | `e990f68` | converged 時報告顯示 STOP_AT（非 current phase） |
+| Wolf prompt Two-Level Split | `4b00f5e` | Level 1 策略核心 + Level 2 角色；Dead Players；禁止/正確做法 |
+| 防幻覺 prompt | `4b00f5e` | 「此頻道只有狼。不要引用沒在白板上出現的發言。」 |
+| Wolf loop 收斂修正 | `4814bb5` | 不在 loop 中呼叫 handleToggleWolfReady（防 premature VOTING） |
+| 防重複 prompt | `2685b8a` | 「不要重複你已講過的內容。沒有新東西就 vote 確認。」 |
+| 防假設性回應+防前綴 | `7338ff6` | 禁止「如果有人問我就說...」；禁止 P13 前綴 |
+| wait 語意修正 | `9bd607c` | 已表態的狼用 vote 確認；wait 只給還沒表態的狼 |
+| 白天 5 分鐘 timeout | `e9e6a24` | 測試方便；超時→存檔+報告，可 --resume 接續 |
+| 防 Among Us prompt | `09c9887` | 「純口頭推論遊戲。沒有路徑、軌跡、不在場證明、操作記錄。」 |
+| 報告完整合併 | `e3d6787` | events 存 .events.json；resume 時載入前段 events 一起出報告 |
 
 ## 待做
 
-1. **[HIGH] 外部測試驗證白天（進行中）** → `--resume /tmp/night1.json --stop-at DAY_RESULT`（不限時）
-   - 已確認 MESSAGE 有出現、ready 有增有減
-   - 尚未完成：等 14 人全 ready → 投票 → DAY_RESULT
+1. **[HIGH] 白天討論外部測試（進行中）** → 5 分鐘分段跑，觀察 AI 品質
+   - `/tmp/day1.json` 已存（第一段完成）
+   - 接續：`--resume /tmp/day1.json --stop-at DAY_RESULT --save-state /tmp/day2.json`
+   - 觀察：發言內容是否自然、狼是否暴露、收斂是否正常
 2. **[MED] Step 5：AI 接 production server** → `server.ts` 實例化 `AiController`
 3. **[LOW] 前端（ubuntu-web/）** → 等外部測試跑通完整一局再開
 
@@ -73,29 +100,30 @@ ssh ssh.morowin.win "cat /tmp/day-test.log"
 # 跑夜晚 + 存檔（~3 min）
 node scripts/external-test-stage2.mjs --stop-at NIGHT_RESULT --save-state /tmp/night1.json
 
-# 從存檔接白天（跳過 night，≤10 min）
-node scripts/external-test-stage2.mjs --resume /tmp/night1.json --stop-at DAY_RESULT
+# 從存檔接白天（5 分鐘一段）
+node scripts/external-test-stage2.mjs --resume /tmp/night1.json --stop-at DAY_RESULT --save-state /tmp/day1.json
 
-# 跑完整天（night + day，~13 min）
-node scripts/external-test-stage2.mjs --stop-at DAY_RESULT
+# 接續下一段（報告自動合併前段 events）
+node scripts/external-test-stage2.mjs --resume /tmp/day1.json --stop-at DAY_RESULT --save-state /tmp/day2.json
 
 # 跑完整局（多天）
 node scripts/external-test-stage2.mjs --stop-at GAME_OVER
 ```
 
-各階段 timeout：NIGHT=0（不限時）、DAY=0（不限時）。無 timeout 截斷，等到收斂或 process 被 kill。
+各階段 timeout：NIGHT=0（不限時）、DAY=300s（5 分鐘，測試方便）。
+存檔含：game state + events（`.events.json`）。resume 時自動載入前段 events，報告是完整的。
 
 ## 關鍵檔案
 
 | 檔案 | 說明 |
 |---|---|
-| `src/lobby-server/game.ts` | GameEngine（~880 行）；toggle 制、sendDayMessage、resolveVotes 平票、saveState/restoreState |
-| `src/lobby-server/ai-controller.ts` | AI 控制器（~1095 行）；night + day 完整邏輯 |
+| `src/lobby-server/game.ts` | GameEngine（~920 行）；toggle 制、sendDayMessage、resolveVotes 平票、saveState/restoreState |
+| `src/lobby-server/ai-controller.ts` | AI 控制器（~1250 行）；night + day 完整邏輯；wolf Two-Level Split prompt |
 | `src/lobby-server/types.ts` | 協議類型（TOGGLE_VOTE_READY、DAY_READY_STATUS 等） |
 | `src/lobby-server/server.ts` | Production server；AiController 尚未接入（Step 5） |
-| `scripts/external-test-stage2.mjs` | 外部測試腳本；分階段 + 存檔/恢復 |
+| `scripts/external-test-stage2.mjs` | 外部測試腳本；分階段 + 存檔/恢復 + events 合併報告 |
 | `docs/ubuntu-spec.md` | 權威規格（WS 協定、房間生命週期、phase 狀態機、里程碑） |
-| `docs/ai-rp-prompt-research.md` | 社群 RP 指南（調人設時參考） |
+| `docs/ai-rp-prompt-research.md` | 社群 RP 指南（prompt engineering 研究彙整） |
 
 ## 部署流程
 
@@ -114,12 +142,12 @@ ssh -F "C:\Users\user\Desktop\FrankTests\.ssh\config" ssh.morowin.win \
   "cd /opt/wolfgame && SGLANG_API_KEY=ec1f8d6ef95e81135aac5b9ac19b121836cc00e9d6511472c135c5d5bfb0c89e node scripts/external-test-stage2.mjs --stop-at NIGHT_RESULT --save-state /tmp/night1.json"
 
 ssh -F "C:\Users\user\Desktop\FrankTests\.ssh\config" ssh.morowin.win \
-  "cd /opt/wolfgame && SGLANG_API_KEY=ec1f8d6ef95e81135aac5b9ac19b121836cc00e9d6511472c135c5d5bfb0c89e node scripts/external-test-stage2.mjs --resume /tmp/night1.json --stop-at DAY_RESULT"
+  "cd /opt/wolfgame && SGLANG_API_KEY=ec1f8d6ef95e81135aac5b9ac19b121836cc00e9d6511472c135c5d5bfb0c89e node scripts/external-test-stage2.mjs --resume /tmp/night1.json --stop-at DAY_RESULT --save-state /tmp/day1.json"
 
 # 取回報告
 scp -F "C:\Users\user\Desktop\FrankTests\.ssh\config" \
-  ssh.morowin.win:/opt/wolfgame/ai-trace-stage2-output.md \
-  "C:\Users\user\Desktop\FrankTests\Temp\ai-trace-stage2-output.md"
+  ssh.morowin.win:/opt/wolfgame/ai-trace-stage2-day.md \
+  "C:\Users\user\Desktop\FrankTests\Temp\ai-trace-stage2-day.md"
 ```
 
 ## 使用者核心規則（調人設時必守）
@@ -135,3 +163,7 @@ scp -F "C:\Users\user\Desktop\FrankTests\.ssh\config" \
 - CD 自動判斷：無真人→0（立即）；有真人→60s
 - 120s timer 已完全移除，不保留 fallback
 - 100 則安全上限只限測試（正式版預設 0=停用）
+- **不要動 engine，不允許重生成**——AI 必須被 prompt 訓練到每次都能直接說出對的話
+- **有人想發言就不是 ready**（出新草稿 = 撤回 ready）
+- **純口頭推論遊戲**——沒有路徑、軌跡、不在場證明、操作記錄（那是 Among Us）
+- 5 分鐘白天 timeout 只是測試方便，不是正式需求
