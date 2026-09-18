@@ -10,6 +10,7 @@ export interface ChatMessage {
 }
 export interface ChatOptions {
     temperature?: number;
+    priority?: number;
 }
 /**
  * 呼叫 SGLang /v1/chat/completions，回傳 assistant 回覆文字。

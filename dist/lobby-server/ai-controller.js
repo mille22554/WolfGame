@@ -252,13 +252,13 @@ export class AiController {
             }
             // ③ 除發言者外所有狼讀白板 → 各自回應（全併發）
             const newDrafts = [];
-            await Promise.all(wolves.filter((w) => w.clientId !== selected.wolf.clientId).map(async (w) => {
+            await Promise.all(wolves.filter((w) => w.clientId !== selected.wolf.clientId).map(async (w, i) => {
                 if (this.destroyed || this.isAborted())
                     return;
                 const entry = this.entries.get(w.clientId);
                 if (!entry)
                     return;
-                const resp = await this.wolfRespond(w, entry, selected.speech, round);
+                const resp = await this.wolfRespond(w, entry, selected.speech, round, 100 + i);
                 if (!this.game)
                     return;
                 if (resp.type === 'vote') {
@@ -302,12 +302,12 @@ export class AiController {
     }
     /** 所有狼獨立出草稿（平行 LLM 呼叫；互不可見；失敗的狼跳過） */
     async generateAllDrafts(wolves, round) {
-        const results = await Promise.all(wolves.map(async (w) => {
+        const results = await Promise.all(wolves.map(async (w, i) => {
             const entry = this.entries.get(w.clientId);
             if (!entry)
                 return null;
             const prompts = this.buildDraftPrompts(entry);
-            const result = await this.llmWithRetry(w.clientId, 'WOLF_SPEECH', round, prompts, (p) => typeof p.speech === 'string' && p.speech.trim() && typeof p.stance === 'string' ? 'ok' : null);
+            const result = await this.llmWithRetry(w.clientId, 'WOLF_SPEECH', round, prompts, (p) => typeof p.speech === 'string' && p.speech.trim() && typeof p.stance === 'string' ? 'ok' : null, 100 + i);
             if (result.value === null)
                 return null;
             return { wolf: w, speech: result.parsed.speech.trim(), stance: result.parsed.stance.trim() };
@@ -367,7 +367,7 @@ export class AiController {
         return drafts[idx];
     }
     /** 非發言者狼讀白板後回應：vote / speak / wait */
-    async wolfRespond(w, entry, publishedSpeech, round) {
+    async wolfRespond(w, entry, publishedSpeech, round, priority) {
         const prompts = this.buildResponsePrompts(entry, publishedSpeech);
         const result = await this.llmWithRetry(w.clientId, 'WOLF_STANCE', round, prompts, (p) => {
             if (p.action === 'vote' && typeof p.target === 'string' && p.target)
@@ -377,7 +377,7 @@ export class AiController {
             if (p.action === 'wait')
                 return 'ok';
             return null;
-        });
+        }, priority);
         if (result.value === null)
             return { type: 'wait' }; // 失敗 → 視為等待（不阻塞）
         const p = result.parsed;
@@ -390,7 +390,7 @@ export class AiController {
     /** 狼會議 VOTING：每隻 AI 狼 LLM 選刀人目標 → 提交 WOLF_KILL（全併發） */
     async runWolfVoting(round) {
         const wolves = this.getAiWolves();
-        await Promise.all(wolves.map(async (w) => {
+        await Promise.all(wolves.map(async (w, i) => {
             if (this.destroyed || !this.game)
                 return;
             const entry = this.entries.get(w.clientId);
@@ -398,7 +398,7 @@ export class AiController {
                 return;
             const prompts = this.buildWolfKillPrompts(entry);
             const extract = (parsed) => this.resolveClientId(String(parsed.target ?? ''), (p) => p.clientId !== w.clientId && p.role !== Role.MADMAN);
-            const result = await this.llmWithRetry(w.clientId, 'WOLF_KILL', round, prompts, extract);
+            const result = await this.llmWithRetry(w.clientId, 'WOLF_KILL', round, prompts, extract, 100 + i);
             if (result.value !== null) {
                 this.game.handleNightAction(w.clientId, { type: 'WOLF_KILL', targetClientId: result.value });
             }
@@ -493,12 +493,12 @@ export class AiController {
     }
     /** 所有共有者獨立出草稿（平行 LLM 呼叫；互不可見；失敗的跳過） */
     async generateMasonDrafts(masons) {
-        const results = await Promise.all(masons.map(async (m) => {
+        const results = await Promise.all(masons.map(async (m, i) => {
             const entry = this.entries.get(m.clientId);
             if (!entry)
                 return null;
             const prompts = this.buildMasonDraftPrompts(entry);
-            const result = await this.llmWithRetry(m.clientId, 'MASON_SPEECH', this.day, prompts, (p) => typeof p.speech === 'string' && p.speech.trim() && typeof p.stance === 'string' ? 'ok' : null);
+            const result = await this.llmWithRetry(m.clientId, 'MASON_SPEECH', this.day, prompts, (p) => typeof p.speech === 'string' && p.speech.trim() && typeof p.stance === 'string' ? 'ok' : null, 100 + i);
             if (result.value === null)
                 return null;
             return { mason: m, speech: result.parsed.speech.trim(), stance: result.parsed.stance.trim() };
@@ -542,7 +542,7 @@ export class AiController {
     // --- 白天討論（策略先行 + toggle 制） ---
     /** 白天開始時：每個 AI 依角色生成策略 → 寫入全局 memory（全併發） */
     async generateDayStrategies(aiPlayers) {
-        await Promise.all(aiPlayers.map(async (p) => {
+        await Promise.all(aiPlayers.map(async (p, i) => {
             if (this.destroyed)
                 return;
             const entry = this.entries.get(p.clientId);
@@ -551,7 +551,7 @@ export class AiController {
             const prompts = this.buildStrategyPrompt(entry, p);
             const result = await this.llmWithRetry(p.clientId, 'DAY_STRATEGY', this.day, prompts, (p2) => {
                 return typeof p2.strategy === 'string' && p2.strategy.trim() ? 'ok' : null;
-            });
+            }, 100 + i);
             if (result.value === 'ok' && result.parsed) {
                 const strategy = result.parsed.strategy.trim();
                 this.appendMemory(p.clientId, `[Day${this.day} 策略] ${strategy}`);
@@ -645,13 +645,13 @@ export class AiController {
             this.game.handleToggleVoteReady(selected.player.clientId);
             // ③ 除發言者外所有 AI 讀白板 → 各自回應（全併發）
             const newDrafts = [];
-            await Promise.all(aiPlayers.filter((p) => p.clientId !== selected.player.clientId).map(async (p) => {
+            await Promise.all(aiPlayers.filter((p) => p.clientId !== selected.player.clientId).map(async (p, i) => {
                 if (this.destroyed)
                     return;
                 const entry = this.entries.get(p.clientId);
                 if (!entry)
                     return;
-                const resp = await this.dayRespond(p, entry, selected.speech);
+                const resp = await this.dayRespond(p, entry, selected.speech, 100 + i);
                 if (!this.game)
                     return;
                 if (resp.type === 'ready') {
@@ -693,7 +693,7 @@ export class AiController {
     /** 白天投票：每個 AI 玩家 LLM 決定投誰（或棄票）→ 提交 CAST_VOTE */
     async runDayVoting() {
         const aiPlayers = this.getAiAlivePlayers();
-        await Promise.all(aiPlayers.map(async (p) => {
+        await Promise.all(aiPlayers.map(async (p, i) => {
             if (this.destroyed || !this.game)
                 return;
             const entry = this.entries.get(p.clientId);
@@ -706,7 +706,7 @@ export class AiController {
                     return 'ABSTAIN';
                 return this.resolveClientId(String(target), (p2) => p2.clientId !== p.clientId);
             };
-            const result = await this.llmWithRetry(p.clientId, 'WOLF_KILL', this.day, prompts, extract);
+            const result = await this.llmWithRetry(p.clientId, 'WOLF_KILL', this.day, prompts, extract, 100 + i);
             if (result.value !== null) {
                 if (result.value === 'ABSTAIN') {
                     this.game.handleVote(p.clientId, null);
@@ -740,13 +740,13 @@ export class AiController {
         });
     }
     /** 呼叫 LLM 並解析；失敗（null / parse 失敗 / 抽取不到值）重試，最多 3 次、間隔 2s */
-    async llmWithRetry(clientId, kind, round, prompts, extract) {
+    async llmWithRetry(clientId, kind, round, prompts, extract, priority) {
         let response = null;
         let parsed = null;
         for (let attempt = 1; attempt <= MAX_LLM_RETRIES; attempt++) {
             if (this.destroyed)
                 break;
-            response = await chat(prompts, { temperature: 1.0 });
+            response = await chat(prompts, { temperature: 1.0, priority });
             parsed = parseJsonResponse(response);
             this.logEntry(clientId, kind, round, attempt, prompts, response, parsed);
             if (parsed === null) {
@@ -1135,14 +1135,14 @@ export class AiController {
     }
     /** 所有 AI 獨立出草稿（全併發 LLM 呼叫） */
     async generateDayDrafts(players) {
-        const results = await Promise.all(players.map(async (p) => {
+        const results = await Promise.all(players.map(async (p, i) => {
             if (this.destroyed)
                 return null;
             const entry = this.entries.get(p.clientId);
             if (!entry)
                 return null;
             const prompts = this.buildDayDraftPrompts(entry);
-            const result = await this.llmWithRetry(p.clientId, 'WOLF_SPEECH', this.day, prompts, (p2) => typeof p2.speech === 'string' && p2.speech.trim() && typeof p2.stance === 'string' ? 'ok' : null);
+            const result = await this.llmWithRetry(p.clientId, 'WOLF_SPEECH', this.day, prompts, (p2) => typeof p2.speech === 'string' && p2.speech.trim() && typeof p2.stance === 'string' ? 'ok' : null, 100 + i);
             if (result.parsed?.strategy_update && typeof result.parsed.strategy_update === 'string') {
                 this.appendMemory(p.clientId, `[Day${this.day}] ${result.parsed.strategy_update.trim()}`);
             }
@@ -1163,7 +1163,7 @@ export class AiController {
         return drafts[idx];
     }
     /** 非發言者 AI 讀白板後回應：ready / speak / wait */
-    async dayRespond(p, entry, publishedSpeech) {
+    async dayRespond(p, entry, publishedSpeech, priority) {
         const prompts = this.buildDayResponsePrompts(entry, publishedSpeech);
         const result = await this.llmWithRetry(p.clientId, 'WOLF_STANCE', this.day, prompts, (p2) => {
             if (p2.action === 'ready')
@@ -1173,7 +1173,7 @@ export class AiController {
             if (p2.action === 'wait')
                 return 'ok';
             return null;
-        });
+        }, priority);
         // 滾動策略調整：若 LLM 回傳 strategy_update，append 到 memory
         if (result.parsed?.strategy_update && typeof result.parsed.strategy_update === 'string') {
             this.appendMemory(p.clientId, `[Day${this.day}] ${result.parsed.strategy_update.trim()}`);

@@ -17,6 +17,7 @@ export interface ChatMessage {
 
 export interface ChatOptions {
   temperature?: number;
+  priority?: number; // x-override-priority（SGLang 排程用；併發時錯開：100, 101, 102...）
 }
 
 /**
@@ -25,7 +26,7 @@ export interface ChatOptions {
  * 失敗回 null。
  */
 export async function chat(messages: ChatMessage[], options: ChatOptions = {}): Promise<string | null> {
-  const { temperature = 1.0 } = options;
+  const { temperature = 1.0, priority } = options;
 
   try {
     const body: Record<string, any> = {
@@ -34,12 +35,15 @@ export async function chat(messages: ChatMessage[], options: ChatOptions = {}): 
       temperature,
     };
 
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${SGLANG_API_KEY}`,
+    };
+    if (priority !== undefined) headers['x-override-priority'] = String(priority);
+
     const res = await fetch(`http://${SGLANG_HOST}:${SGLANG_PORT}/v1/chat/completions`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${SGLANG_API_KEY}`,
-      },
+      headers,
       body: JSON.stringify(body),
     });
 
