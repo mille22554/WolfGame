@@ -249,8 +249,10 @@ export class AiController {
                 text: selected.speech,
             });
             // 記錄發言者的 stance + 本地 ready 追蹤（不呼叫 game.handleToggleWolfReady——會觸發 premature VOTING）
-            this.wolfStanceMap.set(selected.wolf.clientId, selected.stance);
-            if (selected.stance.startsWith('投')) {
+            // stance 正規化：speech 已點名刀人目標但 stance 漏寫「投」前綴 → 補上，視為已承諾（避免發布者被誤判為資訊不足而強制重出稿）
+            const publishedStance = this.normalizePublishedStance(selected.wolf, selected.speech, selected.stance);
+            this.wolfStanceMap.set(selected.wolf.clientId, publishedStance);
+            if (publishedStance.startsWith('投')) {
                 this.wolfReadyMap.set(selected.wolf.clientId, true);
                 this.game.broadcastToWolves({ type: 'WOLF_READY', clientId: selected.wolf.clientId, ready: true });
             }
@@ -369,6 +371,17 @@ export class AiController {
         this.selectionSeq += 1;
         this.logEntry('', 'JUDGE', round, 1, [], null, { picked: drafts[idx].wolf.nickname, from: drafts.length });
         return drafts[idx];
+    }
+    /** 發布稿 stance 正規化（對齊 spec §12.3：stance 只有「投XXX」或「資訊不足」二值）：
+     *  speech 已明確點名刀人目標時，視為已承諾——補上「投<目標>」；沒有目標才維持原樣（資訊不足）。 */
+    normalizePublishedStance(wolf, speech, stance) {
+        const s = stance.trim();
+        if (s.startsWith('投'))
+            return s;
+        const targets = (this.game?.getPlayers() ?? [])
+            .filter((p) => p.alive && p.clientId !== wolf.clientId && p.role !== Role.WEREWOLF && p.role !== Role.MADMAN);
+        const named = targets.find((p) => speech.includes(p.nickname));
+        return named ? `投${named.nickname}` : s;
     }
     /** 非發言者狼讀白板後回應：vote / speak / wait */
     async wolfRespond(w, entry, publishedSpeech, round, priority) {
@@ -872,6 +885,7 @@ export class AiController {
             '- 用「他」「她」指代玩家（用名字）',
             '- 假設性回應：「如果有人問我我就說...」「被質疑就...」——直接說你明天要怎麼做，不要假設別人會問你',
             '- speech 裡出現 P1、P13、#1、[1] 等任何編號/前綴——只寫你要講的話本身',
+            '- speech 裡出現「白板」「按白板」「會議」等機制/介面用語——你講的是角色對話，不是系統操作',
             '- 用「目標還沒發言」「我沒有依據質疑他」當理由——夜晚所有人都還沒發言是常態，明天討論開始後存活者都會發言，質疑針對的是他明天的發言',
             '- 用「先手/後手/發言順序」當理由——發言順序由流程決定，不構成任何優勢或劣勢',
             '- 用「先觀察」當結論——觀察不是戰術，說清楚你明天具體做什麼',
@@ -935,10 +949,10 @@ export class AiController {
             `存活玩家：${aliveList}`,
             `可刀目標（只能從以下選）：${this.eligibleTargets(entry)}`,
             ``,
-            `白板：`,
+            `會議紀錄：`,
             this.wolfBoardText() || '（目前沒有發言）',
             ``,
-            `任務：說一句話（≤70字）——① 你刀誰（白板已有共識目標時可省略）② 你明天白天做什麼（針對存活玩家）③ 你預期這個動作讓會議怎麼發展（潛伏時可省略）。`,
+            `任務：說一句話（≤50字）——① 你刀誰（會議已有共識目標時可省略）② 你明天白天做什麼（針對存活玩家）③ 你預期這個動作讓會議怎麼發展（潛伏時可省略）。`,
             `狼每晚必須刀人。「資訊不足」＝你還在考慮，最終必須選。`,
             ``,
             `出稿前先想清楚四件事，再寫 speech：`,
@@ -953,10 +967,11 @@ export class AiController {
             `⚠️ 你選的刀人目標今晚就死，明天不在場。你的白天動作只能針對其他存活玩家。`,
             `⚠️ 用名字，不用代詞。具體動作，不用模糊觀察。`,
             `⚠️ 沒有的資訊不要補理由：「我刀誰」可以沒有任何解釋。`,
-            `⚠️ 這個頻道只有狼。不要引用「某人剛才說...」——只有白板上出現的狼發言才算數。村民不在這裡。`,
-            `⚠️ 白板上已有刀人目標且無人反對時：speech 不要再重新宣布/附和「我刀誰」，直接聚焦明天戰術安排（誰帶節奏、質疑誰、怎麼配合）。`,
+            `⚠️ 這個頻道只有狼。不要引用「某人剛才說...」——只有會議紀錄上出現的狼發言才算數。村民不在這裡。`,
+            `⚠️ 會議上已有刀人目標且無人反對時：speech 不要再重新宣布/附和「我刀誰」，直接聚焦明天戰術安排（誰帶節奏、質疑誰、怎麼配合）。`,
             ``,
-            `JSON：{"speech": "...", "stance": "投[今晚刀的人名]"}（stance 必須是今晚刀的人名，且與 speech 的刀人目標一致；不是白天質疑對象）`,
+            `JSON：{"speech": "...", "stance": "投[今晚刀的人名]"} 或 {"speech": "...", "stance": "資訊不足"}`,
+            `（「投[人名]」＝已決定刀誰，是今晚刀的人，不是白天質疑對象；「資訊不足」＝還在考慮）`,
         ].join('\n');
         return [
             { role: 'system', content: `${this.buildSystemPrompt(entry)}\n${this.wolfContext(entry)}` },
@@ -970,7 +985,7 @@ export class AiController {
             `第 ${this.day} 夜，狼會議。剛發布：「${publishedSpeech}」`,
             ``,
             `存活：${aliveList}`,
-            `白板：`,
+            `會議紀錄：`,
             this.wolfBoardText(),
             ``,
             `回應前先評估眼前這個刀人方案，再決定：`,
@@ -983,15 +998,15 @@ export class AiController {
             `你的立場（三選一）：`,
             `1. 同意投票（我同意目前的刀人目標，我準備投票）→ {"action": "vote", "target": "今晚刀人目標的名字"}`,
             `2. 我要補充（我有新角度或要改變立場）→ {"action": "speak", "speech": "≤50字", "stance": "投XXX"}`,
-            `3. 我還沒表態（看白板我還沒說過要投誰，先聽聽）→ {"action": "wait"}`,
+            `3. 我還沒表態（看會議紀錄我還沒說過要投誰，先聽聽）→ {"action": "wait"}`,
             ``,
             `⚠️ target 永遠是「今晚要刀的玩家」（從可刀目標裡選）——不是提案者、不是發言人、不是白天質疑對象、更不是狼隊友。你同意提案，target = 提案提議刀的那個人。`,
-            `⚠️ 如果你之前已在白板上表態過（看白板歷史有你的名字+投XXX），且新發言不改變你的判斷 → 用 action="vote" 確認，不要用 wait。wait 只給還沒表態過的狼。`,
+            `⚠️ 如果你之前已在會議上表態過（看會議紀錄有你的名字+投XXX），且新發言不改變你的判斷 → 用 action="vote" 確認，不要用 wait。wait 只給還沒表態過的狼。`,
             ``,
             `⚠️ 刀人目標明天不在場。白天計畫只針對存活玩家。用名字，不用代詞。`,
-            `⚠️ 此頻道只有狼。不要引用沒在白板上出現的發言。`,
+            `⚠️ 此頻道只有狼。不要引用沒在會議紀錄上出現的發言。`,
             `⚠️ 不要重複你已講過的內容。沒有新東西就 vote 確認，不要換句話再講一遍。`,
-            `⚠️ 目標共識硬規則：白板上已有狼提出刀人目標且無人反對時——speech 禁止再重申「我同意刀XXX」「我支持刀XXX」「刀XXX可以」這類話。目標已定，speech 只能用來提「明天的新戰術安排」（誰帶節奏、質疑誰、怎麼配合、有沒有要改戰術）。只想重申既定目標／沒有新戰術 → 直接 action="vote"，不要講話。`,
+            `⚠️ 目標共識硬規則：會議上已有狼提出刀人目標且無人反對時——speech 禁止再重申「我同意刀XXX」「我支持刀XXX」「刀XXX可以」這類話。目標已定，speech 只能用來提「明天的新戰術安排」（誰帶節奏、質疑誰、怎麼配合、有沒有要改戰術）。只想重申既定目標／沒有新戰術 → 直接 action="vote"，不要講話。`,
         ].join('\n');
         return [
             { role: 'system', content: `${this.buildSystemPrompt(entry)}\n${this.wolfContext(entry)}` },

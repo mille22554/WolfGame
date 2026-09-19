@@ -90,6 +90,9 @@ export declare class AiController {
     private judgeScoreIndex;
     /** Judge 盲選一篇草稿（LLM 全盲評分，不告知作者）→ 回選中的 draft */
     private judgePickDraft;
+    /** 發布稿 stance 正規化（對齊 spec §12.3：stance 只有「投XXX」或「資訊不足」二值）：
+     *  speech 已明確點名刀人目標時，視為已承諾——補上「投<目標>」；沒有目標才維持原樣（資訊不足）。 */
+    private normalizePublishedStance;
     /** 非發言者狼讀白板後回應：vote / speak / wait */
     private wolfRespond;
     /** 狼會議 VOTING：每隻 AI 狼 LLM 選刀人目標 → 提交 WOLF_KILL（全併發） */
