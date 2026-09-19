@@ -582,7 +582,8 @@ function buildReport(game, ai, events, defs, converged, aborted, stopAt, stopPha
   L.push('## LLM 失敗／重試');
   L.push('');
   // MASON_TOGGLE / WOLF_ABORT / JUDGE 不是 LLM 呼叫（judge 是隨機選），不列入失敗清單
-  const failures = log.filter((e) => !['MASON_TOGGLE', 'WOLF_ABORT', 'JUDGE'].includes(e.kind) && (e.response === null || e.parsed === null || e.attempt > 1));
+  // attempt=0 是成功標記（ai-controller 在成功後額外 log 一筆 { response:null, parsed:{...} }），不算失敗
+  const failures = log.filter((e) => !['MASON_TOGGLE', 'WOLF_ABORT', 'JUDGE'].includes(e.kind) && e.attempt > 0 && (e.response === null || e.parsed === null || e.attempt > 1));
   if (failures.length === 0) {
     L.push('（無）');
   } else {
