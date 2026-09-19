@@ -53,7 +53,7 @@
 - 併發實測補充（14 路全過）：5 併發 967 tokens 全 200；14 併發 ~9.2K tokens 全 200、~49s 完成（SGLang `--max-running-requests 1` 依 priority 排隊）。先前 5 併發測試因 PowerShell 管道把中文打成 `?`（prompt=65 是亂碼），改用 base64 上傳後為正常 prompt（~79 tokens）
 
 **下一步（依序）：**
-1. 重跑完整 night（從頭，讓 `.log.json` 產生）→ 白天收斂段
+1. resume `/tmp/night1.json`（不重跑 night；resume 直接進 DAY_DISCUSSION）→ 跑白天收斂
 2. 驗證新 prompt：白天討論是否具體點名、不再 meta 繞圈、ready 收斂速度
 3. 觀察白天討論品質（發言內容、收斂速度、狼的表現）
 4. 若 AI 品質有問題 → 調 prompt → 重跑
