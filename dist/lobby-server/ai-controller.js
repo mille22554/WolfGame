@@ -79,6 +79,10 @@ export class AiController {
     getLog() {
         return [...this.log];
     }
+    /** resume 用：把前段存檔的 AI log 縫回（跨段報告需完整流程） */
+    restoreLog(entries) {
+        this.log.push(...entries);
+    }
     /** 該 AI 的知識快照（供報告／除錯） */
     getKnowledge(clientId) {
         const k = this.entries.get(clientId)?.knowledge;

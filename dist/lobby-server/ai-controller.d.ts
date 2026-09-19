@@ -69,6 +69,8 @@ export declare class AiController {
     isAi(clientId: string): boolean;
     /** 全部 LLM 互動記錄（依時間序） */
     getLog(): AiLogEntry[];
+    /** resume 用：把前段存檔的 AI log 縫回（跨段報告需完整流程） */
+    restoreLog(entries: AiLogEntry[]): void;
     /** 該 AI 的知識快照（供報告／除錯） */
     getKnowledge(clientId: string): AiKnowledge | null;
     /** 取消進行中的重試排程（進行中的 fetch 無法中斷，但其結果會被丟棄） */
