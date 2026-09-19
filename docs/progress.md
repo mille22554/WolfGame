@@ -18,6 +18,7 @@
 - ✅ **白天策略/草稿/回應/投票 prompt 加「點名具體玩家」+ 禁止規則空談**（引用 `docs/ai-rp-prompt-research.md`：Level 1 策略核心 + 防編造 + reminder）
 - ✅ **persona 修正**：shinichi/yuko/tatuya 的「時間線/分鐘/看到的現象」範例改為發言矛盾型（真一「昨晚和誰同點、時間差三分鐘」即源自 persona 範例腦補）
 - ✅ 白天測試紀錄（`stage2-day-report.md`）：狼會議不完整是舊格式 `night1.json` 無 `.log.json`（非渲染 bug）——要完整狼會議需重跑整局 night
+- ✅ **白天開場「捏造他人立場」幻覺修復**：良子第一句「不跟佐雪的立場走」——佐雪全程零發言，立場是憑空捏造（白板空＋強迫點名的 prompt 側效果）。system prompt 證據邊界新增「禁止假設任何玩家持某立場/講過什麼，除非實際出現在白板」；strategy/draft/response prompt 加降級規則「只能質疑已發言的實際內容，沒人發言就談自己觀察」（參考 `docs/ai-rp-prompt-research.md` §4 anti-fabrication）
 - ⏳ 白天收斂測試重跑（用重跑的 night 存檔，待驗證新 prompt）
 
 **本 session 修的東西：**
