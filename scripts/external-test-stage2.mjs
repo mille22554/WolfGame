@@ -104,6 +104,9 @@ if (RESUME_PATH) {
   // 載入前段 events（報告用）
   const eventsPath = RESUME_PATH.replace(/\.json$/, '.events.json');
   try { events.push(...JSON.parse(readFileSync(eventsPath, 'utf-8'))); } catch {}
+  // 載入前段 AI log（報告用；跨段拼回完整 LLM 流程）
+  const logPath = RESUME_PATH.replace(/\.json$/, '.log.json');
+  try { ai.restoreLog(JSON.parse(readFileSync(logPath, 'utf-8'))); } catch {}
   console.log(`[stage2] 從存檔恢復（${RESUME_PATH}），day=${snapshot.day}，events=${events.length}，直接進入 DAY_DISCUSSION`);
 } else {
   game.start();
@@ -197,6 +200,7 @@ if (SAVE_STATE_PATH) {
   const snapshot = game.saveState();
   writeFileSync(SAVE_STATE_PATH, JSON.stringify(snapshot, null, 2), 'utf-8');
   writeFileSync(SAVE_STATE_PATH.replace(/\.json$/, '.events.json'), JSON.stringify(events, null, 2), 'utf-8');
+  writeFileSync(SAVE_STATE_PATH.replace(/\.json$/, '.log.json'), JSON.stringify(ai.getLog(), null, 2), 'utf-8');
   console.log(`[stage2] 狀態存檔已寫入 ${SAVE_STATE_PATH}（可用 --resume ${SAVE_STATE_PATH} 接續）`);
 }
 

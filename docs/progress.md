@@ -39,6 +39,11 @@
   - `llm.ts`：`ChatOptions` 加 `priority?: number`；fetch headers 加 `x-override-priority`
   - `ai-controller.ts`：`llmWithRetry` 加 `priority` 參數；所有 `Promise.all` 的 map 回調用 `100 + i`
 - Day log kind 修正：`generateDayDrafts` 從 `'WOLF_SPEECH'`→`'DAY_SPEECH'`；`dayRespond` 從 `'WOLF_STANCE'`→`'DAY_STANCE'`；`runDayVoting` 從 `'WOLF_KILL'`→`'DAY_VOTE'`（修報告把 day 輸出歸到狼會議的 bug）
+- 併發實測（5 路 `x-override-priority` 100~104）：全 200 有內容，SGLang 正常；報告的 DAY_STRATEGY「null」是假警報（`ai-controller.ts:599` 成功後 log attempt=0 + response=null 標記，被報告過濾器誤當失敗）→ 報告過濾器改為忽略 `attempt=0`（`aebf062`）
+- **報告跨段修復（`77dee55` 後續）：AI log 併入 save-state（`<存檔>.log.json`），harness resume 時 `ai.restoreLog()` 縫回**——狼會議/共有者/白天流程不再因 resume 遺失 LLM 記錄
+  - `ai-controller.ts`：新增 `restoreLog(entries)`（push 前段 log）
+  - `external-test-stage2.mjs`：resume 讀 `.log.json`；save 寫 `.log.json`
+  - 附註：WOLF_READY 每狼 2 筆是設計（loop 預覽廣播＋收斂後 `handleToggleWolfReady` sync 廣播各一次），非 bug
 
 **下一步（依序）：**
 1. 繼續跑白天 5 分鐘分段（`--resume /tmp/day1.json --stop-at DAY_RESULT --save-state /tmp/day2.json`）
