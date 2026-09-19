@@ -5,18 +5,20 @@
 
 ## 目前狀態
 
-**卡在哪：** 白天（DAY_DISCUSSION）外部測試進行中，用 5 分鐘分段跑。
+**卡在哪：** 白天（DAY_DISCUSSION）外部測試進行中；發現白天討論「meta 繞圈」問題，已修 prompt，待重跑。
 
 - ✅ 夜流程（NIGHT_RESULT）已通過多次驗證
 - ✅ 狼會議收斂邏輯修好（不再 premature VOTING）
 - ✅ Wolf prompt 重構（Two-Level Split + 防幻覺 + 防重複 + 防假設性回應 + 防前綴）
 - ✅ 白天討論 prompt 加「純口頭推論」限制（防 Among Us 路徑/軌跡/不在場證明）
 - ✅ 報告完整合併（events 存 .events.json，resume 時載入前段一起出報告）
-- ⏳ 白天討論 5 分鐘分段跑中（`/tmp/day2.json` 已存，可接續）
 - ✅ 全併發 LLM 呼叫（strategy/drafts/responses/voting 全部 `Promise.all`）
 - ✅ `x-override-priority` header（併發時 100+i 錯開，SGLang 依 priority 排程）
-- ❌ 第一次 day 跑：14 個 DAY_STRATEGY 全回 null（無 priority header，SGLang 可能 reject）
-- ⏸️ 第二次從 `/tmp/day2.json` 接續：300s timeout 於 resume 後立即觸發（harness bug）；已改 `DAY=0`，本次測試已在 server 停止
+- ✅ **證據邊界硬規則**（`buildSystemPrompt`）：場上無時間線/地點/行蹤/在場證明，推理只限發言、矛盾、表態、投票——修白天討論「meta 繞圈」（玩家脑補「時間差三分鐘」等不存在證據）
+- ✅ **白天策略/草稿/回應/投票 prompt 加「點名具體玩家」+ 禁止規則空談**（引用 `docs/ai-rp-prompt-research.md`：Level 1 策略核心 + 防編造 + reminder）
+- ✅ **persona 修正**：shinichi/yuko/tatuya 的「時間線/分鐘/看到的現象」範例改為發言矛盾型（真一「昨晚和誰同點、時間差三分鐘」即源自 persona 範例腦補）
+- ✅ 白天測試紀錄（`stage2-day-report.md`）：狼會議不完整是舊格式 `night1.json` 無 `.log.json`（非渲染 bug）——要完整狼會議需重跑整局 night
+- ⏳ 白天收斂測試重跑（用重跑的 night 存檔，待驗證新 prompt）
 
 **本 session 修的東西：**
 - `isWolfReady`/`isMasonReady` 改回讀本地 map（不讀 game.state——private）
@@ -44,12 +46,18 @@
   - `ai-controller.ts`：新增 `restoreLog(entries)`（push 前段 log）
   - `external-test-stage2.mjs`：resume 讀 `.log.json`；save 寫 `.log.json`
   - 附註：WOLF_READY 每狼 2 筆是設計（loop 預覽廣播＋收斂後 `handleToggleWolfReady` sync 廣播各一次），非 bug
+- **白天 meta 繞圈根因與修復**：真一「昨晚和誰同點、時間差三分鐘誰圓」是 LLM 從 persona 範例（shinichi「第三分鐘/第五分鐘/時間線」）腦補出的虛構證據；全場跟著訂「三欄比對/口徑」等空頭規則 → 28 分鐘僅 2/14 ready
+  - `buildSystemPrompt` 加「場上證據邊界」硬規則：無時間線/地點/行蹤/在場證明，推理只限發言、矛盾、表態、投票（參考 `docs/ai-rp-prompt-research.md` §4 anti-fabrication）
+  - 白天 strategy/draft/response/vote prompt：要求「點名具體玩家」；禁止只談討論方法（「定規則」「訂口徑」＝空轉不算發言）
+  - persona：shinichi 範例改為發言矛盾型質問；yuko「時間線對完」→「把發言對一對」；tatuya「看到的現象」→「觀察到的發言現象」
+- 併發實測補充（14 路全過）：5 併發 967 tokens 全 200；14 併發 ~9.2K tokens 全 200、~49s 完成（SGLang `--max-running-requests 1` 依 priority 排隊）。先前 5 併發測試因 PowerShell 管道把中文打成 `?`（prompt=65 是亂碼），改用 base64 上傳後為正常 prompt（~79 tokens）
 
 **下一步（依序）：**
-1. 繼續跑白天 5 分鐘分段（`--resume /tmp/day1.json --stop-at DAY_RESULT --save-state /tmp/day2.json`）
-2. 觀察白天討論品質（發言內容、收斂速度、狼的表現）
-3. 若 AI 品質有問題 → 調 prompt → 重跑
-4. 全部通過 → Step 5（AI 接 production server）
+1. 重跑完整 night（從頭，讓 `.log.json` 產生）→ 白天收斂段
+2. 驗證新 prompt：白天討論是否具體點名、不再 meta 繞圈、ready 收斂速度
+3. 觀察白天討論品質（發言內容、收斂速度、狼的表現）
+4. 若 AI 品質有問題 → 調 prompt → 重跑
+5. 全部通過 → Step 5（AI 接 production server）
 
 **Server 上跑測試的正確方式：**
 ```bash
