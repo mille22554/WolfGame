@@ -40,10 +40,100 @@ interface MasonDraft {
   stance: string; // "準備好了" 或 "資訊不足"
 }
 
-interface DayDraft {
-  player: GamePlayer;
+export const AI_DAY_CHECKPOINT_SCHEMA_VERSION = 1;
+
+export type AiDayCheckpointStage =
+  | 'strategies'
+  | 'drafts'
+  | 'judge'
+  | 'expand'
+  | 'publish'
+  | 'responses'
+  | 'reconcile'
+  | 'complete';
+
+/** 白天 judge 批次槽位；只保存 clientId 與純文字，不保存 GamePlayer。 */
+export interface AiDayDraftSlotCheckpoint {
+  clientId: string;
+  speech?: string;
+  stance?: string;
+}
+
+export interface AiDaySpeakDraft {
   speech: string;
-  stance: string; // "準備好了" 或 "資訊不足"
+  stance: string;
+}
+
+/** 某一 published turn 中，每位回應者的完成狀態。 */
+export interface AiDayResponseCheckpoint {
+  clientId: string;
+  turnId: string;
+  status: 'pending' | 'ready' | 'speak' | 'wait';
+  draft?: AiDaySpeakDraft;
+}
+
+/** 已選發言的發布身份；messageId/seq 來自 GameEngine 的 day message identity。 */
+export interface AiDayPublishedCheckpoint {
+  turnId: string;
+  clientId: string;
+  status: 'pending' | 'committed';
+  messageId: string | null;
+  messageSeq: number | null;
+  /** 發布完成後這位 AI 的 ready 目標值；恢復時以 setDayReady 補 commit。 */
+  readyValue: boolean;
+}
+
+export interface AiDayKnowledgeCheckpoint {
+  clientId: string;
+  role: string;
+  displayName: string;
+  partners: string[];
+  madman: string | null;
+  privateInfo: string;
+  recentMessages: { from: string; text: string }[];
+}
+
+/**
+ * AI 白天討論 continuation snapshot。
+ *
+ * 契約：只支援 DAY_DISCUSSION；所有欄位皆為 JSON-safe plain data，不含 Promise、
+ * timer、fetch、Map、CharacterProfile 或 GamePlayer 引用。
+ */
+export interface AiDayCheckpoint {
+  schemaVersion: typeof AI_DAY_CHECKPOINT_SCHEMA_VERSION;
+  day: number;
+  phase: 'DAY_DISCUSSION';
+  runId: string;
+  stage: AiDayCheckpointStage;
+  /** 本 checkpoint 對應的目前 game roster 與 AI 子集合。 */
+  rosterClientIds: string[];
+  aiClientIds: string[];
+  strategyDone: string[];
+  draftSlots: AiDayDraftSlotCheckpoint[];
+  selectedClientId: string | null;
+  expandedText: string | null;
+  published: AiDayPublishedCheckpoint | null;
+  responses: AiDayResponseCheckpoint[];
+  /** character profile 的 memory 純文字；null 代表沒有載入 profile。 */
+  profileMemory: Record<string, string | null>;
+  knowledge: AiDayKnowledgeCheckpoint[];
+  wolfBoard: { from: string; text: string }[];
+  masonBoard: { from: string; text: string }[];
+}
+
+/**
+ * 測試注入 seam；正式 server 不接線。正式路徑仍走既有 prompt／JSON parser。
+ */
+export interface AiDayLlmTestAdapter {
+  strategy(clientId: string, day: number): Promise<string>;
+  draft(clientId: string, day: number): Promise<{ speech: string; stance: string; strategyUpdate?: string | null }>;
+  judge(speeches: string[], day: number): Promise<number>;
+  expand(clientId: string, draftSpeech: string, day: number): Promise<string>;
+  respond(clientId: string, publishedSpeech: string, day: number): Promise<
+    | { action: 'ready'; strategyUpdate?: string | null }
+    | { action: 'speak'; speech: string; stance: string; strategyUpdate?: string | null }
+    | { action: 'wait'; strategyUpdate?: string | null }
+  >;
 }
 
 export interface AiLogEntry {
@@ -74,6 +164,22 @@ interface AiEntry {
   def: AiPlayerDef;
   profile: CharacterProfile | null;
   knowledge: AiKnowledge;
+}
+
+/** 記憶體中的 continuation；刻意只保存 checkpoint 的純資料欄位與 epoch guard。 */
+interface AiDayContinuation {
+  epoch: number;
+  schemaVersion: typeof AI_DAY_CHECKPOINT_SCHEMA_VERSION;
+  day: number;
+  phase: 'DAY_DISCUSSION';
+  runId: string;
+  stage: AiDayCheckpointStage;
+  strategyDone: string[];
+  draftSlots: AiDayDraftSlotCheckpoint[];
+  selectedClientId: string | null;
+  expandedText: string | null;
+  published: AiDayPublishedCheckpoint | null;
+  responses: AiDayResponseCheckpoint[];
 }
 
 const MAX_LLM_RETRIES = 3;
@@ -109,12 +215,23 @@ export class AiController {
   private masonStanceMap = new Map<string, string>();
   /** 白天公頻訊息（本天；AI 知識用） */
   private dayBoard: { from: string; text: string }[] = [];
-  /** AI clientId -> 是否 toggle 準備投票 ON */
+  /** AI clientId -> 是否準備投票 ON；每次 resume 以 GameEngine 狀態為準重建。 */
   private dayReadyMap = new Map<string, boolean>();
+  /** false 時 PHASE_CHANGED(DAY_DISCUSSION) 只追蹤 phase/day，不清 state、不啟動。 */
+  private phaseStartEnabled = true;
+  private dayContinuation: AiDayContinuation | null = null;
+  private dayContinuationEpoch = 0;
+  private dayRunCounter = 0;
+  private dayTurnCounter = 0;
+  private dayResumePromise: Promise<void> | null = null;
+  private dayResumeEpoch: number | null = null;
+  private dayResumeRunId: string | null = null;
+  private readonly dayTestLlm: AiDayLlmTestAdapter | undefined;
 
   private readonly messageCap: number;
-  constructor(defs: AiPlayerDef[], opts?: { messageCap?: number }) {
+  constructor(defs: AiPlayerDef[], opts?: { messageCap?: number; dayTestLlm?: AiDayLlmTestAdapter }) {
     this.messageCap = opts?.messageCap ?? 0; // 0 = 無上限（正式）；>0 = 測試用安全上限
+    this.dayTestLlm = opts?.dayTestLlm;
     for (const def of defs) {
       this.entries.set(def.clientId, {
         def,
@@ -133,6 +250,7 @@ export class AiController {
 
   /** 建立後由 harness 設定遊戲引擎 */
   setGame(game: GameEngine): void {
+    if (this.game && this.game !== game) this.invalidateDayRun();
     this.game = game;
   }
 
@@ -164,11 +282,373 @@ export class AiController {
     };
   }
 
+  /** restore barrier：false 時只記錄 PHASE_CHANGED，不重置或自動啟動白天 loop。 */
+  setPhaseStartEnabled(enabled: boolean): void {
+    this.phaseStartEnabled = enabled === true;
+  }
+
+  /** 匯出可 JSON round-trip 的 DAY_DISCUSSION continuation；不匯出任何 live runtime handle。 */
+  exportDayCheckpoint(): AiDayCheckpoint | null {
+    if (this.destroyed || !this.game) return null;
+    const gameState = this.game.getNightState();
+    if (gameState.phase !== 'DAY_DISCUSSION' || this.phase !== 'DAY_DISCUSSION') return null;
+    // Restore barrier 尚未 import 時也可匯出乾淨的初始 continuation；不會啟動 loop。
+    const state: AiDayContinuation = this.dayContinuation ?? {
+      epoch: this.dayContinuationEpoch,
+      schemaVersion: AI_DAY_CHECKPOINT_SCHEMA_VERSION,
+      day: this.day,
+      phase: 'DAY_DISCUSSION',
+      runId: `ai-day-${this.day}-unstarted`,
+      stage: 'strategies',
+      strategyDone: [],
+      draftSlots: [],
+      selectedClientId: null,
+      expandedText: null,
+      published: null,
+      responses: [],
+    };
+    if (state.phase !== 'DAY_DISCUSSION') return null;
+    if (gameState.day !== state.day || this.day !== state.day) return null;
+
+    const rosterClientIds = this.game.getPlayers().map((player) => player.clientId);
+    const aiClientIds = rosterClientIds.filter((clientId) => this.entries.has(clientId));
+    const profileMemory: Record<string, string | null> = {};
+    const knowledge: AiDayKnowledgeCheckpoint[] = [];
+    for (const clientId of aiClientIds) {
+      const entry = this.entries.get(clientId);
+      if (!entry) continue;
+      profileMemory[clientId] = entry.profile?.memory ?? null;
+      knowledge.push({
+        clientId,
+        role: entry.knowledge.role,
+        displayName: entry.knowledge.displayName,
+        partners: [...entry.knowledge.partners],
+        madman: entry.knowledge.madman,
+        privateInfo: entry.knowledge.privateInfo,
+        recentMessages: entry.knowledge.recentMessages.map((message) => ({ ...message })),
+      });
+    }
+
+    return {
+      schemaVersion: AI_DAY_CHECKPOINT_SCHEMA_VERSION,
+      day: state.day,
+      phase: 'DAY_DISCUSSION',
+      runId: state.runId,
+      stage: state.stage,
+      rosterClientIds: [...rosterClientIds],
+      aiClientIds: [...aiClientIds],
+      strategyDone: [...state.strategyDone],
+      draftSlots: state.draftSlots.map((slot) => this.cloneDayDraftSlot(slot)),
+      selectedClientId: state.selectedClientId,
+      expandedText: state.expandedText,
+      published: state.published ? { ...state.published } : null,
+      responses: state.responses.map((response) => this.cloneDayResponse(response)),
+      profileMemory,
+      knowledge,
+      wolfBoard: this.wolfBoard.map((message) => ({ ...message })),
+      masonBoard: this.masonBoard.map((message) => ({ ...message })),
+    };
+  }
+
+  /**
+   * 驗證並 hydrate DAY_DISCUSSION checkpoint；任何 schema/day/phase/roster 不合法都 safe no-op。
+   * 此方法刻意不啟動 loop；完成 game restore → import → resume 的呼叫端須明確呼叫 resumeDayDiscussion。
+   */
+  importDayCheckpoint(snapshot: AiDayCheckpoint): void {
+    if (this.destroyed || !this.game) return;
+    const prepared = this.prepareDayCheckpoint(snapshot);
+    if (!prepared) return;
+
+    this.invalidateDayRun();
+    this.phase = 'DAY_DISCUSSION';
+    this.day = snapshot.day;
+    this.dayContinuation = prepared.continuation;
+    this.dayContinuation.runId = this.nextDayRunId(snapshot.day);
+    this.wolfBoard = snapshot.wolfBoard.map((message) => ({ ...message }));
+    this.masonBoard = snapshot.masonBoard.map((message) => ({ ...message }));
+
+    // 只把純資料寫回目前 AiEntry / CharacterProfile 實例，不保留 snapshot 內任何 profile 物件。
+    for (const clientId of prepared.aiClientIds) {
+      const entry = this.entries.get(clientId);
+      const memory = snapshot.profileMemory[clientId];
+      if (entry?.profile && typeof memory === 'string') entry.profile.memory = memory;
+    }
+    for (const saved of snapshot.knowledge) {
+      const entry = this.entries.get(saved.clientId);
+      if (!entry) continue;
+      entry.knowledge = {
+        role: saved.role,
+        displayName: saved.displayName,
+        partners: [...saved.partners],
+        madman: saved.madman,
+        privateInfo: saved.privateInfo,
+        recentMessages: saved.recentMessages.map((message) => ({ ...message })),
+      };
+    }
+    this.rebuildDayStateFromGame();
+  }
+
+  /** 明確啟動／續跑；同一 continuation 已有 in-flight run 時回傳同一 Promise（single-flight）。 */
+  resumeDayDiscussion(): Promise<void> {
+    if (this.destroyed || !this.game || this.phase !== 'DAY_DISCUSSION') return Promise.resolve();
+    const gameState = this.game.getNightState();
+    if (gameState.phase !== 'DAY_DISCUSSION' || gameState.day !== this.day) return Promise.resolve();
+
+    if (
+      this.dayResumePromise &&
+      this.dayResumeEpoch === this.dayContinuation?.epoch &&
+      this.dayResumeRunId === this.dayContinuation?.runId
+    ) {
+      return this.dayResumePromise;
+    }
+
+    let state = this.dayContinuation;
+    if (!state || state.day !== this.day) {
+      state = this.createDayContinuation(this.day);
+      this.dayContinuation = state;
+    }
+    // 每次明確 resume 都是新 run；舊 run 的 async result 會因 runId/epoch 不符而丟棄。
+    state.runId = this.nextDayRunId(state.day);
+    const runId = state.runId;
+    const promise = this.runDayDiscussion(state, runId);
+    this.dayResumePromise = promise;
+    this.dayResumeEpoch = state.epoch;
+    this.dayResumeRunId = runId;
+    void promise.finally(() => {
+      if (this.dayResumePromise === promise) {
+        this.dayResumePromise = null;
+        this.dayResumeEpoch = null;
+        this.dayResumeRunId = null;
+      }
+    });
+    return promise;
+  }
+
   /** 取消進行中的重試排程（進行中的 fetch 無法中斷，但其結果會被丟棄） */
   destroy(): void {
     this.destroyed = true;
+    this.invalidateDayRun();
+    this.dayContinuation = null;
     for (const t of this.timers) clearTimeout(t);
     this.timers = [];
+  }
+
+  private invalidateDayRun(): void {
+    this.dayContinuationEpoch += 1;
+    this.dayResumePromise = null;
+    this.dayResumeEpoch = null;
+    this.dayResumeRunId = null;
+  }
+
+  private nextDayRunId(day: number): string {
+    this.dayRunCounter += 1;
+    return `ai-day-${day}-${Date.now()}-${this.dayRunCounter}`;
+  }
+
+  private createDayContinuation(day: number): AiDayContinuation {
+    this.dayContinuationEpoch += 1;
+    return {
+      epoch: this.dayContinuationEpoch,
+      schemaVersion: AI_DAY_CHECKPOINT_SCHEMA_VERSION,
+      day,
+      phase: 'DAY_DISCUSSION',
+      runId: this.nextDayRunId(day),
+      stage: 'strategies',
+      strategyDone: [],
+      draftSlots: [],
+      selectedClientId: null,
+      expandedText: null,
+      published: null,
+      responses: [],
+    };
+  }
+
+  private isCurrentDayRun(state: AiDayContinuation, runId: string): boolean {
+    return !this.destroyed &&
+      !!this.game &&
+      state === this.dayContinuation &&
+      state.epoch === this.dayContinuationEpoch &&
+      state.runId === runId &&
+      this.phase === 'DAY_DISCUSSION' &&
+      this.game.getNightState().phase === 'DAY_DISCUSSION' &&
+      this.game.getNightState().day === state.day;
+  }
+
+  private cloneDayDraftSlot(slot: AiDayDraftSlotCheckpoint): AiDayDraftSlotCheckpoint {
+    return {
+      clientId: slot.clientId,
+      ...(typeof slot.speech === 'string' ? { speech: slot.speech } : {}),
+      ...(typeof slot.stance === 'string' ? { stance: slot.stance } : {}),
+    };
+  }
+
+  private cloneDayResponse(response: AiDayResponseCheckpoint): AiDayResponseCheckpoint {
+    return {
+      clientId: response.clientId,
+      turnId: response.turnId,
+      status: response.status,
+      ...(response.draft ? { draft: { ...response.draft } } : {}),
+    };
+  }
+
+  private rebuildDayStateFromGame(): void {
+    if (!this.game) return;
+    const dayState = this.game.getDayState();
+    // Engine 是唯一 day board/ready truth。完整替換並保留每一則訊息（即使 from/text 相同）。
+    this.dayBoard = dayState.dayMessages.map((message) => ({ from: message.from, text: message.text }));
+    this.dayReadyMap.clear();
+    for (const player of this.getAiAlivePlayers()) {
+      this.dayReadyMap.set(player.clientId, dayState.dayReady.get(player.clientId) === true);
+    }
+  }
+
+  /** 先完整驗證並建立副本；驗證成功前不碰 controller live state。 */
+  private prepareDayCheckpoint(snapshot: AiDayCheckpoint): { continuation: AiDayContinuation; aiClientIds: string[] } | null {
+    if (!snapshot || typeof snapshot !== 'object' || !this.game) return null;
+    if (snapshot.schemaVersion !== AI_DAY_CHECKPOINT_SCHEMA_VERSION) return null;
+    if (snapshot.phase !== 'DAY_DISCUSSION') return null;
+    if (!Number.isInteger(snapshot.day) || snapshot.day < 1) return null;
+    if (typeof snapshot.runId !== 'string' || snapshot.runId.length === 0) return null;
+    const allowedStages: AiDayCheckpointStage[] = [
+      'strategies', 'drafts', 'judge', 'expand', 'publish', 'responses', 'reconcile', 'complete',
+    ];
+    if (!allowedStages.includes(snapshot.stage)) return null;
+
+    const gameState = this.game.getNightState();
+    if (gameState.phase !== 'DAY_DISCUSSION' || gameState.day !== snapshot.day) return null;
+
+    const currentRoster = this.game.getPlayers().map((player) => player.clientId);
+    const currentAi = currentRoster.filter((clientId) => this.entries.has(clientId));
+    if (!this.sameUniqueClientSet(snapshot.rosterClientIds, currentRoster)) return null;
+    if (!this.sameUniqueClientSet(snapshot.aiClientIds, currentAi)) return null;
+    const aiSet = new Set(snapshot.aiClientIds);
+    const rosterSet = new Set(currentRoster);
+
+    if (!Array.isArray(snapshot.strategyDone) || !this.uniqueStringsAreIn(snapshot.strategyDone, aiSet)) return null;
+    if (!Array.isArray(snapshot.draftSlots)) return null;
+    const seenDraftIds = new Set<string>();
+    const draftSlots: AiDayDraftSlotCheckpoint[] = [];
+    for (const raw of snapshot.draftSlots) {
+      if (!raw || typeof raw !== 'object' || typeof raw.clientId !== 'string' || !aiSet.has(raw.clientId)) return null;
+      if (seenDraftIds.has(raw.clientId)) return null;
+      seenDraftIds.add(raw.clientId);
+      const hasSpeech = typeof raw.speech === 'string' && raw.speech.length > 0;
+      const hasStance = typeof raw.stance === 'string' && raw.stance.length > 0;
+      if (hasSpeech !== hasStance) return null;
+      if (raw.speech !== undefined && !hasSpeech) return null;
+      if (raw.stance !== undefined && !hasStance) return null;
+      draftSlots.push({
+        clientId: raw.clientId,
+        ...(hasSpeech ? { speech: raw.speech, stance: raw.stance } : {}),
+      });
+    }
+
+    if (snapshot.selectedClientId !== null && !aiSet.has(snapshot.selectedClientId)) return null;
+    if (snapshot.expandedText !== null && typeof snapshot.expandedText !== 'string') return null;
+    if (snapshot.expandedText !== null && snapshot.selectedClientId === null) return null;
+    if (snapshot.selectedClientId === null && (snapshot.expandedText !== null || snapshot.published !== null)) return null;
+
+    let published: AiDayPublishedCheckpoint | null = null;
+    if (snapshot.published !== null) {
+      const raw = snapshot.published;
+      if (!raw || typeof raw !== 'object') return null;
+      if (typeof raw.turnId !== 'string' || raw.turnId.length === 0 || typeof raw.clientId !== 'string' || !aiSet.has(raw.clientId)) return null;
+      if (raw.clientId !== snapshot.selectedClientId || snapshot.expandedText === null) return null;
+      if (raw.status !== 'pending' && raw.status !== 'committed') return null;
+      if (raw.messageId !== null && (typeof raw.messageId !== 'string' || raw.messageId.length === 0)) return null;
+      if (raw.messageSeq !== null && (!Number.isInteger(raw.messageSeq) || raw.messageSeq < 1)) return null;
+      if (typeof raw.readyValue !== 'boolean') return null;
+      if (raw.status === 'pending' && (raw.messageId !== null || raw.messageSeq !== null)) return null;
+      published = {
+        turnId: raw.turnId,
+        clientId: raw.clientId,
+        status: raw.status,
+        messageId: raw.messageId,
+        messageSeq: raw.messageSeq,
+        readyValue: raw.readyValue,
+      };
+    }
+
+    if (!Array.isArray(snapshot.responses)) return null;
+    const seenResponseIds = new Set<string>();
+    const responses: AiDayResponseCheckpoint[] = [];
+    for (const raw of snapshot.responses) {
+      if (!raw || typeof raw !== 'object' || typeof raw.clientId !== 'string' || !aiSet.has(raw.clientId)) return null;
+      if (seenResponseIds.has(raw.clientId)) return null;
+      seenResponseIds.add(raw.clientId);
+      if (!published || raw.turnId !== published.turnId || raw.clientId === published.clientId) return null;
+      if (raw.status !== 'pending' && raw.status !== 'ready' && raw.status !== 'speak' && raw.status !== 'wait') return null;
+      if (raw.status === 'speak') {
+        if (!raw.draft || typeof raw.draft.speech !== 'string' || !raw.draft.speech || typeof raw.draft.stance !== 'string' || !raw.draft.stance) return null;
+        responses.push({ clientId: raw.clientId, turnId: raw.turnId, status: 'speak', draft: { ...raw.draft } });
+      } else {
+        if (raw.draft !== undefined) return null;
+        responses.push({ clientId: raw.clientId, turnId: raw.turnId, status: raw.status });
+      }
+    }
+    if (responses.length > 0 && (!published || published.status !== 'committed')) return null;
+
+    if (!snapshot.profileMemory || typeof snapshot.profileMemory !== 'object' || Array.isArray(snapshot.profileMemory)) return null;
+    const memoryKeys = Object.keys(snapshot.profileMemory);
+    if (memoryKeys.length !== aiSet.size || !memoryKeys.every((clientId) => aiSet.has(clientId))) return null;
+    for (const clientId of aiSet) {
+      const memory = snapshot.profileMemory[clientId];
+      if (memory !== null && typeof memory !== 'string') return null;
+      if (memory !== null && !this.entries.get(clientId)?.profile) return null;
+    }
+
+    if (!Array.isArray(snapshot.knowledge)) return null;
+    const seenKnowledgeIds = new Set<string>();
+    for (const raw of snapshot.knowledge) {
+      if (!raw || typeof raw !== 'object' || typeof raw.clientId !== 'string' || !aiSet.has(raw.clientId)) return null;
+      if (seenKnowledgeIds.has(raw.clientId)) return null;
+      seenKnowledgeIds.add(raw.clientId);
+      if (typeof raw.role !== 'string' || typeof raw.displayName !== 'string') return null;
+      if (!Array.isArray(raw.partners) || !raw.partners.every((value) => typeof value === 'string')) return null;
+      if (raw.madman !== null && typeof raw.madman !== 'string') return null;
+      if (typeof raw.privateInfo !== 'string' || !Array.isArray(raw.recentMessages)) return null;
+      if (!raw.recentMessages.every((message) => message && typeof message.from === 'string' && typeof message.text === 'string')) return null;
+    }
+    if (seenKnowledgeIds.size !== aiSet.size) return null;
+
+    if (!this.validBoardSnapshot(snapshot.wolfBoard) || !this.validBoardSnapshot(snapshot.masonBoard)) return null;
+    if (snapshot.selectedClientId !== null && !rosterSet.has(snapshot.selectedClientId)) return null;
+
+    return {
+      aiClientIds: [...snapshot.aiClientIds],
+      continuation: {
+        epoch: this.dayContinuationEpoch + 1,
+        schemaVersion: AI_DAY_CHECKPOINT_SCHEMA_VERSION,
+        day: snapshot.day,
+        phase: 'DAY_DISCUSSION',
+        // import 會再換新 runId；舊 loop 即使持有相同 imported id 也不能通過 epoch guard。
+        runId: snapshot.runId,
+        stage: snapshot.stage,
+        strategyDone: [...snapshot.strategyDone],
+        draftSlots,
+        selectedClientId: snapshot.selectedClientId,
+        expandedText: snapshot.expandedText,
+        published,
+        responses,
+      },
+    };
+  }
+
+  private sameUniqueClientSet(value: unknown, expected: string[]): boolean {
+    if (!Array.isArray(value) || !value.every((id) => typeof id === 'string')) return false;
+    const unique = new Set(value as string[]);
+    return unique.size === value.length && expected.length === unique.size && expected.every((id) => unique.has(id));
+  }
+
+  private uniqueStringsAreIn(value: unknown, allowed: Set<string>): boolean {
+    if (!Array.isArray(value) || !value.every((entry) => typeof entry === 'string')) return false;
+    const unique = new Set(value as string[]);
+    return unique.size === value.length && [...unique].every((entry) => allowed.has(entry));
+  }
+
+  private validBoardSnapshot(value: unknown): value is { from: string; text: string }[] {
+    return Array.isArray(value) && value.every((message) =>
+      !!message && typeof message === 'object' && typeof (message as any).from === 'string' && typeof (message as any).text === 'string');
   }
 
   // --- 引擎回呼（harness 把 engine callback 接進來） ---
@@ -228,6 +708,7 @@ export class AiController {
     if (m.type === 'PHASE_CHANGED') {
       this.phase = String(m.phase ?? this.phase);
       if (typeof m.day === 'number') this.day = m.day;
+      if (this.phase !== 'DAY_DISCUSSION' && this.dayContinuation) this.invalidateDayRun();
       // 新夜開始：重置白板、游標、judge 序號、ready 追蹤
       if (m.phase === 'NIGHT') {
         this.wolfBoard = [];
@@ -240,9 +721,13 @@ export class AiController {
         this.masonStanceMap.clear();
       }
       if (m.phase === 'DAY_DISCUSSION') {
+        // Restore barrier：hold 時只更新上面的 phase/day，不碰 day state，也不啟動。
+        if (!this.phaseStartEnabled) return;
+        this.invalidateDayRun();
         this.dayBoard = [];
         this.dayReadyMap.clear();
-        void this.runDayDiscussion();
+        this.dayContinuation = this.createDayContinuation(this.day);
+        void this.resumeDayDiscussion();
       }
       if (m.phase === 'DAY_VOTING') {
         void this.runDayVoting();
@@ -632,21 +1117,36 @@ export class AiController {
 
   // --- 白天討論（策略先行 + toggle 制） ---
 
-  /** 白天開始時：每個 AI 依角色生成策略 → 寫入全局 memory（全併發） */
-  private async generateDayStrategies(aiPlayers: GamePlayer[]): Promise<void> {
-    await Promise.all(aiPlayers.map(async (p, i) => {
-      if (this.destroyed) return;
-      const entry = this.entries.get(p.clientId);
+  /** 白天策略：只補 strategyDone 缺漏者；每個完成即 commit。 */
+  private async generateDayStrategies(
+    aiPlayers: GamePlayer[],
+    state: AiDayContinuation,
+    runId: string,
+  ): Promise<void> {
+    const done = new Set(state.strategyDone);
+    await Promise.all(aiPlayers.map(async (player, index) => {
+      if (done.has(player.clientId) || !this.isCurrentDayRun(state, runId)) return;
+      const entry = this.entries.get(player.clientId);
       if (!entry) return;
-      const prompts = this.buildStrategyPrompt(entry, p);
-      const result = await this.llmWithRetry(p.clientId, 'DAY_STRATEGY', this.day, prompts, (p2) => {
-        return typeof p2.strategy === 'string' && p2.strategy.trim() ? 'ok' : null;
-      }, 100 + i);
-      if (result.value === 'ok' && result.parsed) {
-        const strategy = (result.parsed.strategy as string).trim();
-        this.appendMemory(p.clientId, `[Day${this.day} 策略] ${strategy}`);
-        this.logEntry(p.clientId, 'DAY_STRATEGY', this.day, 0, [], null, { strategy });
+      let strategy: string | null = null;
+      if (this.dayTestLlm) {
+        try {
+          strategy = (await this.dayTestLlm.strategy(player.clientId, state.day)).trim();
+        } catch {
+          strategy = null;
+        }
+      } else {
+        const prompts = this.buildStrategyPrompt(entry, player);
+        const result = await this.llmWithRetry(player.clientId, 'DAY_STRATEGY', state.day, prompts, (parsed) =>
+          typeof parsed.strategy === 'string' && parsed.strategy.trim() ? 'ok' : null, 100 + index);
+        if (result.value === 'ok' && result.parsed) strategy = (result.parsed.strategy as string).trim();
       }
+      if (!this.isCurrentDayRun(state, runId)) return;
+      if (strategy) {
+        this.appendMemory(player.clientId, `[Day${state.day} 策略] ${strategy}`);
+        this.logEntry(player.clientId, 'DAY_STRATEGY', state.day, 0, [], null, { strategy });
+      }
+      if (!state.strategyDone.includes(player.clientId)) state.strategyDone.push(player.clientId);
     }));
   }
 
@@ -691,96 +1191,116 @@ export class AiController {
     ];
   }
 
-  /** 白天討論：策略先行 → AI 輪流發言（judge 盲選）→ 收斂（全 AI toggle ON）後結束 */
-  private async runDayDiscussion(): Promise<void> {
+  /** 可恢復白天 loop：所有階段都以 controller field 為 checkpoint source of truth。 */
+  private async runDayDiscussion(state: AiDayContinuation, runId: string): Promise<void> {
     const aiPlayers = this.getAiAlivePlayers();
     if (aiPlayers.length === 0 || !this.game) return;
+    this.rebuildDayStateFromGame();
 
-    // 接續模式：從 game state 重建 dayBoard + dayReadyMap（resume 時已有內容）
-    const dayState = this.game.getDayState();
-    for (const m of dayState.dayMessages) {
-      if (!this.dayBoard.some((b) => b.from === m.from && b.text === m.text)) {
-        this.dayBoard.push({ from: m.from, text: m.text });
-      }
-    }
-    for (const p of aiPlayers) {
-      const ready = dayState.dayReady.get(p.clientId);
-      if (ready !== undefined) this.dayReadyMap.set(p.clientId, ready);
-    }
-
-    // 策略先行：每個 AI 生成/更新策略寫入 memory
-    await this.generateDayStrategies(aiPlayers);
-
-    // 接續：跳過已 ready 的 AI，只讓未 ready 的出草稿
-    const pendingPlayers = aiPlayers.filter((p) => !this.dayReadyMap.get(p.clientId));
-    if (pendingPlayers.length === 0) {
-      // 全部已 ready（resume 後直接收斂）
-      return;
-    }
-
-    // ① 未 ready 的 AI 各自獨立出草稿
-    let drafts = await this.generateDayDrafts(pendingPlayers);
-    if (drafts.length === 0) {
-      // 全部 LLM 失敗：強制 toggle ON，避免卡死
-      for (const p of pendingPlayers) this.game.handleToggleVoteReady(p.clientId);
-      return;
-    }
-
-    // Loop：② judge 盲選發布 → ③ 其他 AI 回應 → ④ 收斂判斷
     let guard = 0;
-    while (this.phase === 'DAY_DISCUSSION' && !this.destroyed) {
-      if (++guard > 50) break; // 安全上限
+    while (this.isCurrentDayRun(state, runId)) {
+      if (++guard > 50) break;
 
-      // ② Judge 盲選一篇（LLM 盲評）→ 該 AI 發言（公頻）
-      const selected = await this.judgePickDayDraft(drafts);
-      if (!selected) break;
-      // ②.5 展開：把選中的草稿要點展開成完整發言（重試全失敗 → fallback 草稿原文，不阻塞討論）
-      const selectedEntry = this.entries.get(selected.player.clientId);
-      const expanded = selectedEntry ? await this.expandSpeech(selectedEntry, selected.speech, 'day') : selected.speech;
-      this.game.sendDayMessage(selected.player.clientId, expanded);
-      // 發言者已發言 → toggle ready（無條件；dayReadyMap 同步：ON→true、OFF→false）
-      this.dayReadyMap.set(selected.player.clientId, !this.dayReadyMap.get(selected.player.clientId));
-      this.game.handleToggleVoteReady(selected.player.clientId);
+      // Engine ready 是 truth；已全 ready 時只走 reconcile，不重播 LLM／publish／toggle。
+      if (aiPlayers.every((player) => this.game!.getDayState().dayReady.get(player.clientId) === true)) {
+        state.stage = 'reconcile';
+      }
 
-      // ③ 除發言者外所有 AI 讀白板 → 各自回應（全併發）
-      const newDrafts: DayDraft[] = [];
-      await Promise.all(aiPlayers.filter((p) => p.clientId !== selected.player.clientId).map(async (p, i) => {
-        if (this.destroyed) return;
-        const entry = this.entries.get(p.clientId);
-        if (!entry) return;
-        const resp = await this.dayRespond(p, entry, expanded, 100 + i);
-        if (!this.game) return;
-        if (resp.type === 'ready') {
-          this.dayReadyMap.set(p.clientId, !this.dayReadyMap.get(p.clientId));
-          this.game.handleToggleVoteReady(p.clientId);
-        } else if (resp.type === 'speak') {
-          newDrafts.push({ player: p, speech: resp.speech, stance: resp.stance });
-          if (this.dayReadyMap.get(p.clientId) === true) {
-            this.dayReadyMap.set(p.clientId, false);
-            this.game.handleToggleVoteReady(p.clientId);
-          }
+      switch (state.stage) {
+        case 'strategies': {
+          await this.generateDayStrategies(aiPlayers, state, runId);
+          if (!this.isCurrentDayRun(state, runId)) return;
+          state.stage = 'drafts';
+          break;
         }
-      }));
-
-      // ④ 收斂判斷：全部 AI ready
-      if (aiPlayers.every((p) => this.dayReadyMap.get(p.clientId))) break;
-
-      if (newDrafts.length > 0) {
-        drafts = newDrafts;
-      } else {
-        // 沒人出新草稿、但有 AI 還沒 ready → 強制那些 AI 發言
-        const waiting = aiPlayers.filter((p) => !this.dayReadyMap.get(p.clientId));
-        if (waiting.length === 0) break;
-        drafts = await this.generateDayDrafts(waiting);
-        if (drafts.length === 0) break;
+        case 'drafts': {
+          const waiting = aiPlayers.filter((player) => this.game!.getDayState().dayReady.get(player.clientId) !== true);
+          this.ensureDraftSlots(state, waiting);
+          await this.generateDayDrafts(waiting, state, runId);
+          if (!this.isCurrentDayRun(state, runId)) return;
+          const completed = this.completedDayDrafts(state, aiPlayers);
+          if (completed.length === 0) {
+            this.forceAiDayReady(aiPlayers);
+            state.stage = 'reconcile';
+            break;
+          }
+          this.resetDayJudgeState(state);
+          state.stage = 'judge';
+          break;
+        }
+        case 'judge': {
+          const selectedPlayer = state.selectedClientId
+            ? aiPlayers.find((candidate) => candidate.clientId === state.selectedClientId) ?? null
+            : null;
+          if (selectedPlayer) {
+            state.stage = 'expand';
+            break;
+          }
+          if (state.selectedClientId !== null) {
+            this.forceAiDayReady(aiPlayers);
+            state.stage = 'reconcile';
+            break;
+          }
+          const drafts = this.completedDayDrafts(state, aiPlayers)
+            .map((slot) => {
+              const player = aiPlayers.find((candidate) => candidate.clientId === slot.clientId);
+              return player ? { player, speech: slot.speech!, stance: slot.stance! } : null;
+            })
+            .filter((draft): draft is { player: GamePlayer; speech: string; stance: string } => draft !== null);
+          if (drafts.length === 0) {
+            this.forceAiDayReady(aiPlayers);
+            state.stage = 'reconcile';
+            break;
+          }
+          const selected = await this.judgePickDayDraft(drafts);
+          if (!this.isCurrentDayRun(state, runId) || !selected) return;
+          state.selectedClientId = selected.player.clientId;
+          state.stage = 'expand';
+          break;
+        }
+        case 'expand': {
+          const selectedId = state.selectedClientId;
+          const selected = selectedId ? aiPlayers.find((player) => player.clientId === selectedId) : undefined;
+          const slot = selectedId ? state.draftSlots.find((draft) => draft.clientId === selectedId) : undefined;
+          if (!selectedId || !selected || !slot?.speech || !slot.stance) {
+            state.stage = 'complete';
+            break;
+          }
+          if (state.expandedText === null) {
+            const entry = this.entries.get(selectedId);
+            const expanded = entry
+              ? await this.expandDaySpeech(entry, slot.speech, state.day)
+              : slot.speech;
+            if (!this.isCurrentDayRun(state, runId)) return;
+            state.expandedText = expanded;
+          }
+          state.stage = 'publish';
+          break;
+        }
+        case 'publish': {
+          this.publishSelectedDayDraft(state, aiPlayers, runId);
+          break;
+        }
+        case 'responses': {
+          await this.runDayResponses(state, aiPlayers, runId);
+          break;
+        }
+        case 'reconcile': {
+          if (!this.isCurrentDayRun(state, runId)) return;
+          this.game.reconcileDayReady();
+          if (this.isCurrentDayRun(state, runId)) state.stage = 'complete';
+          return;
+        }
+        case 'complete':
+          return;
       }
     }
-    // 討論結束：確保所有 AI toggle ON
-    for (const p of aiPlayers) {
-      if (!this.dayReadyMap.get(p.clientId)) {
-        this.dayReadyMap.set(p.clientId, true);
-        this.game.handleToggleVoteReady(p.clientId);
-      }
+
+    // 與舊流程相同的安全上限；只用 idempotent setter，絕不 replay toggle。
+    if (this.isCurrentDayRun(state, runId)) {
+      this.forceAiDayReady(aiPlayers);
+      state.stage = 'reconcile';
+      this.game.reconcileDayReady();
     }
   }
 
@@ -1394,55 +1914,283 @@ export class AiController {
     }
   }
 
-  /** 所有 AI 獨立出草稿（全併發 LLM 呼叫） */
-  private async generateDayDrafts(players: GamePlayer[]): Promise<DayDraft[]> {
-    const results = await Promise.all(players.map(async (p, i) => {
-      if (this.destroyed) return null;
-      const entry = this.entries.get(p.clientId);
-      if (!entry) return null;
-      const prompts = this.buildDayDraftPrompts(entry);
-      const result = await this.llmWithRetry(p.clientId, 'DAY_SPEECH', this.day, prompts, (p2) =>
-        typeof p2.speech === 'string' && p2.speech.trim() && typeof p2.stance === 'string' ? 'ok' : null, 100 + i);
-      if (result.parsed?.strategy_update && typeof result.parsed.strategy_update === 'string') {
-        this.appendMemory(p.clientId, `[Day${this.day}] ${result.parsed.strategy_update.trim()}`);
-      }
-      if (result.value === null) return null;
-      return { player: p, speech: (result.parsed!.speech as string).trim(), stance: (result.parsed!.stance as string).trim() } as DayDraft;
-    }));
-    return results.filter((d): d is DayDraft => d !== null);
+  /** 依 game roster 順序建立 draft slots；完成先回來也不改變 judge 順序。 */
+  private ensureDraftSlots(state: AiDayContinuation, players: GamePlayer[]): void {
+    const existing = new Set(state.draftSlots.map((slot) => slot.clientId));
+    for (const player of players) {
+      if (!existing.has(player.clientId)) state.draftSlots.push({ clientId: player.clientId });
+    }
   }
 
-  /** Judge 盲選一篇白天草稿（LLM 全盲評分） */
-  private async judgePickDayDraft(drafts: DayDraft[]): Promise<DayDraft | null> {
+  private completedDayDrafts(state: AiDayContinuation, aiPlayers: GamePlayer[]): AiDayDraftSlotCheckpoint[] {
+    const valid = new Set(aiPlayers.map((player) => player.clientId));
+    return state.draftSlots.filter((slot) =>
+      valid.has(slot.clientId) && typeof slot.speech === 'string' && slot.speech.length > 0 && typeof slot.stance === 'string' && slot.stance.length > 0);
+  }
+
+  private resetDayJudgeState(state: AiDayContinuation): void {
+    state.selectedClientId = null;
+    state.expandedText = null;
+    state.published = null;
+    state.responses = [];
+  }
+
+  /** 草稿 LLM：placeholder 先保留順序；每個成功結果立即寫回自己的 slot。 */
+  private async generateDayDrafts(
+    players: GamePlayer[],
+    state: AiDayContinuation,
+    runId: string,
+  ): Promise<void> {
+    this.ensureDraftSlots(state, players);
+    await Promise.all(players.map(async (player, index) => {
+      const slot = state.draftSlots.find((candidate) => candidate.clientId === player.clientId);
+      if (!slot || typeof slot.speech === 'string' || !this.isCurrentDayRun(state, runId)) return;
+      const entry = this.entries.get(player.clientId);
+      if (!entry) return;
+
+      if (this.dayTestLlm) {
+        try {
+          const result = await this.dayTestLlm.draft(player.clientId, state.day);
+          if (!this.isCurrentDayRun(state, runId)) return;
+          if (result.strategyUpdate?.trim()) this.appendMemory(player.clientId, `[Day${state.day}] ${result.strategyUpdate.trim()}`);
+          const speech = result.speech.trim();
+          const stance = result.stance.trim();
+          if (speech && stance) {
+            slot.speech = speech;
+            slot.stance = stance;
+          }
+        } catch {
+          // 與正式 llmWithRetry 最終失敗一致：空 slot 保留，呼叫端安全 ready fallback。
+        }
+        return;
+      }
+
+      const prompts = this.buildDayDraftPrompts(entry);
+      const result = await this.llmWithRetry(player.clientId, 'DAY_SPEECH', state.day, prompts, (parsed) =>
+        typeof parsed.speech === 'string' && parsed.speech.trim() && typeof parsed.stance === 'string' ? 'ok' : null, 100 + index);
+      if (!this.isCurrentDayRun(state, runId)) return;
+      if (result.parsed?.strategy_update && typeof result.parsed.strategy_update === 'string') {
+        this.appendMemory(player.clientId, `[Day${state.day}] ${result.parsed.strategy_update.trim()}`);
+      }
+      if (result.value !== null && result.parsed) {
+        slot.speech = (result.parsed.speech as string).trim();
+        slot.stance = (result.parsed.stance as string).trim();
+      }
+    }));
+  }
+
+  /** Judge 盲選一篇白天草稿（LLM 全盲評分；test adapter 只在測試注入時存在）。 */
+  private async judgePickDayDraft(
+    drafts: { player: GamePlayer; speech: string; stance: string }[],
+  ): Promise<{ player: GamePlayer; speech: string; stance: string } | null> {
     if (drafts.length === 0) return null;
     if (drafts.length === 1) return drafts[0];
-    const idx = await this.judgeScoreIndex(drafts.map((d) => d.speech), this.day);
+    let idx: number;
+    if (this.dayTestLlm) {
+      try {
+        idx = await this.dayTestLlm.judge(drafts.map((draft) => draft.speech), this.day);
+      } catch {
+        idx = Math.floor(Math.random() * drafts.length);
+      }
+    } else {
+      idx = await this.judgeScoreIndex(drafts.map((draft) => draft.speech), this.day);
+    }
+    if (!Number.isInteger(idx) || idx < 0 || idx >= drafts.length) idx = Math.floor(Math.random() * drafts.length);
     this.logEntry('', 'JUDGE', this.day, 1, [], null, { picked: drafts[idx].player.nickname, from: drafts.length, meeting: 'day' });
     return drafts[idx];
   }
 
-  /** 非發言者 AI 讀白板後回應：ready / speak / wait */
+  private async expandDaySpeech(entry: AiEntry, draftSpeech: string, day: number): Promise<string> {
+    if (this.dayTestLlm) {
+      try {
+        const expanded = (await this.dayTestLlm.expand(entry.def.clientId, draftSpeech, day)).trim();
+        return expanded || draftSpeech;
+      } catch {
+        return draftSpeech;
+      }
+    }
+    return this.expandSpeech(entry, draftSpeech, 'day');
+  }
+
+  /** 發布 identity 與 ready 目標同 tick commit；resume 看 committed state 不重送。 */
+  private publishSelectedDayDraft(
+    state: AiDayContinuation,
+    aiPlayers: GamePlayer[],
+    runId: string,
+  ): void {
+    if (!this.isCurrentDayRun(state, runId) || !this.game) return;
+    const selectedId = state.selectedClientId;
+    const expandedText = state.expandedText;
+    if (!selectedId || expandedText === null || !aiPlayers.some((player) => player.clientId === selectedId)) return;
+
+    let published = state.published;
+    if (!published) {
+      this.dayTurnCounter += 1;
+      published = {
+        turnId: `${state.runId}:turn-${this.dayTurnCounter}`,
+        clientId: selectedId,
+        status: 'pending',
+        messageId: null,
+        messageSeq: null,
+        readyValue: this.game.getDayState().dayReady.get(selectedId) !== true,
+      };
+      state.published = published;
+    }
+
+    if (published.status === 'pending') {
+      const beforeId = this.game.getDayState().dayMessages.at(-1)?.id ?? null;
+      this.game.sendDayMessage(published.clientId, expandedText);
+      const after = this.game.getDayState().dayMessages.at(-1) ?? null;
+      // GameEngine 目前保證 push 後 identity 可見；若日後 API 不回傳，至少持久化 turn/client/ready。
+      if (after && after.id !== beforeId) {
+        published.messageId = after.id;
+        published.messageSeq = after.seq;
+      }
+      published.status = 'committed';
+    }
+
+    // 只補尚未完成的 response slot，保留已完成狀態與原本的 client 順序。
+    const responseIds = new Set(state.responses.map((response) => response.clientId));
+    for (const player of aiPlayers) {
+      if (player.clientId === published.clientId || responseIds.has(player.clientId)) continue;
+      state.responses.push({ clientId: player.clientId, turnId: published.turnId, status: 'pending' });
+      responseIds.add(player.clientId);
+    }
+    state.stage = 'responses';
+    this.commitDayReady(published.clientId, published.readyValue, state, runId);
+  }
+
+  /** 已完成 response 不再叫 LLM；speak draft 依 aiPlayers 輸入順序組成下一個 judge batch。 */
+  private async runDayResponses(
+    state: AiDayContinuation,
+    aiPlayers: GamePlayer[],
+    runId: string,
+  ): Promise<void> {
+    if (!this.isCurrentDayRun(state, runId) || !this.game || !state.published || state.published.status !== 'committed') return;
+    const published = state.published;
+    const responseIds = new Set(state.responses.map((response) => response.clientId));
+    for (const player of aiPlayers) {
+      if (player.clientId === published.clientId || responseIds.has(player.clientId)) continue;
+      state.responses.push({ clientId: player.clientId, turnId: published.turnId, status: 'pending' });
+    }
+    this.commitDayReady(published.clientId, published.readyValue, state, runId);
+    if (!this.isCurrentDayRun(state, runId)) return;
+
+    const responderIds = new Set(aiPlayers.filter((player) => player.clientId !== published.clientId).map((player) => player.clientId));
+    await Promise.all(aiPlayers.map(async (player, index) => {
+      if (!responderIds.has(player.clientId) || !this.isCurrentDayRun(state, runId)) return;
+      const response = state.responses.find((entry) => entry.clientId === player.clientId);
+      if (!response) return;
+
+      if (response.status === 'pending' && this.game!.getDayState().dayReady.get(player.clientId) === true) {
+        // Engine 已 ready 表示舊 process 可能已完成這份 response；不再重做 LLM。
+        response.status = 'ready';
+      }
+      if (response.status === 'pending') {
+        const result = await this.dayRespond(player, state.expandedText ?? '', 100 + index, state.day);
+        if (!this.isCurrentDayRun(state, runId)) return;
+        if (result.strategyUpdate?.trim()) this.appendMemory(player.clientId, `[Day${state.day}] ${result.strategyUpdate.trim()}`);
+        response.status = result.type;
+        if (result.type === 'speak') response.draft = { speech: result.speech, stance: result.stance };
+        else delete response.draft;
+      }
+      if (response.status === 'ready') this.commitDayReady(player.clientId, true, state, runId);
+      else if (response.status === 'speak') this.commitDayReady(player.clientId, false, state, runId);
+    }));
+    if (!this.isCurrentDayRun(state, runId)) return;
+
+    const nextDrafts = aiPlayers.flatMap((player) => {
+      const response = state.responses.find((entry) => entry.clientId === player.clientId);
+      return response?.status === 'speak' && response.draft
+        ? [{ clientId: player.clientId, speech: response.draft.speech, stance: response.draft.stance }]
+        : [];
+    });
+    if (nextDrafts.length > 0) {
+      this.resetDayJudgeState(state);
+      state.draftSlots = nextDrafts;
+      state.stage = 'judge';
+      return;
+    }
+
+    const waiting = aiPlayers.filter((player) => this.game!.getDayState().dayReady.get(player.clientId) !== true);
+    if (waiting.length === 0) {
+      state.stage = 'reconcile';
+      return;
+    }
+    this.resetDayJudgeState(state);
+    this.ensureDraftSlots(state, waiting);
+    state.stage = 'drafts';
+  }
+
+  /** 使用 engine ready truth 的 idempotent setter；絕不 replay toggle。 */
+  private commitDayReady(
+    clientId: string,
+    ready: boolean,
+    state: AiDayContinuation,
+    runId: string,
+  ): void {
+    if (!this.isCurrentDayRun(state, runId) || !this.game) return;
+    if (this.game.getDayState().dayReady.get(clientId) === ready) return;
+    this.game.setDayReady(clientId, ready);
+    if (this.isCurrentDayRun(state, runId)) this.dayReadyMap.set(clientId, ready);
+  }
+
+  private forceAiDayReady(aiPlayers: GamePlayer[]): void {
+    if (!this.game) return;
+    for (const player of aiPlayers) {
+      if (this.game.getDayState().dayReady.get(player.clientId) === true) continue;
+      this.game.setDayReady(player.clientId, true);
+    }
+    this.game.reconcileDayReady();
+  }
+
+  /** 非發言者 AI 讀白板後回應；memory/ready commit 交由 caller 立即落 continuation state。 */
   private async dayRespond(
-    p: GamePlayer,
-    entry: AiEntry,
+    player: GamePlayer,
     publishedSpeech: string,
-    priority?: number,
-  ): Promise<{ type: 'ready' } | { type: 'speak'; speech: string; stance: string } | { type: 'wait' }> {
+    priority: number,
+    day: number,
+  ): Promise<
+    | { type: 'ready'; strategyUpdate?: string | null }
+    | { type: 'speak'; speech: string; stance: string; strategyUpdate?: string | null }
+    | { type: 'wait'; strategyUpdate?: string | null }
+  > {
+    if (this.dayTestLlm) {
+      try {
+        const result = await this.dayTestLlm.respond(player.clientId, publishedSpeech, day);
+        if (result.action === 'ready') return { type: 'ready', strategyUpdate: result.strategyUpdate };
+        if (result.action === 'speak') {
+          return {
+            type: 'speak',
+            speech: result.speech.trim(),
+            stance: result.stance.trim(),
+            strategyUpdate: result.strategyUpdate,
+          };
+        }
+        return { type: 'wait', strategyUpdate: result.strategyUpdate };
+      } catch {
+        return { type: 'wait' };
+      }
+    }
+
+    const entry = this.entries.get(player.clientId);
+    if (!entry) return { type: 'wait' };
     const prompts = this.buildDayResponsePrompts(entry, publishedSpeech);
-    const result = await this.llmWithRetry(p.clientId, 'DAY_STANCE', this.day, prompts, (p2) => {
-      if (p2.action === 'ready') return 'ok';
-      if (p2.action === 'speak' && typeof p2.speech === 'string' && p2.speech.trim() && typeof p2.stance === 'string') return 'ok';
-      if (p2.action === 'wait') return 'ok';
+    const result = await this.llmWithRetry(player.clientId, 'DAY_STANCE', day, prompts, (parsed) => {
+      if (parsed.action === 'ready') return 'ok';
+      if (parsed.action === 'speak' && typeof parsed.speech === 'string' && parsed.speech.trim() && typeof parsed.stance === 'string') return 'ok';
+      if (parsed.action === 'wait') return 'ok';
       return null;
     }, priority);
-    // 滾動策略調整：若 LLM 回傳 strategy_update，append 到 memory
-    if (result.parsed?.strategy_update && typeof result.parsed.strategy_update === 'string') {
-      this.appendMemory(p.clientId, `[Day${this.day}] ${result.parsed.strategy_update.trim()}`);
+    const strategyUpdate = result.parsed?.strategy_update && typeof result.parsed.strategy_update === 'string'
+      ? result.parsed.strategy_update.trim()
+      : null;
+    if (result.value === null) return { type: 'wait', strategyUpdate };
+    const parsed = result.parsed!;
+    if (parsed.action === 'ready') return { type: 'ready', strategyUpdate };
+    if (parsed.action === 'speak') {
+      return { type: 'speak', speech: (parsed.speech as string).trim(), stance: (parsed.stance as string).trim(), strategyUpdate };
     }
-    if (result.value === null) return { type: 'wait' };
-    const p2 = result.parsed!;
-    if (p2.action === 'ready') return { type: 'ready' };
-    if (p2.action === 'speak') return { type: 'speak', speech: (p2.speech as string).trim(), stance: (p2.stance as string).trim() };
-    return { type: 'wait' };
+    return { type: 'wait', strategyUpdate };
   }
 }

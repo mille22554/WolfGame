@@ -336,6 +336,7 @@ export class GameEngine {
     getNightState() {
         return {
             phase: this.state.phase,
+            day: this.state.day,
             nightStep: this.state.nightStep,
             wolfSubphase: this.state.wolfSubphase,
             wolfMeetingRound: this.state.wolfMeetingRound,

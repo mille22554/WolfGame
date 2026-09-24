@@ -185,6 +185,7 @@ export declare class GameEngine {
     /** 夜間狀態快照（供 harness / AI 控制器觀察狼會議進度） */
     getNightState(): {
         phase: GamePhase;
+        day: number;
         nightStep: NightStep | null;
         wolfSubphase: WolfSubphase | null;
         wolfMeetingRound: number;

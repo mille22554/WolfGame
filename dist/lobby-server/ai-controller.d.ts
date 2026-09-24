@@ -5,6 +5,105 @@ export interface AiPlayerDef {
     nickname: string;
     characterId: string;
 }
+export declare const AI_DAY_CHECKPOINT_SCHEMA_VERSION = 1;
+export type AiDayCheckpointStage = 'strategies' | 'drafts' | 'judge' | 'expand' | 'publish' | 'responses' | 'reconcile' | 'complete';
+/** 白天 judge 批次槽位；只保存 clientId 與純文字，不保存 GamePlayer。 */
+export interface AiDayDraftSlotCheckpoint {
+    clientId: string;
+    speech?: string;
+    stance?: string;
+}
+export interface AiDaySpeakDraft {
+    speech: string;
+    stance: string;
+}
+/** 某一 published turn 中，每位回應者的完成狀態。 */
+export interface AiDayResponseCheckpoint {
+    clientId: string;
+    turnId: string;
+    status: 'pending' | 'ready' | 'speak' | 'wait';
+    draft?: AiDaySpeakDraft;
+}
+/** 已選發言的發布身份；messageId/seq 來自 GameEngine 的 day message identity。 */
+export interface AiDayPublishedCheckpoint {
+    turnId: string;
+    clientId: string;
+    status: 'pending' | 'committed';
+    messageId: string | null;
+    messageSeq: number | null;
+    /** 發布完成後這位 AI 的 ready 目標值；恢復時以 setDayReady 補 commit。 */
+    readyValue: boolean;
+}
+export interface AiDayKnowledgeCheckpoint {
+    clientId: string;
+    role: string;
+    displayName: string;
+    partners: string[];
+    madman: string | null;
+    privateInfo: string;
+    recentMessages: {
+        from: string;
+        text: string;
+    }[];
+}
+/**
+ * AI 白天討論 continuation snapshot。
+ *
+ * 契約：只支援 DAY_DISCUSSION；所有欄位皆為 JSON-safe plain data，不含 Promise、
+ * timer、fetch、Map、CharacterProfile 或 GamePlayer 引用。
+ */
+export interface AiDayCheckpoint {
+    schemaVersion: typeof AI_DAY_CHECKPOINT_SCHEMA_VERSION;
+    day: number;
+    phase: 'DAY_DISCUSSION';
+    runId: string;
+    stage: AiDayCheckpointStage;
+    /** 本 checkpoint 對應的目前 game roster 與 AI 子集合。 */
+    rosterClientIds: string[];
+    aiClientIds: string[];
+    strategyDone: string[];
+    draftSlots: AiDayDraftSlotCheckpoint[];
+    selectedClientId: string | null;
+    expandedText: string | null;
+    published: AiDayPublishedCheckpoint | null;
+    responses: AiDayResponseCheckpoint[];
+    /** character profile 的 memory 純文字；null 代表沒有載入 profile。 */
+    profileMemory: Record<string, string | null>;
+    knowledge: AiDayKnowledgeCheckpoint[];
+    wolfBoard: {
+        from: string;
+        text: string;
+    }[];
+    masonBoard: {
+        from: string;
+        text: string;
+    }[];
+}
+/**
+ * 測試注入 seam；正式 server 不接線。正式路徑仍走既有 prompt／JSON parser。
+ */
+export interface AiDayLlmTestAdapter {
+    strategy(clientId: string, day: number): Promise<string>;
+    draft(clientId: string, day: number): Promise<{
+        speech: string;
+        stance: string;
+        strategyUpdate?: string | null;
+    }>;
+    judge(speeches: string[], day: number): Promise<number>;
+    expand(clientId: string, draftSpeech: string, day: number): Promise<string>;
+    respond(clientId: string, publishedSpeech: string, day: number): Promise<{
+        action: 'ready';
+        strategyUpdate?: string | null;
+    } | {
+        action: 'speak';
+        speech: string;
+        stance: string;
+        strategyUpdate?: string | null;
+    } | {
+        action: 'wait';
+        strategyUpdate?: string | null;
+    }>;
+}
 export interface AiLogEntry {
     ts: number;
     clientId: string;
@@ -58,11 +157,22 @@ export declare class AiController {
     private masonStanceMap;
     /** 白天公頻訊息（本天；AI 知識用） */
     private dayBoard;
-    /** AI clientId -> 是否 toggle 準備投票 ON */
+    /** AI clientId -> 是否準備投票 ON；每次 resume 以 GameEngine 狀態為準重建。 */
     private dayReadyMap;
+    /** false 時 PHASE_CHANGED(DAY_DISCUSSION) 只追蹤 phase/day，不清 state、不啟動。 */
+    private phaseStartEnabled;
+    private dayContinuation;
+    private dayContinuationEpoch;
+    private dayRunCounter;
+    private dayTurnCounter;
+    private dayResumePromise;
+    private dayResumeEpoch;
+    private dayResumeRunId;
+    private readonly dayTestLlm;
     private readonly messageCap;
     constructor(defs: AiPlayerDef[], opts?: {
         messageCap?: number;
+        dayTestLlm?: AiDayLlmTestAdapter;
     });
     /** 建立後由 harness 設定遊戲引擎 */
     setGame(game: GameEngine): void;
@@ -73,8 +183,31 @@ export declare class AiController {
     restoreLog(entries: AiLogEntry[]): void;
     /** 該 AI 的知識快照（供報告／除錯） */
     getKnowledge(clientId: string): AiKnowledge | null;
+    /** restore barrier：false 時只記錄 PHASE_CHANGED，不重置或自動啟動白天 loop。 */
+    setPhaseStartEnabled(enabled: boolean): void;
+    /** 匯出可 JSON round-trip 的 DAY_DISCUSSION continuation；不匯出任何 live runtime handle。 */
+    exportDayCheckpoint(): AiDayCheckpoint | null;
+    /**
+     * 驗證並 hydrate DAY_DISCUSSION checkpoint；任何 schema/day/phase/roster 不合法都 safe no-op。
+     * 此方法刻意不啟動 loop；完成 game restore → import → resume 的呼叫端須明確呼叫 resumeDayDiscussion。
+     */
+    importDayCheckpoint(snapshot: AiDayCheckpoint): void;
+    /** 明確啟動／續跑；同一 continuation 已有 in-flight run 時回傳同一 Promise（single-flight）。 */
+    resumeDayDiscussion(): Promise<void>;
     /** 取消進行中的重試排程（進行中的 fetch 無法中斷，但其結果會被丟棄） */
     destroy(): void;
+    private invalidateDayRun;
+    private nextDayRunId;
+    private createDayContinuation;
+    private isCurrentDayRun;
+    private cloneDayDraftSlot;
+    private cloneDayResponse;
+    private rebuildDayStateFromGame;
+    /** 先完整驗證並建立副本；驗證成功前不碰 controller live state。 */
+    private prepareDayCheckpoint;
+    private sameUniqueClientSet;
+    private uniqueStringsAreIn;
+    private validBoardSnapshot;
     onNightStepActive(step: NightStep, players: GamePlayer[]): void;
     onWolfSubphaseChange(subphase: WolfSubphase, round: number): void;
     handlePrivate(clientId: string, msg: any): void;
@@ -109,11 +242,11 @@ export declare class AiController {
     private buildExpandPrompts;
     /** 展開：LLM 把選中的草稿要點展開成完整發言（llmWithRetry 內建 3 次重試）；全失敗 → fallback 用草稿原文，不阻塞會議 */
     private expandSpeech;
-    /** 白天開始時：每個 AI 依角色生成策略 → 寫入全局 memory（全併發） */
+    /** 白天策略：只補 strategyDone 缺漏者；每個完成即 commit。 */
     private generateDayStrategies;
     /** 依角色生成策略 prompt */
     private buildStrategyPrompt;
-    /** 白天討論：策略先行 → AI 輪流發言（judge 盲選）→ 收斂（全 AI toggle ON）後結束 */
+    /** 可恢復白天 loop：所有階段都以 controller field 為 checkpoint source of truth。 */
     private runDayDiscussion;
     /** 白天投票：每個 AI 玩家 LLM 決定投誰（或棄票）→ 提交 CAST_VOTE */
     private runDayVoting;
@@ -168,11 +301,23 @@ export declare class AiController {
     private buildTargetPrompts;
     /** 占い／守衛：LLM 選目標 → 提交夜間行動（失敗重試；最終失敗跳過、不阻塞） */
     private runTargetAction;
-    /** 所有 AI 獨立出草稿（全併發 LLM 呼叫） */
+    /** 依 game roster 順序建立 draft slots；完成先回來也不改變 judge 順序。 */
+    private ensureDraftSlots;
+    private completedDayDrafts;
+    private resetDayJudgeState;
+    /** 草稿 LLM：placeholder 先保留順序；每個成功結果立即寫回自己的 slot。 */
     private generateDayDrafts;
-    /** Judge 盲選一篇白天草稿（LLM 全盲評分） */
+    /** Judge 盲選一篇白天草稿（LLM 全盲評分；test adapter 只在測試注入時存在）。 */
     private judgePickDayDraft;
-    /** 非發言者 AI 讀白板後回應：ready / speak / wait */
+    private expandDaySpeech;
+    /** 發布 identity 與 ready 目標同 tick commit；resume 看 committed state 不重送。 */
+    private publishSelectedDayDraft;
+    /** 已完成 response 不再叫 LLM；speak draft 依 aiPlayers 輸入順序組成下一個 judge batch。 */
+    private runDayResponses;
+    /** 使用 engine ready truth 的 idempotent setter；絕不 replay toggle。 */
+    private commitDayReady;
+    private forceAiDayReady;
+    /** 非發言者 AI 讀白板後回應；memory/ready commit 交由 caller 立即落 continuation state。 */
     private dayRespond;
 }
 //# sourceMappingURL=ai-controller.d.ts.map
