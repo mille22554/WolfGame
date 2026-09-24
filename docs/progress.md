@@ -5,7 +5,7 @@
 
 ## 目前狀態
 
-**卡在哪：** 5 分鐘分段法無法跨段保存「已完成但尚未 publish 的白天草稿」。第一段完成 14 策略＋13/14 草稿；第二段 resume 後重跑 14 策略＋14/14 草稿，並在 08:09:46 啟動 judge，但 judge 回應尚未完成就中斷，state 裡仍沒有 pending drafts。**每個 5 分鐘新 segment 都會重做策略／草稿，無法靠反覆 resume 保證前進到 EXPAND。**
+**目前暫停點：** Phase 1 GameEngine checkpoint 已完成並 push；Phase 2 AI checkpoint state machine 已在本地完成 build／50 tests，但 Oracle Gate 2 依使用者要求暫停。Phase 3 external harness envelope 尚未開始，因此正式 5 分鐘 resume 仍不能跨段延續 pending day drafts；**不要重跑下一個 5 分鐘 segment，也不要開始正式 server 測試。**
 
 - ✅ **共有者 prompt V8 落地**（2026-09-24，oracle 雙共有者第 1 夜流程驗證後落地）：三函數（`masonContext`／`buildMasonDraftPrompts`／`buildMasonResponsePrompts`）全面對齊狼版編排，只有身分差異；草稿定位改為「行動筆記非發言稿」
 - ✅ **私頻稱呼修正**（2026-09-24，stage 1 實測發現＋oracle 驗證後落地）：2 人私頻用「你／名字＋你」，禁「他／她」與「你們」
@@ -15,6 +15,28 @@
 - ✅ **`docs/ubuntu-spec.md` source／harness 現況對齊**（2026-09-24）：全文改用【已上線】／【source 現況】／【production 未接線】／【目標／待實作】標記；同步 V-Day、實際 loops、WS 事件狀態、部署與 systemd 缺口；明確區分外部 harness 可跑與 production 尚未接 `AiController`
 - ✅ **Qwen `medium` variant 第一段 server 測試**（2026-09-24，5 分鐘）：新增 `LLM_REASONING_EFFORT` per-request 映射；28/28 個 SGLang request 都帶 `reasoning_effort=medium`；完成 14 個策略與 13 個白天草稿，1 個草稿在 SIGINT 時中止，尚未進入 judge／EXPAND
 - ✅ **Checkpoint Phase 1：GameEngine day restore**（2026-09-24，Oracle Gate 1 attempt 2 GO）：保留 dayReady／dayMessages、day/seq/id、copy-based getter、idempotent `setDayReady`／`reconcileDayReady`、wolfTargetId round-trip；focused build + 43/43 tests 通過。AI private snapshot／harness envelope 尚待 Phase 2/3
+- ⏳ **Checkpoint Phase 2：AI day snapshot/state machine（WIP，未 commit）**（2026-09-24）：已加入 `exportDayCheckpoint`／`importDayCheckpoint`／`resumeDayDiscussion`／`setPhaseStartEnabled`，涵蓋 strategy／draft／judge／expand／publish／response continuation；本機 build + 50/50 focused tests 通過，但 Gate 2 尚未審查，Phase 3 尚未接 harness
+
+## 本 session 暫停交接（2026-09-24）
+
+- **已推送基線**：`e2e3770`（Phase 1 GameEngine day restore；包含新增 checkpoint test 的 dist 產物）。`main` 未動。
+- **目前工作樹 WIP（刻意未 commit）**：
+  - 修改：`src/lobby-server/ai-controller.ts`（AI checkpoint state machine）、`src/lobby-server/game.ts`（`getNightState().day` 小型型別／觀察欄位）
+  - 新增：`src/lobby-server/ai-checkpoint.test.ts` 與其 4 個 `dist/lobby-server/ai-checkpoint.test.*` 產物
+  - 另有 build 產生的 `dist/lobby-server/ai-controller.*`、`dist/lobby-server/game.*` 修改
+  - `dist/lobby-server/llm.d.ts` 的 line-ending 狀態是既有雜訊，**不要暫存**
+- **Phase 2 已驗證**：`npm run build` 通過；`node --test dist/lobby-server/ai-checkpoint.test.js dist/lobby-server/game-checkpoint.test.js dist/lobby-server/game-wolf.test.js dist/lobby-server/server.test.js dist/lobby-server/room-manager.test.js` 為 **50/50 pass**。
+- **已修正的實際 bug**：合法 `selectedClientId: null` 曾被 roster validation 錯誤拒絕，造成 checkpoint safe-no-op 後重跑策略；目前已改為只在非 null 時檢查 roster。
+- **Gate 2 狀態**：Oracle Gate 2 與 explorer 結構掃描在 2026-09-24 依使用者要求取消，**沒有 GO/NO-GO 結果**；不可把 50/50 tests 當作 Gate 2 通過。
+- **Phase 2 範圍界線**：只支援 external harness 的 `DAY_DISCUSSION`；不宣稱 NIGHT／DAY_VOTING／DAY_RESULT restore。`importDayCheckpoint()` 只 hydrate、不自動啟動；Phase 3 必須在 restore game → import AI → `resumeDayDiscussion()` 後，於 all-ready 時呼叫 `game.reconcileDayReady()`。
+- **Phase 3 尚未做**：`scripts/external-test-stage2.mjs` 仍未保存單一 `{schemaVersion, game, ai}` envelope，仍未使用 `setPhaseStartEnabled(false)` restore barrier，也沒有 atomic temp/rename 或 SIGINT quiesce；因此現有 5 分鐘 checkpoint 仍不能實際續跑。
+- **下一 agent 的恢復順序**：
+  1. 先讀本節與 `.slim/deepwork/checkpoint-persistence.md`，檢查 WIP diff；不要重做 Phase 1。
+  2. 重新跑 `npm run build` + 上述 5 個 focused test，確認接手時工作樹仍可編譯。
+  3. 開新的 Oracle Gate 2 session，審查 AI snapshot continuation 的 stale-run fencing、partial completion、publish/ready replay、phaseStart barrier；Gate 2 通過前不要改 harness。
+  4. Gate 2 通過後才 commit Phase 2 的 source/test/dist（保留 `llm.d.ts` 雜訊），再實作 Phase 3 harness envelope、quiesce、atomic save。
+  5. Phase 3 本機測試通過後，才做 `medium` 5 分鐘 segment 2；第一個 `JUDGE → EXPAND → MESSAGE` 出現後，另開全新 Oracle session 盲評草稿與 expanded 公頻稿。
+  6. 最後同步本 `docs/progress.md`／`docs/ubuntu-spec.md`；不要在 Gate 2/3 前部署或重啟正式服務。
 
 - ✅ 夜流程（NIGHT_RESULT）已通過多次驗證
 - ✅ 狼會議收斂邏輯修好（不再 premature VOTING）
@@ -28,7 +50,7 @@
 - ✅ **persona 修正**：shinichi/yuko/tatuya 的「時間線/分鐘/看到的現象」範例改為發言矛盾型（真一「昨晚和誰同點、時間差三分鐘」即源自 persona 範例腦補）
 - ✅ 白天測試紀錄（`stage2-day-report.md`）：狼會議不完整是舊格式 `night1.json` 無 `.log.json`（非渲染 bug）——要完整狼會議需重跑整局 night
 - ✅ **白天開場「捏造他人立場」幻覺修復**：良子第一句「不跟佐雪的立場走」——佐雪全程零發言，立場是憑空捏造（白板空＋強迫點名的 prompt 側效果）。system prompt 證據邊界新增「禁止假設任何玩家持某立場/講過什麼，除非實際出現在白板」；strategy/draft/response prompt 加降級規則「只能質疑已發言的實際內容，沒人發言就談自己觀察」（參考 `docs/ai-rp-prompt-research.md` §4 anti-fabrication）
-- ⏳ **白天 V-Day 行為驗證**：5 分鐘分段已證明無法保存 pending drafts；下一步須在「單次不中斷跑到首則公頻稿」與「持久化 pending day drafts」之間選一項
+- ⏳ **白天 V-Day 行為驗證**：使用者已選擇先修 checkpoint 持久化；目前 Phase 2 AI WIP 已通過本機 50/50 tests，但 Gate 2 暫停，Phase 3 harness 尚未完成。完成 envelope 前不要再重複 5 分鐘 resume。
 
 **私頻稱呼修正（2026-09-24，stage 1 實測發現、oracle 驗證通過後落地）：**
 
@@ -81,7 +103,7 @@
 - **5 分鐘限制根因**：`game.saveState()` 只保存 `dayMessages`／`dayReady` 等 engine state，不保存已完成但尚未 publish 的策略／草稿集合；`runDayDiscussion()` resume 時會無條件重跑 `DAY_STRATEGY` 與所有未 ready AI 的 `DAY_SPEECH`。因此再跑第三個 5 分鐘 segment 只會重做同一輪，不能前進到 EXPAND
 - **報告**：server `/tmp/ai-trace-stage2-day.md`；本機 `C:\Users\user\Desktop\FrankTests\Temp\ai-trace-stage2-day.md`
 - **本機驗證**：build 通過；lobby-server 33/33；mock HTTP server 確認實際 request JSON 含 `reasoning_effort: "medium"`
-- **下一步**：不要再重複 5 分鐘 resume；先決定 (A) 單次不中斷跑到首則 `JUDGE → EXPAND → MESSAGE`，或 (B) 修改 engine/harness 持久化 pending day drafts／策略狀態
+- **下一步（已選定）**：先完成 checkpoint Phase 2 Gate 2，再做 Phase 3 harness envelope；完成前不要重複 5 分鐘 resume。Phase 3 後才重新跑 segment 2，目標是復用已完成策略／草稿並產生首則 `JUDGE → EXPAND → MESSAGE`。
 
 **私頻 EXPAND 機制＋草稿要點化（2026-09-24，oracle 兩段式驗證通過後落地）：**
 
@@ -173,13 +195,13 @@
 - 併發實測補充（14 路全過）：5 併發 967 tokens 全 200；14 併發 ~9.2K tokens 全 200、~49s 完成（SGLang `--max-running-requests 1` 依 priority 排隊）。先前 5 併發測試因 PowerShell 管道把中文打成 `?`（prompt=65 是亂碼），改用 base64 上傳後為正常 prompt（~79 tokens）
 
 **下一步（依序）：**
-1. 先看本輪 5 分鐘報告與 13 筆草稿，確認是否要繼續 `medium`；不要再假設 5 分鐘 checkpoint 能跨段前進
-2. 若繼續，優先選單次不中斷跑到首則公頻稿；它會重做一次策略／草稿，但能繼續 judge／EXPAND。若要真正支援 5 分鐘分段，必須先持久化 pending drafts／策略狀態
-3. 直到報告出現第一條 `JUDGE → EXPAND → MESSAGE`；用**全新 oracle session** 獨立盲評草稿與展開稿，judge 不參與生成
-4. 驗收公頻發言、收斂速度、EXPAND attempt/fallback、簡體字與策略洩漏；尤其確認狼的刀人目標／占卜結果不會被帶進公頻
-5. 若品質有問題 → 先用 oracle 定位 prompt 問題，再調 prompt／重跑；不直接從單一 5 分鐘樣本下結論
-6. 全部通過後，把行為結果與品質裁示回填 spec／progress；之後再處理 production `AiController` 接線與 `SGLANG_API_KEY`
-7. 金鑰不輪換；保留 `api.morowin.win` tunnel
+1. 保持暫停；先讓下一 agent 讀「本 session 暫停交接」與 `.slim/deepwork/checkpoint-persistence.md`，不要重做 Phase 1。
+2. 接手後先檢查 Phase 2 WIP diff，重跑 `npm run build` 與 5 個 focused tests；不要把既有 `dist/lobby-server/llm.d.ts` line-ending 雜訊暫存。
+3. 開新的 Oracle Gate 2 審查 AI continuation；Gate 2 通過前不要修改 harness、不要部署。
+4. Gate 2 通過後才把 Phase 2 source/test/dist 獨立 commit；接著做 Phase 3：單一 `{schemaVersion, game, ai}` envelope、restore barrier、SIGINT quiesce、atomic save。
+5. Phase 3 本機測試通過後，才重新跑 `medium` 5 分鐘 segment 2；確認不再重做已完成策略／草稿，直到首則 `JUDGE → EXPAND → MESSAGE`。
+6. 首則公頻稿出現後，用全新 Oracle session 盲評草稿與 expanded 稿，再驗收簡體字、策略洩漏、EXPAND fallback 與收斂速度。
+7. 全部行為結果通過後才同步 `docs/ubuntu-spec.md`／`docs/progress.md`；正式 service 不重啟，金鑰不輪換，保留 `api.morowin.win` tunnel。
 
 **Server 上跑測試的正確方式（金鑰不得放進 argv）：**
 ```bash
@@ -233,12 +255,12 @@ scp ssh.morowin.win:/tmp/ai-trace-stage2-day.md "C:\Users\user\Desktop\FrankTest
 
 ## 待做
 
-1. **[HIGH] 白天討論外部測試（進行中）** → 5 分鐘分段跑，觀察 AI 品質
-   - `/tmp/day1.json` 已存（第一段完成）
-   - 接續：`--resume /tmp/day1.json --stop-at DAY_RESULT --save-state /tmp/day2.json`
-   - 觀察：發言內容是否自然、狼是否暴露、收斂是否正常
-2. **[MED] Step 5：AI 接 production server** → `server.ts` 實例化 `AiController`
-3. **[LOW] 前端（ubuntu-web/）** → 等外部測試跑通完整一局再開
+1. **[HIGH] Checkpoint Phase 2 Gate 2（目前暫停）** → AI snapshot WIP 已在本機通過 50/50 tests，但 Oracle Gate 2 尚未取得結果；先不要改 harness／部署
+2. **[HIGH] Checkpoint Phase 3** → `external-test-stage2.mjs` 保存單一 `{schemaVersion, game, ai}` envelope，加入 restore barrier、SIGINT quiesce、atomic temp/rename
+3. **[HIGH] medium segment 2 端到端驗證** → Phase 3 完成後才重跑 5 分鐘續段，確認不重做已完成策略／草稿並產出首則公頻 `MESSAGE`
+4. **[MED] 首則公頻稿品質盲評** → 全新 Oracle session 評估 expanded 稿、簡體字、策略／私密資訊洩漏與收斂
+5. **[MED] Step 5：AI 接 production server** → `server.ts` 實例化 `AiController`（本 checkpoint 工作完成後才做）
+6. **[LOW] 前端（ubuntu-web/）** → 等外部測試跑通完整一局再開
 
 ## 測試腳本用法
 
