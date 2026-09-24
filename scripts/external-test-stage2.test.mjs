@@ -14,6 +14,9 @@
  *   T7 SIGINT settle 上限小於 runner 的 30s kill-after（不可拉回 70s）
  *   T8 SIGINT settle 的 resume promise 明確 catch：reject 不產生 unhandled rejection
  *   T9 isMainModule：精確路徑 true；大小寫差異 Windows true／Linux false
+ *   T10 boardSection：三種白板（狼/共有者/白天）標題與每則訊息格式一致
+ *   T11 discussionLogLine：MASON_MESSAGE 與另兩塊白板同格式入 log；其他事件 null
+ *   T12 dayDiscussionSection：DAY_STANCE 可被渲染、WOLF_STANCE 不再誤渲染為白天回應
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -36,6 +39,9 @@ import {
   stage2ResumeImport,
   stage2ResumeRun,
   resumeStage2State,
+  boardSection,
+  discussionLogLine,
+  dayDiscussionSection,
 } from './external-test-stage2.mjs';
 
 // --- 測試桌：3 AI + 1 human（human 永不 ready → engine 可停在 DAY_DISCUSSION） ---
@@ -406,4 +412,74 @@ test('T9：isMainModule——精確路徑 true；大小寫差異 Windows true、
   const mismatched = selfPath.slice(0, lowerIdx) + selfPath[lowerIdx].toUpperCase() + selfPath.slice(lowerIdx + 1);
   const expected = process.platform === 'win32' ? true : false;
   assert.equal(isMainModule(mismatched), expected, `${process.platform} 大小寫不一致路徑應為 ${expected}`);
+});
+
+// --- T10：共用白板 renderer——三種白板格式一致 ---
+
+test('T10：boardSection——狼/共有者/白天三塊白板標題與訊息行格式完全一致', () => {
+  const ts = Date.parse('2026-01-01T00:00:00Z');
+  const events = [
+    { ts, type: 'WOLF_MESSAGE', from: 'A', text: '狼文字' },
+    { ts, type: 'MASON_MESSAGE', from: 'B', text: '共有者文字' },
+    { ts, type: 'MESSAGE', from: 'C', text: '白天文字' },
+  ];
+  const cases = [
+    { type: 'WOLF_MESSAGE', name: '狼', from: 'A', text: '狼文字' },
+    { type: 'MASON_MESSAGE', name: '共有者', from: 'B', text: '共有者文字' },
+    { type: 'MESSAGE', name: '白天', from: 'C', text: '白天文字' },
+  ];
+  // 三塊白板同構：標題 / 空行 / `- [ts] 來源：「text」` / 空行（來源與 text 都顯示）
+  for (const c of cases) {
+    assert.deepEqual(boardSection(events, c.type, c.name), [
+      `## ${c.name}白板（${c.type}）`,
+      '',
+      `- [${new Date(ts).toISOString()}] ${c.from}：「${c.text}」`,
+      '',
+    ], `boardSection(${c.type}) 格式與共構不符`);
+  }
+  // 空白板：三塊都顯示同一「（無）」佔位
+  for (const c of cases) {
+    assert.deepEqual(boardSection([], c.type, c.name), [`## ${c.name}白板（${c.type}）`, '', '（無）', '']);
+  }
+});
+
+// --- T11：DISCUSSION_LOG 行——MASON_MESSAGE 與另兩塊白板一致 ---
+
+test('T11：discussionLogLine——三種白板（含 MASON_MESSAGE）同格式入 log；其他事件回 null', () => {
+  // 三種白板事件同形狀（from + text），log 行同格式「[hh:mm:ss] 來源: text」
+  for (const type of ['MESSAGE', 'WOLF_MESSAGE', 'MASON_MESSAGE']) {
+    const line = discussionLogLine({ type, from: 'B', text: '你好' });
+    assert.ok(line !== null, `${type} 應被記錄進討論 log`);
+    assert.match(line, /^\[\d{2}:\d{2}:\d{2}\] B: 你好$/);
+  }
+  // READY 維持既有摘要格式
+  assert.match(discussionLogLine({ type: 'DAY_READY_STATUS', ready: [{ nickname: 'B' }], total: 2 }), /^\[READY\] B \(1\/2\)$/);
+  // 非白板事件不記錄
+  assert.equal(discussionLogLine({ type: 'PHASE_CHANGED', phase: 'DAY_VOTING' }), null);
+  assert.equal(discussionLogLine({ type: 'VOTE_RESULT', from: 'B', text: 'x' }), null);
+});
+
+// --- T12：白天回應——DAY_STANCE 可被渲染、WOLF_STANCE 不再誤渲染 ---
+
+test('T12：dayDiscussionSection——DAY_STANCE 渲染為「其他 AI 回應」；WOLF_STANCE 不誤渲染', () => {
+  const base = Date.parse('2026-01-01T00:00:00Z');
+  const players = [
+    { clientId: 'ai-a', nickname: 'A' },
+    { clientId: 'ai-b', nickname: 'B' },
+    { clientId: 'ai-c', nickname: 'C' },
+  ];
+  const events = [
+    { ts: base, type: 'PHASE_CHANGED', phase: 'DAY_DISCUSSION', day: 1 },
+    { ts: base + 1000, type: 'MESSAGE', from: 'A', text: 'A 先發言' },
+  ];
+  const log = [
+    // 正確的白天回應 kind：ai-b（DAY_STANCE）
+    { ts: base + 1500, kind: 'DAY_STANCE', clientId: 'ai-b', round: 1, attempt: 0, response: {}, parsed: { action: 'ready' } },
+    // 舊 bug 的 kind：ai-c 的 WOLF_STANCE——若過濾未修正，它也會被渲染進白天回應
+    { ts: base + 1600, kind: 'WOLF_STANCE', clientId: 'ai-c', round: 1, attempt: 0, response: {}, parsed: { action: 'ready' } },
+  ];
+  const section = dayDiscussionSection(log, events, players).join('\n');
+  assert.ok(section.includes('### 第 1 輪：A 發言'), '流程摘要（輪次標題）保留');
+  assert.ok(section.includes('B：✅ ready'), 'DAY_STANCE 應被渲染為白天回應');
+  assert.ok(!section.includes('C：✅ ready'), 'WOLF_STANCE 不應被誤渲染為白天回應');
 });

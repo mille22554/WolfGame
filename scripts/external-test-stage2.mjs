@@ -314,6 +314,20 @@ async function runObservationLoop(game, stopAt, isStopped) {
   return { converged, aborted };
 }
 
+/**
+ * 實時討論 log 的一行內容：三種白板（MESSAGE / WOLF_MESSAGE / MASON_MESSAGE）
+ * 同格式「時間 來源: text」；DAY_READY_STATUS 是 READY 摘要；其他事件回 null（不記錄）。
+ */
+export function discussionLogLine(m) {
+  if (m.type === 'DAY_READY_STATUS') {
+    return `[READY] ${m.ready.map((r) => r.nickname).join(', ')} (${m.ready.length}/${m.total})`;
+  }
+  if (m.type === 'MESSAGE' || m.type === 'WOLF_MESSAGE' || m.type === 'MASON_MESSAGE') {
+    return `[${new Date().toISOString().slice(11, 19)}] ${m.from}: ${m.text}`;
+  }
+  return null;
+}
+
 /** 組 15 個 AiPlayerDef 的 AiController ＋ GameEngine（engine callback 接進 AI 控制器）。 */
 function buildGameAndAi() {
   const defs = CHARACTERS.map(([characterId, nickname], i) => ({ clientId: `ai-${i}`, nickname, characterId }));
@@ -325,13 +339,9 @@ function buildGameAndAi() {
     broadcast: (m, targets) => {
       ai.handleBroadcast(m, targets);
       events.push({ ts: Date.now(), type: m.type, ...m });
-      // 實時寫入討論 log（MESSAGE / WOLF_MESSAGE / DAY_READY_STATUS）
-      if (m.type === 'MESSAGE' || m.type === 'WOLF_MESSAGE' || m.type === 'DAY_READY_STATUS') {
-        const line = m.type === 'DAY_READY_STATUS'
-          ? `[READY] ${m.ready.map((r) => r.nickname).join(', ')} (${m.ready.length}/${m.total})`
-          : `[${new Date().toISOString().slice(11, 19)}] ${m.from}: ${m.text}`;
-        appendFileSync(DISCUSSION_LOG, line + '\n', 'utf-8');
-      }
+      // 實時寫入討論 log（三種白板 MESSAGE / WOLF_MESSAGE / MASON_MESSAGE ＋ READY；格式由 discussionLogLine 統一）
+      const line = discussionLogLine(m);
+      if (line !== null) appendFileSync(DISCUSSION_LOG, line + '\n', 'utf-8');
     },
     onNightStepActive: (step, players) => ai.onNightStepActive(step, players),
     onWolfSubphaseChange: (sub, round) => ai.onWolfSubphaseChange(sub, round),
@@ -440,6 +450,21 @@ function fmtTs(ts) {
 
 function fmtJson(x) {
   return x === null || x === undefined ? 'null' : JSON.stringify(x);
+}
+
+/**
+ * 共用白板 renderer：狼／共有者／白天三種白板都用同一格式輸出，避免白天特殊化。
+ * 結構固定為四行：`## <name>白板（<type>）`、空行、每則訊息 `- [ts] 來源：「text」`（空則「（無）」）、空行。
+ */
+export function boardSection(events, type, boardName) {
+  const L = [];
+  L.push(`## ${boardName}白板（${type}）`);
+  L.push('');
+  const msgs = events.filter((e) => e.type === type);
+  if (msgs.length === 0) L.push('（無）');
+  for (const m of msgs) L.push(`- [${fmtTs(m.ts)}] ${m.from}：「${m.text}」`);
+  L.push('');
+  return L;
 }
 
 /**
@@ -630,7 +655,7 @@ function splitSection(events, players) {
  * 白天討論流程（用 DAY_DISCUSSION PHASE_CHANGED 時間戳分界；
  * 用 MESSAGE 事件分組輪次；每輪顯示發言者 + 所有 AI 的 respond 決策）
  */
-function dayDiscussionSection(log, events, players) {
+export function dayDiscussionSection(log, events, players) {
   const L = [];
   L.push('## 白天討論流程（DAY_DISCUSSION）');
   L.push('');
@@ -671,10 +696,10 @@ function dayDiscussionSection(log, events, players) {
     L.push(`- [${fmtTs(msg.ts)}] 「${msg.text}」`);
     L.push('');
 
-    // 該輪的 respond 決策（WOLF_STANCE entries 在 [msg.ts, tEnd) 範圍內，排除發言者）
+    // 該輪的 respond 決策（DAY_STANCE entries 在 [msg.ts, tEnd) 範圍內，排除發言者；白天回應的 log kind 是 DAY_STANCE 不是 WOLF_STANCE）
     const speakerClientId = players.find((p) => p.nickname === msg.from)?.clientId ?? '';
     const responses = dayLog.filter((e) =>
-      e.kind === 'WOLF_STANCE' &&
+      e.kind === 'DAY_STANCE' &&
       e.clientId !== '' &&
       e.clientId !== speakerClientId &&
       e.ts >= msg.ts &&
@@ -748,12 +773,10 @@ function buildReport(game, ai, events, defs, converged, aborted, stopAt, stopPha
   L.push('');
   L.push(...dayDiscussionSection(log, events, players));
   L.push('');
-  L.push('## 狼白板（WOLF_MESSAGE）');
-  L.push('');
-  const wolfMsgs = events.filter((e) => e.type === 'WOLF_MESSAGE');
-  if (wolfMsgs.length === 0) L.push('（無）');
-  for (const m of wolfMsgs) L.push(`- [${fmtTs(m.ts)}] ${m.from}：「${m.text}」`);
-  L.push('');
+  // 三種白板共用同一 renderer（格式一致）；白天白板是獨立章節，不只藏在討論流程裡
+  L.push(...boardSection(events, 'WOLF_MESSAGE', '狼'));
+  L.push(...boardSection(events, 'MASON_MESSAGE', '共有者'));
+  L.push(...boardSection(events, 'MESSAGE', '白天'));
   L.push('## 夜間結算（NIGHT_RESULT）');
   L.push('');
   const nightResults = events.filter((e) => e.type === 'NIGHT_RESULT');
