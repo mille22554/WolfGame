@@ -1,7 +1,7 @@
 ﻿# AI Werewolf/Mafia Prompt Engineering — Community Research
 
-> Source: ~30 sources (academic papers, production GitHub repos, Chinese dev-community write-ups, Reddit threads)
-> Date: 2026-09-16
+> Source: ~40 sources (academic papers, production GitHub repos, Chinese dev-community write-ups, Reddit threads incl. r/SillyTavernAI RP 社群)
+> Date: 2026-09-16 · Reddit RP 社群補充: 2026-09-24
 
 ## 1. System Prompt Structure (Converged Pattern)
 
@@ -132,7 +132,62 @@ Four patterns in the wild:
 
 Strategy content: kill priority 女巫 > 预言家 > 村民; 悍跳 (fake-seer) + 倒钩 (defend good player); "不惧怕狼队友被投票出局"
 
-## 6. Key Sources
+## 6. Reddit RP 社群補充與對照（r/SillyTavernAI，2026-09-24）
+
+> 掃描 24 帖主文 + ~760 則留言（arctic-shift API 抓取），過濾出 230 則高信號評論。主要來源：Freaky Frankenstein 5.x / FrankenSIM 3.0 燈塔 preset 帖、Sola V1、Guided Generations、GLM/Minimax roleplay prompt 分享、JSON 卡片格式辯論、thinking 爭議帖。
+
+### 6.1 紅帖社群獨有技術（§1–§5 未涵蓋）
+
+**Internal States / tracker 區塊**（FF5 系，社群最推崇）
+- 每則回覆**末尾附加隱藏狀態塊**：信任/好感/怨恨、NPC 議程、GM 筆記、時間地點、世界狀態；regex 抹掉舊狀態塊，**只送最後一輪**（"the AI never sees all the previous internal state turns"）
+- 世界在畫面外繼續運轉：NPC 記仇、記得 20 輪前的言行
+- → 狼人殺落地：每日投票/信任/指控 tracker + GM 筆記（誰 claim 了什麼、誰自相矛盾），逐日覆寫並歷史瘦身 —— 即 §1「context rewriting」的具體機械化
+
+**Anti-drift 再掛鉤稽核**
+- `[OOC: silently audit if NPC core identity drifted... re-anchor]` 每 4–5 則插入一次
+- FrankenSIM 用 **idiolect 指紋**判準：NPC 說話不留指紋 = 漂移 = 強制修正
+- §5「stable bootstrap re-injected every turn」→ 補上間歇稽核與指紋判準
+
+**AI-slop / LLM-isms kill-list**
+- 禁詞清單（ozone、spine、breath hitching…）、anti-parrot/anti-echo、anti-therapyspeak（GLM 系特別愛把角色寫成心理治療師）、禁 "not X but Y" / "you said" 句式、禁 echoing 玩家話語
+- **負面偏見 prompt**：玩家宣告動作 = 嘗試非結果；按真實勝率寫最可能的結果而非最爽的結果
+- 三層實作：banned tokens + regex 清理 + post-history 指令 —— 治 §4「AI too passive/aggressive」與 groupthink
+
+**Thinking steering**（社群共識：不是關掉，是引導）
+- thinking 不該拿來複述靜態規則（安慰劑效應）；要用來 **planning**：規劃下一步、消化現況、算投票模式
+- thinking summary 常由小模型外包產生，不代表真實內部運作 → 只取結構化結果欄位
+- self-prefill：assistant 訊息「I'll start my reasoning with X, then...」同時規避審查 + 提高 adherence
+
+**格式辯論：JSON vs 自然語言**（§5「structured records」需軟化）
+- 壓縮 JSON 派：單行少空白省 80–90% token，結構資料較穩
+- 反方：LLM 本質吃自然語言，除非受過結構化訓練
+- 實務折衷：Markdown 最被廣推、XML 某些模型最懂、中文社群偏 YAML → **模型依賴**
+- "The universe doesn't understand 'No'"：否定句指令弱 → 正向指令 + 精確清單
+
+**其他**
+- **hamburger 位置理論**：LLM 最重視 context 頭尾；CoT 放 depth-0 交叉引用 system（補強 §1 placement）
+- 80k token 以上模型變笨 → 摘要重整（補強 §5 prompt length discipline）
+- **semantic density**：少 token 高語意密度保角色深度；負面個性標籤詞（smart/intelligent）誘發刻板行為
+- per-model 提示詞變體 + 中途換模型（"Kimi 太倔就切回 GLM"）
+- provider 層 prompt injection 實測存在（OpenRouter 注入 system prompt）→ 校驗伺服器端 system prompt 完整性（補強 §4 洩漏防禦）
+
+### 6.2 與既有章節對照
+
+| 章節 | 紅帖證據 | 判定 |
+|---|---|---|
+| §1 系統提示結構 | 吻合；hamburger placement 補強 | ✅ 證實 + 延展 |
+| §2 兩層分割 | 「角色卡做主角、prompt 只克服模型偏見」；rules/examples 分離 | ✅ 證實 |
+| §3 Reminder Postfix | = post-history instructions；補間隔排程（4–5 則）與負面偏見變體 | ✅ 證實 + 補強 |
+| §4 推理外洩 | 社群已知 thinking 不可信也不可漏 → 只留結構化結果 | ✅ 證實 |
+| §5 JSON 強制輸出 | 格式爭議（6.1）；regex fallback、validate→retry 為標準做法 | ⚠️ 軟化 |
+| §5 防自創機制 | exact lists、banned tokens、engine 驗證完全吻合 | ✅ 強力證實 |
+| §5 狼群私聊 | 紅帖無遊戲邏輯對應；agentic harness（reason + tools）趨勢可參考 | ➕ 架構訊號 |
+
+### 6.3 兩處與 doc 出入
+1. **thinking**：doc 引「關掉 Qwen 的 thinking」；紅帖共識是 thinking 對複雜一致性有用，應轉向引導而非一律關閉 —— 狼人殺屬複雜狀態場景，建議「steering + 剝離」（思考去算投票模式與矛盾，結果不外洩）
+2. **No RAG**：doc 對規則本身正確；但遊戲歷史/投票模式分析可考慮 RAG 或 tool-call（agentic harness 模式，見 6.1）
+
+## 7. Key Sources
 
 ### Production Repos
 - [hiper2d/werewolf-ai-party-game](https://github.com/hiper2d/werewolf-ai-party-game) — most detailed public post-mortem
@@ -161,3 +216,16 @@ Strategy content: kill priority 女巫 > 预言家 > 村民; 悍跳 (fake-seer) 
 - [r/LocalLLaMA: One Night Werewolf played by LLMs](https://www.reddit.com/r/LocalLLaMA/comments/1tjegle/one_night_werewolf_played_by_llms/)
 - [r/LocalLLaMA: thinking mode leaking](https://www.reddit.com/r/LocalLLaMA/comments/1tcjtmt/playing_one_night_werewolf_gemma4_qwen36/)
 - [r/LLM: 4,672 blind werewolf games — name bias](https://www.reddit.com/r/LLM/comments/1rehlfj/i_made_llms_play_werewolf_4000_times_they_keep/)
+
+### Reddit (r/SillyTavernAI RP 社群，2026-09-24 — §6 對照來源)
+- [Freaky Frankenstein 5.0: Internal States](https://www.reddit.com/r/SillyTavernAI/comments/1v9u18m/) — 燈塔 preset：隱藏狀態塊 + tracker 體系
+- [Freaky Frankenstein 5.4 社群更新](https://www.reddit.com/r/SillyTavernAI/comments/1w49lyx/)
+- [FrankenSIM 3.0: 13-axis persona + anti-drift](https://www.reddit.com/r/SillyTavernAI/comments/1vrzcv6/)
+- [Sola V1 個人 prompt 分享](https://www.reddit.com/r/SillyTavernAI/comments/1wc57ys/)
+- [Guided Generations v1.7: separated thinking 校正層](https://www.reddit.com/r/SillyTavernAI/comments/1uh54hq/)
+- [Save Tokens: JSON for cards/lorebooks（格式爭議）](https://www.reddit.com/r/SillyTavernAI/comments/1e8upr7/)
+- [Replace Thinking with a Prompt（thinking 辯論）](https://www.reddit.com/r/SillyTavernAI/comments/1vmp7qz/)
+- [What does a typical RPer want in a system prompt?](https://www.reddit.com/r/SillyTavernAI/comments/1vsrudb/)
+- [A negative bias prompt（結果判定規則）](https://www.reddit.com/r/SillyTavernAI/comments/1uvjg4d/)
+- [Agentic roleplay harness（reason + tools 取代單一 prompt）](https://www.reddit.com/r/SillyTavernAI/comments/1u9zbq7/)
+- [GLM 4.7 attention bypass / self-prefill](https://www.reddit.com/r/SillyTavernAI/comments/1pwaft5/)
