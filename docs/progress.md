@@ -14,6 +14,7 @@
 - ✅ **外部測試安全 runner 已落地**（2026-09-24，已用於本輪 server 測試；未上線）：`scripts/run-external-test-safe.sh` 讓金鑰只進 process environment，不進 node／curl argv；用 `setpriv` 降權到 `morowin`；支援新開局與 `--resume`
 - ✅ **`docs/ubuntu-spec.md` source／harness 現況對齊**（2026-09-24）：全文改用【已上線】／【source 現況】／【production 未接線】／【目標／待實作】標記；同步 V-Day、實際 loops、WS 事件狀態、部署與 systemd 缺口；明確區分外部 harness 可跑與 production 尚未接 `AiController`
 - ✅ **Qwen `medium` variant 第一段 server 測試**（2026-09-24，5 分鐘）：新增 `LLM_REASONING_EFFORT` per-request 映射；28/28 個 SGLang request 都帶 `reasoning_effort=medium`；完成 14 個策略與 13 個白天草稿，1 個草稿在 SIGINT 時中止，尚未進入 judge／EXPAND
+- ✅ **Checkpoint Phase 1：GameEngine day restore**（2026-09-24，Oracle Gate 1 attempt 2 GO）：保留 dayReady／dayMessages、day/seq/id、copy-based getter、idempotent `setDayReady`／`reconcileDayReady`、wolfTargetId round-trip；focused build + 43/43 tests 通過。AI private snapshot／harness envelope 尚待 Phase 2/3
 
 - ✅ 夜流程（NIGHT_RESULT）已通過多次驗證
 - ✅ 狼會議收斂邏輯修好（不再 premature VOTING）

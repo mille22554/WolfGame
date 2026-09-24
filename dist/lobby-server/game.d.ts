@@ -55,6 +55,14 @@ export interface Vote {
     voterClientId: string;
     targetClientId: string | null;
 }
+/** 白天討論訊息：day/seq/id 讓存檔恢復後仍能保留順序與身份。 */
+export interface DayMessage {
+    from: string;
+    text: string;
+    day: number;
+    seq: number;
+    id: string;
+}
 export interface DeathRecord {
     clientId: string;
     nickname: string;
@@ -98,11 +106,8 @@ export interface GameState {
         from: string;
         text: string;
     }[];
-    /** 白天討論訊息歷史（存檔/恢復用；AI 控制器接續用） */
-    dayMessages: {
-        from: string;
-        text: string;
-    }[];
+    /** 白天討論訊息歷史（存檔/恢復用；AI 控制器接續用；正常新的一天會清空） */
+    dayMessages: DayMessage[];
 }
 export interface GameCallbacks {
     /** 發送訊息給特定 client */
@@ -126,6 +131,8 @@ export declare class GameEngine {
     private state;
     private timers;
     private countdownInterval?;
+    /** 當日白天訊息序號；dayMessages 會因 50 則上限移出舊訊息。 */
+    private dayMessageSeq;
     constructor(roomCode: string, players: {
         clientId: string;
         nickname: string;
@@ -145,8 +152,22 @@ export declare class GameEngine {
     handleVote(clientId: string, targetClientId: string | null): void;
     /** 房主提前結束討論 */
     handleEndDiscussion(clientId: string): void;
+    /**
+     * 設定某位存活玩家的白天準備狀態（idempotent）。
+     *
+     * 同一個 ready 值不會重複 broadcast，也不會再次觸發 phase transition；
+     * 這是 restore／AI 重送時的安全入口。handleToggleVoteReady 仍保留原本的
+     * toggle 語意，但委派到這個 setter。
+     */
+    setDayReady(clientId: string, ready: boolean): void;
     /** 玩家 toggle「準備投票」（ON/OFF 可切換，同狼會議 handleToggleWolfReady）；所有存活玩家皆 ON → 推進到 DAY_VOTING */
     handleToggleVoteReady(clientId: string): void;
+    /**
+     * 重新檢查白天準備狀態；restore 後可由呼叫端安全補做 phase progression。
+     * 只在目前是 DAY_DISCUSSION 且所有存活玩家都已 ready 時推進到 DAY_VOTING；
+     * 不改變 ready 值、不重複 toggle，也不額外廣播 DAY_READY_STATUS。
+     */
+    reconcileDayReady(): void;
     /** AI 白天發言（broadcast MESSAGE 到公頻；复用 lobby 的 MESSAGE 協議） */
     sendDayMessage(clientId: string, text: string): void;
     /** 人狼私頻（僅狼會議步驟可用、僅存活人狼可見）；累計訊息數，達安全上限 → 停止並報告 */
@@ -175,21 +196,31 @@ export declare class GameEngine {
     getPlayers(): GamePlayer[];
     /** 序列化目前遊戲狀態（JSON-safe；用於存檔/分階段測試 resume） */
     saveState(): Record<string, unknown>;
-    /** AI 控制器用：取得白天討論狀態（dayReady + dayMessages） */
+    /** AI 控制器用：取得白天討論狀態（dayReady + dayMessages；回傳複本避免外部改寫核心狀態） */
     getDayState(): {
         dayReady: Map<string, boolean>;
-        dayMessages: {
-            from: string;
-            text: string;
-        }[];
+        dayMessages: DayMessage[];
     };
     /**
      * 從存檔恢復狀態並直接進入 DAY_DISCUSSION（跳過 ROLE_REVEAL / NIGHT）。
      * 用於分階段測試：先跑 night 存檔，再 resume 只跑 day。
+     *
+     * 目前刻意只支援 DAY_DISCUSSION checkpoint：snapshot.phase 不會被恢復，
+     * 也不會因此觸發 NIGHT／DAY_VOTING 的回呼或轉換。所有 day 事實會先完成
+     * hydration，才透過 transitionTo 的 phase callback 對外通知。
      */
     restoreState(snapshot: Record<string, any>): void;
     private assignRoles;
     private transitionTo;
+    /** 廣播目前存活玩家的 day ready 狀態；每次實際狀態變更只呼叫一次。 */
+    private broadcastDayReadyStatus;
+    /** 從 snapshot 物件／Map 還原 dayReady；缺少的存活玩家預設為 false。 */
+    private normalizeDayReady;
+    /** 取得下一個不與目前 day board 碰撞的訊息身份。 */
+    private nextDayMessageIdentity;
+    /** 將舊／新 dayMessages 正規化，補上 day、seq、id，但保留每則訊息（不依 from+text 去重）。 */
+    private normalizeDayMessages;
+    private makeDayMessageId;
     /** 排定一次性 timer（fire 後自動從清單移除） */
     private schedule;
     /** 倒數提醒：剩餘 <30s 時每 10s 發一次 PHASE_COUNTDOWN（60s phase → 20s、10s） */

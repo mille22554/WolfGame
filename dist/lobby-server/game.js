@@ -30,6 +30,8 @@ export class GameEngine {
     state;
     timers = [];
     countdownInterval;
+    /** 當日白天訊息序號；dayMessages 會因 50 則上限移出舊訊息。 */
+    dayMessageSeq = 0;
     constructor(roomCode, players, callbacks, wolfMessageCap = 0) {
         this.roomCode = roomCode;
         this.players = players;
@@ -202,35 +204,64 @@ export class GameEngine {
             return; // 只有房主可提前結束
         this.transitionTo('DAY_VOTING');
     }
-    /** 玩家 toggle「準備投票」（ON/OFF 可切換，同狼會議 handleToggleWolfReady）；所有存活玩家皆 ON → 推進到 DAY_VOTING */
-    handleToggleVoteReady(clientId) {
+    /**
+     * 設定某位存活玩家的白天準備狀態（idempotent）。
+     *
+     * 同一個 ready 值不會重複 broadcast，也不會再次觸發 phase transition；
+     * 這是 restore／AI 重送時的安全入口。handleToggleVoteReady 仍保留原本的
+     * toggle 語意，但委派到這個 setter。
+     */
+    setDayReady(clientId, ready) {
         if (this.state.phase !== 'DAY_DISCUSSION')
             return;
         const player = this.getPlayerByClientId(clientId);
         if (!player || !player.alive)
             return;
-        const ready = !(this.state.dayReady.get(clientId) ?? false);
-        this.state.dayReady.set(clientId, ready);
+        const nextReady = ready === true;
+        if ((this.state.dayReady.get(clientId) ?? false) === nextReady)
+            return;
+        this.state.dayReady.set(clientId, nextReady);
+        this.broadcastDayReadyStatus();
+        if (this.state.phase !== 'DAY_DISCUSSION')
+            return;
+        // 所有存活玩家皆已 ready → 推進到 DAY_VOTING。
+        // 用 setter 時若已經是同一個值，會在上面的 idempotency guard 提前返回。
         const alivePlayers = this.getAlivePlayers();
-        const readyList = alivePlayers
-            .filter((p) => this.state.dayReady.get(p.clientId) === true)
-            .map((p) => ({ clientId: p.clientId, nickname: p.nickname }));
-        this.callbacks.broadcast({
-            type: 'DAY_READY_STATUS',
-            ready: readyList,
-            total: alivePlayers.length,
-        });
-        // 所有存活玩家皆已 toggle ON → 推進
-        if (alivePlayers.every((p) => this.state.dayReady.get(p.clientId) === true)) {
+        if (alivePlayers.length > 0 && alivePlayers.every((p) => this.state.dayReady.get(p.clientId) === true)) {
             this.transitionTo('DAY_VOTING');
         }
+    }
+    /** 玩家 toggle「準備投票」（ON/OFF 可切換，同狼會議 handleToggleWolfReady）；所有存活玩家皆 ON → 推進到 DAY_VOTING */
+    handleToggleVoteReady(clientId) {
+        if (this.state.phase !== 'DAY_DISCUSSION')
+            return;
+        const ready = !(this.state.dayReady.get(clientId) ?? false);
+        this.setDayReady(clientId, ready);
+    }
+    /**
+     * 重新檢查白天準備狀態；restore 後可由呼叫端安全補做 phase progression。
+     * 只在目前是 DAY_DISCUSSION 且所有存活玩家都已 ready 時推進到 DAY_VOTING；
+     * 不改變 ready 值、不重複 toggle，也不額外廣播 DAY_READY_STATUS。
+     */
+    reconcileDayReady() {
+        if (this.state.phase !== 'DAY_DISCUSSION')
+            return;
+        const alivePlayers = this.getAlivePlayers();
+        if (alivePlayers.length === 0 || alivePlayers.some((p) => this.state.dayReady.get(p.clientId) !== true))
+            return;
+        this.transitionTo('DAY_VOTING');
     }
     /** AI 白天發言（broadcast MESSAGE 到公頻；复用 lobby 的 MESSAGE 協議） */
     sendDayMessage(clientId, text) {
         const player = this.getPlayerByClientId(clientId);
         if (!player)
             return;
-        this.state.dayMessages.push({ from: player.nickname, text });
+        const identity = this.nextDayMessageIdentity();
+        this.state.dayMessages.push({
+            from: player.nickname,
+            text,
+            ...identity,
+        });
         if (this.state.dayMessages.length > 50)
             this.state.dayMessages.shift();
         this.callbacks.broadcast({ type: 'MESSAGE', from: player.nickname, text, ts: Date.now() });
@@ -338,54 +369,89 @@ export class GameEngine {
             lastVoteDeathClientId: this.state.lastVoteDeathClientId,
             winner: this.state.winner,
             wolfMeetingRound: this.state.wolfMeetingRound,
+            wolfTargetId: this.state.wolfTargetId,
             wolfMessageCount: this.state.wolfMessageCount,
             wolfMeetingAborted: this.state.wolfMeetingAborted,
             wolfBoard: this.state.wolfBoard,
             dayReady: Object.fromEntries(this.state.dayReady),
-            dayMessages: this.state.dayMessages,
+            dayMessages: this.state.dayMessages.map((message) => ({ ...message })),
         };
     }
-    /** AI 控制器用：取得白天討論狀態（dayReady + dayMessages） */
+    /** AI 控制器用：取得白天討論狀態（dayReady + dayMessages；回傳複本避免外部改寫核心狀態） */
     getDayState() {
         return {
-            dayReady: this.state.dayReady,
-            dayMessages: this.state.dayMessages,
+            dayReady: new Map(this.state.dayReady),
+            dayMessages: this.state.dayMessages.map((message) => ({ ...message })),
         };
     }
     /**
      * 從存檔恢復狀態並直接進入 DAY_DISCUSSION（跳過 ROLE_REVEAL / NIGHT）。
      * 用於分階段測試：先跑 night 存檔，再 resume 只跑 day。
+     *
+     * 目前刻意只支援 DAY_DISCUSSION checkpoint：snapshot.phase 不會被恢復，
+     * 也不會因此觸發 NIGHT／DAY_VOTING 的回呼或轉換。所有 day 事實會先完成
+     * hydration，才透過 transitionTo 的 phase callback 對外通知。
      */
     restoreState(snapshot) {
-        this.state.day = snapshot.day;
-        this.state.phase = snapshot.phase ?? this.state.phase;
-        this.state.players = snapshot.players.map((p) => ({
-            clientId: p.clientId,
-            nickname: p.nickname,
-            role: p.role,
-            team: p.team,
-            alive: p.alive,
-            isMasonPartner: p.isMasonPartner,
-            masonPartnerId: p.masonPartnerId ?? undefined,
-            wolfPartnerIds: p.wolfPartnerIds ?? [],
-            seerChecks: p.seerChecks ?? [],
-            guardProtects: p.guardProtects ?? [],
-        }));
-        this.state.deathHistory = snapshot.deathHistory ?? [];
+        // restore 是同步的 checkpoint 操作；先取消舊 phase 的 timer，避免 hydrate
+        // 完成後被舊的 NIGHT／DAY_RESULT callback 帶走。
+        this.stopCountdown();
+        for (const timer of this.timers)
+            clearTimeout(timer);
+        this.timers = [];
+        this.state.day = typeof snapshot.day === 'number' && Number.isFinite(snapshot.day) ? snapshot.day : this.state.day;
+        const playerSnapshots = Array.isArray(snapshot.players) ? snapshot.players : [];
+        this.state.players = playerSnapshots.map((p) => {
+            const source = p && typeof p === 'object' ? p : {};
+            return {
+                clientId: source.clientId,
+                nickname: source.nickname,
+                role: source.role,
+                team: source.team,
+                alive: source.alive,
+                isMasonPartner: source.isMasonPartner,
+                masonPartnerId: source.masonPartnerId ?? undefined,
+                wolfPartnerIds: source.wolfPartnerIds ?? [],
+                seerChecks: source.seerChecks ?? [],
+                guardProtects: source.guardProtects ?? [],
+            };
+        });
+        this.state.deathHistory = Array.isArray(snapshot.deathHistory)
+            ? snapshot.deathHistory.map((entry) => ({ ...entry }))
+            : [];
         this.state.lastVoteDeathClientId = snapshot.lastVoteDeathClientId ?? null;
         this.state.winner = snapshot.winner ?? null;
-        // 狼會議狀態（舊存檔缺欄位時用預設值，保持向後相容）
+        // 只 hydrate DAY_DISCUSSION 所需狀態；NIGHT／DAY_VOTING 的瞬時狀態
+        // 不宣稱可恢復，清掉舊的，避免 restore 後仍有非目標 phase 的活動。
+        this.state.nightActions = [];
+        this.state.votes = [];
+        this.state.masonReady.clear();
+        this.state.wolfReady.clear();
+        this.state.wolfVotes.clear();
+        this.state.wolfSubphase = null;
+        this.state.nightStep = null;
+        this.state.nightSteps = [];
+        // wolfTargetId 是已收斂的遊戲事實；舊 snapshot 缺欄位時相容為 null，
+        // 但不可恢復指向不存在玩家的 target，避免後續結算帶入幽靈 ID。
+        this.state.wolfTargetId = typeof snapshot.wolfTargetId === 'string'
+            && this.state.players.some((player) => player.clientId === snapshot.wolfTargetId)
+            ? snapshot.wolfTargetId
+            : null;
+        // 狼會議的已完成 context（供白天策略閱讀）仍可由舊 snapshot 載入；
+        // 缺欄位時維持向後相容的預設值。
         this.state.wolfMeetingRound = snapshot.wolfMeetingRound ?? 1;
         this.state.wolfMessageCount = snapshot.wolfMessageCount ?? 0;
         this.state.wolfMeetingAborted = snapshot.wolfMeetingAborted ?? false;
-        this.state.wolfBoard = snapshot.wolfBoard ?? [];
-        // 白天討論狀態（resume 接續用）
-        if (snapshot.dayReady) {
-            this.state.dayReady = new Map(Object.entries(snapshot.dayReady));
-        }
-        this.state.dayMessages = snapshot.dayMessages ?? [];
-        // 直接跳進 DAY_DISCUSSION
-        this.transitionTo('DAY_DISCUSSION');
+        this.state.wolfBoard = Array.isArray(snapshot.wolfBoard)
+            ? snapshot.wolfBoard.map((entry) => ({ ...entry }))
+            : [];
+        // 白天討論狀態：舊 snapshot 沒有 metadata 時由 normalize 補齊。
+        this.state.dayReady = this.normalizeDayReady(snapshot.dayReady);
+        this.state.dayMessages = this.normalizeDayMessages(snapshot.dayMessages, this.state.day);
+        this.dayMessageSeq = this.state.dayMessages.reduce((max, message) => Math.max(max, message.seq), 0);
+        // 直接跳進 DAY_DISCUSSION，但保留剛 hydrate 的 day state；transition
+        // 會先完成 phase-specific state，再送 PHASE_CHANGED callback。
+        this.transitionTo('DAY_DISCUSSION', { preserveDayState: true });
     }
     // --- Private methods ---
     assignRoles() {
@@ -435,8 +501,26 @@ export class GameEngine {
                 m.masonPartnerId = partner.clientId;
         }
     }
-    transitionTo(phase) {
+    transitionTo(phase, options = {}) {
         this.state.phase = phase;
+        // DAY_DISCUSSION 是 restore 會直接進入的 phase。先完成 day state
+        // 初始化，再送 PHASE_CHANGED，確保 callback 讀到的是一致狀態。
+        if (phase === 'DAY_DISCUSSION') {
+            if (!options.preserveDayState) {
+                this.state.dayReady = new Map();
+                for (const p of this.getAlivePlayers()) {
+                    this.state.dayReady.set(p.clientId, false);
+                }
+                // dayMessages 是當日白板；正常新的一天必須清空。
+                this.state.dayMessages = [];
+                this.dayMessageSeq = 0;
+            }
+            this.callbacks.broadcast({ type: 'PHASE_CHANGED', phase, day: this.state.day });
+            // callback 若同步推進到別的 phase，就不送過期的 ready status。
+            if (this.state.phase === 'DAY_DISCUSSION')
+                this.broadcastDayReadyStatus();
+            return;
+        }
         this.callbacks.broadcast({ type: 'PHASE_CHANGED', phase, day: this.state.day });
         switch (phase) {
             case 'ROLE_REVEAL':
@@ -471,18 +555,6 @@ export class GameEngine {
                         this.transitionTo('DAY_DISCUSSION');
                 }, 10_000);
                 break;
-            case 'DAY_DISCUSSION':
-                // 初始化所有存活玩家的 dayReady 為 false
-                this.state.dayReady = new Map();
-                for (const p of this.getAlivePlayers()) {
-                    this.state.dayReady.set(p.clientId, false);
-                }
-                this.callbacks.broadcast({
-                    type: 'DAY_READY_STATUS',
-                    ready: [],
-                    total: this.getAlivePlayers().length,
-                });
-                break;
             case 'DAY_VOTING':
                 this.state.votes = [];
                 // 清除昨日票死記錄：霊能者只在黎明得知「昨日」的票死者
@@ -513,6 +585,83 @@ export class GameEngine {
                 });
                 break;
         }
+    }
+    /** 廣播目前存活玩家的 day ready 狀態；每次實際狀態變更只呼叫一次。 */
+    broadcastDayReadyStatus() {
+        const alivePlayers = this.getAlivePlayers();
+        const readyList = alivePlayers
+            .filter((p) => this.state.dayReady.get(p.clientId) === true)
+            .map((p) => ({ clientId: p.clientId, nickname: p.nickname }));
+        this.callbacks.broadcast({
+            type: 'DAY_READY_STATUS',
+            ready: readyList,
+            total: alivePlayers.length,
+        });
+    }
+    /** 從 snapshot 物件／Map 還原 dayReady；缺少的存活玩家預設為 false。 */
+    normalizeDayReady(value) {
+        const entries = value instanceof Map
+            ? [...value.entries()]
+            : value && typeof value === 'object'
+                ? Object.entries(value)
+                : [];
+        const saved = new Map(entries);
+        const dayReady = new Map();
+        for (const player of this.getAlivePlayers()) {
+            dayReady.set(player.clientId, saved.get(player.clientId) === true);
+        }
+        return dayReady;
+    }
+    /** 取得下一個不與目前 day board 碰撞的訊息身份。 */
+    nextDayMessageIdentity() {
+        const day = this.state.day;
+        let seq = ++this.dayMessageSeq;
+        let id = this.makeDayMessageId(day, seq);
+        while (this.state.dayMessages.some((message) => message.day === day && message.seq === seq) ||
+            this.state.dayMessages.some((message) => message.id === id)) {
+            seq = ++this.dayMessageSeq;
+            id = this.makeDayMessageId(day, seq);
+        }
+        return { day, seq, id };
+    }
+    /** 將舊／新 dayMessages 正規化，補上 day、seq、id，但保留每則訊息（不依 from+text 去重）。 */
+    normalizeDayMessages(value, day) {
+        if (!Array.isArray(value))
+            return [];
+        const usedIds = new Set();
+        const usedSeqByDay = new Set();
+        const messages = [];
+        let fallbackSeq = 0;
+        for (const raw of value) {
+            const source = raw && typeof raw === 'object' ? raw : {};
+            const messageDay = typeof source.day === 'number' && Number.isFinite(source.day) ? source.day : day;
+            let seq = typeof source.seq === 'number' && Number.isInteger(source.seq) && source.seq > 0
+                ? source.seq
+                : ++fallbackSeq;
+            let id = typeof source.id === 'string' && source.id.length > 0 ? source.id : this.makeDayMessageId(messageDay, seq);
+            let seqKey = `${messageDay}:${seq}`;
+            // malformed／外部 snapshot 即使帶重複 metadata，也不能破壞訊息身份唯一性。
+            while (usedIds.has(id) || usedSeqByDay.has(seqKey)) {
+                seq += 1;
+                seqKey = `${messageDay}:${seq}`;
+                fallbackSeq = Math.max(fallbackSeq, seq);
+                id = this.makeDayMessageId(messageDay, seq);
+            }
+            usedIds.add(id);
+            usedSeqByDay.add(seqKey);
+            messages.push({
+                from: typeof source.from === 'string' ? source.from : String(source.from ?? ''),
+                text: typeof source.text === 'string' ? source.text : String(source.text ?? ''),
+                day: messageDay,
+                seq,
+                id,
+            });
+        }
+        // 與 sendDayMessage 的 50 則上限保持一致；舊 snapshot 若更大，只保留最新片段。
+        return messages.slice(-50);
+    }
+    makeDayMessageId(day, seq) {
+        return `day-${day}-${seq}`;
     }
     /** 排定一次性 timer（fire 後自動從清單移除） */
     schedule(fn, ms) {
