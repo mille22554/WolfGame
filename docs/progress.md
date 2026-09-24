@@ -12,6 +12,7 @@
 - ✅ **私頻 EXPAND 機制＋草稿要點化**（2026-09-24，oracle 兩段式驗證後落地）：草稿＝行動筆記 → 引擎展開成角色語氣完整發言才進白板；狼與共有者兩側同步
 - ✅ **白天 V-Day 實作＋本機驗證完成**（2026-09-24，尚未上伺服器實測）：新增全角色 `dayContext`；白天草稿／回應也走「行動筆記 → EXPAND → 公頻發言」；移除 3 處 `≤50字`
 - ✅ **外部測試安全 runner 已落地**（2026-09-24，尚未在 server 執行）：`scripts/run-external-test-safe.sh` 讓金鑰只進 process environment，不進 node／curl argv；用 `setpriv` 降權到 `morowin`；支援新開局與 `--resume`
+- ✅ **`docs/ubuntu-spec.md` source／harness 現況對齊**（2026-09-24）：全文改用【已上線】／【source 現況】／【production 未接線】／【目標／待實作】標記；同步 V-Day、實際 loops、WS 事件狀態、部署與 systemd 缺口；明確區分外部 harness 可跑與 production 尚未接 `AiController`
 
 - ✅ 夜流程（NIGHT_RESULT）已通過多次驗證
 - ✅ 狼會議收斂邏輯修好（不再 premature VOTING）
@@ -62,6 +63,7 @@
 - **本機驗證**：`npm run build` 通過；`node --test dist/lobby-server/room-manager.test.js dist/lobby-server/server.test.js dist/lobby-server/game-wolf.test.js` 為 33 pass / 0 fail；`src` 與 `dist` 的 `≤50字` 均為 0 處；`git diff --check` 通過
 - **安全 runner**：新增 `scripts/run-external-test-safe.sh`。金鑰只從 `/etc/sglang/api-key.env` 進 process environment；curl header 由 stdin config 傳入；`setpriv` 降權到 `morowin` 後執行 `external-test-stage2.mjs "$@"`。支援新開局與 `--resume`，且不把金鑰放進 node／curl argv
 - **runner 驗證**：Git for Windows `sh -n` 語法檢查通過；尚未上傳、執行或連到 server
+- **SPEC 現況同步**：`docs/ubuntu-spec.md` 已改用【已上線】／【source 現況】／【production 未接線】／【目標／待實作】四種標記；補齊 V-Day、實際 loops、WS 事件狀態、部署與 systemd 缺口，並明確寫出正式 server 尚未接 `AiController`
 - **目前邊界**：只證明引擎接線、編譯與本機測試正確；prompt 行為品質、公頻內容與 EXPAND 成效仍待 oracle＋stage 2 實測
 
 **私頻 EXPAND 機制＋草稿要點化（2026-09-24，oracle 兩段式驗證通過後落地）：**
@@ -158,7 +160,7 @@
 2. oracle 通過後，將本 commit pull 到 server，使用 `scripts/run-external-test-safe.sh --resume ... --stop-at DAY_RESULT` 跑 stage 2；**不重啟正式服務**
 3. 驗收白天公頻發言、收斂速度、EXPAND attempt/fallback、簡體字與策略洩漏；尤其確認狼的刀人目標／占卜結果不會被帶進公頻
 4. 若品質有問題 → 調 prompt → 重跑 oracle，再重跑 stage 2
-5. 全部通過後才更新 `docs/ubuntu-spec.md` 的白天 EXPAND 規格，並處理 production `wolfgame` 的 `SGLANG_API_KEY` 環境設定，再考慮上線
+5. 全部通過後，把 oracle／stage 2 的**行為結果與品質裁示**回填到 `docs/ubuntu-spec.md`／`docs/progress.md`；source 流程規格已同步，不需重寫。之後再處理 production `wolfgame` 的 `AiController` 接線與 `SGLANG_API_KEY` 環境設定，再考慮上線
 6. 金鑰不輪換；保留 `api.morowin.win` tunnel
 
 **Server 上跑測試的正確方式（金鑰不得放進 argv）：**
