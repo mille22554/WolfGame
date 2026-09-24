@@ -5,14 +5,15 @@
 
 ## 目前狀態
 
-**卡在哪：** 無阻塞。私頻（狼／共有者）已完成「草稿＝行動筆記 → EXPAND → 完整發言進白板」；白天 V-Day 已完成實作與本機驗證，**尚未做 oracle 行為測試及 server stage 2 實測**。
+**卡在哪：** 無阻塞。私頻（狼／共有者）已完成「草稿＝行動筆記 → EXPAND → 完整發言進白板」；白天 V-Day 已完成實作、本機驗證與第一段 server `medium` 測試。5 分鐘內完成全部 DAY_STRATEGY 與 13/14 個 DAY_SPEACH 草稿，**尚未輪到 judge／EXPAND，因此還沒有公頻發言**。
 
 - ✅ **共有者 prompt V8 落地**（2026-09-24，oracle 雙共有者第 1 夜流程驗證後落地）：三函數（`masonContext`／`buildMasonDraftPrompts`／`buildMasonResponsePrompts`）全面對齊狼版編排，只有身分差異；草稿定位改為「行動筆記非發言稿」
 - ✅ **私頻稱呼修正**（2026-09-24，stage 1 實測發現＋oracle 驗證後落地）：2 人私頻用「你／名字＋你」，禁「他／她」與「你們」
 - ✅ **私頻 EXPAND 機制＋草稿要點化**（2026-09-24，oracle 兩段式驗證後落地）：草稿＝行動筆記 → 引擎展開成角色語氣完整發言才進白板；狼與共有者兩側同步
-- ✅ **白天 V-Day 實作＋本機驗證完成**（2026-09-24，尚未上伺服器實測）：新增全角色 `dayContext`；白天草稿／回應也走「行動筆記 → EXPAND → 公頻發言」；移除 3 處 `≤50字`
-- ✅ **外部測試安全 runner 已落地**（2026-09-24，尚未在 server 執行）：`scripts/run-external-test-safe.sh` 讓金鑰只進 process environment，不進 node／curl argv；用 `setpriv` 降權到 `morowin`；支援新開局與 `--resume`
+- ✅ **白天 V-Day 實作＋本機驗證完成**（2026-09-24，第一段 server `medium` 測試已完成；公頻 judge／EXPAND 段待續跑）：新增全角色 `dayContext`；白天草稿／回應也走「行動筆記 → EXPAND → 公頻發言」；移除 3 處 `≤50字`
+- ✅ **外部測試安全 runner 已落地**（2026-09-24，已用於本輪 server 測試；未上線）：`scripts/run-external-test-safe.sh` 讓金鑰只進 process environment，不進 node／curl argv；用 `setpriv` 降權到 `morowin`；支援新開局與 `--resume`
 - ✅ **`docs/ubuntu-spec.md` source／harness 現況對齊**（2026-09-24）：全文改用【已上線】／【source 現況】／【production 未接線】／【目標／待實作】標記；同步 V-Day、實際 loops、WS 事件狀態、部署與 systemd 缺口；明確區分外部 harness 可跑與 production 尚未接 `AiController`
+- ✅ **Qwen `medium` variant 第一段 server 測試**（2026-09-24，5 分鐘）：新增 `LLM_REASONING_EFFORT` per-request 映射；28/28 個 SGLang request 都帶 `reasoning_effort=medium`；完成 14 個策略與 13 個白天草稿，1 個草稿在 SIGINT 時中止，尚未進入 judge／EXPAND
 
 - ✅ 夜流程（NIGHT_RESULT）已通過多次驗證
 - ✅ 狼會議收斂邏輯修好（不再 premature VOTING）
@@ -64,7 +65,20 @@
 - **安全 runner**：新增 `scripts/run-external-test-safe.sh`。金鑰只從 `/etc/sglang/api-key.env` 進 process environment；curl header 由 stdin config 傳入；`setpriv` 降權到 `morowin` 後執行 `external-test-stage2.mjs "$@"`。支援新開局與 `--resume`，且不把金鑰放進 node／curl argv
 - **runner 驗證**：Git for Windows `sh -n` 語法檢查通過；尚未上傳、執行或連到 server
 - **SPEC 現況同步**：`docs/ubuntu-spec.md` 已改用【已上線】／【source 現況】／【production 未接線】／【目標／待實作】四種標記；補齊 V-Day、實際 loops、WS 事件狀態、部署與 systemd 缺口，並明確寫出正式 server 尚未接 `AiController`
-- **目前邊界**：只證明引擎接線、編譯與本機測試正確；prompt 行為品質、公頻內容與 EXPAND 成效仍待 oracle＋stage 2 實測
+- **目前邊界**：只證明引擎接線、編譯與本機測試正確；prompt 行為品質、公頻內容與 EXPAND 成效仍待後續實測
+
+**Qwen `medium` variant 5 分鐘實測（2026-09-24）：**
+
+- **設定**：從原始 `/tmp/night1.json` resume；`LLM_REASONING_EFFORT=medium`；用 `timeout --signal=INT 5m` 優雅中斷；不重啟 SGLang／wolfgame
+- **為何用 env**：Qwen3.8 UI 的 `variant=medium` 對應 OpenAI/SGLang request 頂層 `reasoning_effort: "medium"`，不是 `variant` 欄位；新增 `llm.ts` per-request mapping，未設時完全保持原 request
+- **時間窗口**：`07:53:06–07:58:06 UTC`；SGLang `max-running-requests=1`
+- **實際請求**：journal 證實 28/28 個 OpenAI request 都含 `reasoning_effort: 'medium'`
+- **完成進度**：14/14 `DAY_STRATEGY` 完成；13/14 `DAY_SPEECH` 草稿完成，第 14 個在 5 分鐘 SIGINT 時中止；已完成的 27 筆皆 attempt=1、零重試
+- **尚未發生**：因全部策略＋草稿已吃掉 5 分鐘，尚未進入 `JUDGE`／`EXPAND`／`MESSAGE`；故這不是「EXPAND 失敗」或「引擎不發言」，而是時序預算尚未走到 publish
+- **checkpoint**：`/tmp/day-medium-5m.json`（另有 `.events.json`／`.log.json`），可從這裡續跑到 judge／EXPAND／公頻
+- **報告**：server `/tmp/ai-trace-stage2-day.md`；本機 `C:\Users\user\Desktop\FrankTests\Temp\ai-trace-stage2-day.md`
+- **本機驗證**：build 通過；lobby-server 33/33；mock HTTP server 確認實際 request JSON 含 `reasoning_effort: "medium"`
+- **下一步**：先看本輪報告／草稿；確認後再從 checkpoint 分段續跑，至少直到出現第一筆 `JUDGE → EXPAND → MESSAGE`
 
 **私頻 EXPAND 機制＋草稿要點化（2026-09-24，oracle 兩段式驗證通過後落地）：**
 
@@ -156,12 +170,13 @@
 - 併發實測補充（14 路全過）：5 併發 967 tokens 全 200；14 併發 ~9.2K tokens 全 200、~49s 完成（SGLang `--max-running-requests 1` 依 priority 排隊）。先前 5 併發測試因 PowerShell 管道把中文打成 `?`（prompt=65 是亂碼），改用 base64 上傳後為正常 prompt（~79 tokens）
 
 **下一步（依序）：**
-1. 用**全新 oracle sessions** 驗證白天 V-Day：草稿要點化、公頻 EXPAND、角色語氣、零新增行動／對象／結論；judge 另開 session 盲評
-2. oracle 通過後，將本 commit pull 到 server，使用 `scripts/run-external-test-safe.sh --resume ... --stop-at DAY_RESULT` 跑 stage 2；**不重啟正式服務**
-3. 驗收白天公頻發言、收斂速度、EXPAND attempt/fallback、簡體字與策略洩漏；尤其確認狼的刀人目標／占卜結果不會被帶進公頻
-4. 若品質有問題 → 調 prompt → 重跑 oracle，再重跑 stage 2
-5. 全部通過後，把 oracle／stage 2 的**行為結果與品質裁示**回填到 `docs/ubuntu-spec.md`／`docs/progress.md`；source 流程規格已同步，不需重寫。之後再處理 production `wolfgame` 的 `AiController` 接線與 `SGLANG_API_KEY` 環境設定，再考慮上線
-6. 金鑰不輪換；保留 `api.morowin.win` tunnel
+1. 先看本輪 5 分鐘報告與 13 筆草稿，確認是否要繼續 `medium`
+2. 若繼續，從 `/tmp/day-medium-5m.json` resume，不重跑已完成的 14 策略／13 草稿；仍設 `LLM_REASONING_EFFORT=medium`，每 5 分鐘優雅 SIGINT 存一段
+3. 直到報告出現第一條 `JUDGE → EXPAND → MESSAGE`；用**全新 oracle session** 獨立盲評草稿與展開稿，judge 不參與生成
+4. 驗收公頻發言、收斂速度、EXPAND attempt/fallback、簡體字與策略洩漏；尤其確認狼的刀人目標／占卜結果不會被帶進公頻
+5. 若品質有問題 → 先用 oracle 定位 prompt 問題，再調 prompt／重跑；不直接從單一 5 分鐘樣本下結論
+6. 全部通過後，把行為結果與品質裁示回填 spec／progress；之後再處理 production `AiController` 接線與 `SGLANG_API_KEY`
+7. 金鑰不輪換；保留 `api.morowin.win` tunnel
 
 **Server 上跑測試的正確方式（金鑰不得放進 argv）：**
 ```bash
@@ -174,12 +189,12 @@ ssh ssh.morowin.win "cd /opt/wolfgame && git pull"
 # 跑夜晚 + 存檔；runner 會從 root 600 env 載入金鑰，再降權成 morowin
 ssh ssh.morowin.win "sudo sh /opt/wolfgame/scripts/run-external-test-safe.sh --stop-at NIGHT_RESULT --save-state /tmp/night1.json"
 
-# 從存檔接白天（可多次接續）
-ssh ssh.morowin.win "sudo sh /opt/wolfgame/scripts/run-external-test-safe.sh --resume /tmp/night1.json --stop-at DAY_RESULT --save-state /tmp/day1.json"
-ssh ssh.morowin.win "sudo sh /opt/wolfgame/scripts/run-external-test-safe.sh --resume /tmp/day1.json --stop-at DAY_RESULT --save-state /tmp/day2.json"
+# 從 5 分鐘 checkpoint 續跑；medium 只作用於此測試 process，5 分鐘後 SIGINT 存檔
+ssh ssh.morowin.win "sudo timeout --signal=INT --kill-after=30s 5m env LLM_REASONING_EFFORT=medium sh /opt/wolfgame/scripts/run-external-test-safe.sh --resume /tmp/day-medium-5m.json --stop-at DAY_RESULT --save-state /tmp/day-medium-segment2.json --report /tmp/ai-trace-stage2-day.md"
+# 下一段改 resume /tmp/day-medium-segment2.json，並換新的 save-state 路徑
 
 # 取回報告
-scp ssh.morowin.win:/opt/wolfgame/ai-trace-stage2-day.md "C:\Users\user\Desktop\FrankTests\Temp\ai-trace-stage2-day.md"
+scp ssh.morowin.win:/tmp/ai-trace-stage2-day.md "C:\Users\user\Desktop\FrankTests\Temp\ai-trace-stage2-day.md"
 ```
 
 ## 已完成

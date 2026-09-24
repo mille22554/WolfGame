@@ -541,7 +541,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | 位址 | `http://127.0.0.1:9090`（同機 localhost） |
 | API 格式 | OpenAI-compatible（`POST /v1/chat/completions`） |
 | 認證 | `Authorization: Bearer ${SGLANG_API_KEY}`（env 變數，部署時注入） |
-| 環境變數 | `SGLANG_API_KEY`、`LLM_MODEL`（model name，預設 `qwen3.8-27b`） |
+| 環境變數 | `SGLANG_API_KEY`、`LLM_MODEL`（model name，預設 `qwen3.8-27b`）、`LLM_REASONING_EFFORT`（選填；Qwen3.8-27B 的 `xhigh`／`medium`／`low`） |
 | 併發排程 | `x-override-priority` header（併發呼叫時 100+i 錯開；SGLang 依 priority 排序處理） |
 | 併發限制 | `--max-running-requests 2`（多請求自動排隊，依 priority 順序處理） |
 | 呼叫 timeout | 無（`llm.ts` 呼叫不設 timeout，等待回傳；reasoning model 長 prompt 可能 >60s） |
@@ -740,6 +740,7 @@ DAY_DISCUSSION 開始（引擎 broadcast PHASE_CHANGED）
 
 - 15 人全 AI 局：`new AiController(defs, { messageCap: 100 })` + `new GameEngine('STAGE2', ...)`，兩個方向的 callback 互接
 - 階段 timeout：**NIGHT / DAY 都是 `0`（不限時）**；每 10 分鐘印一次進度；狼會議 abort 時停止
+- 操作者可用 `timeout --signal=INT --kill-after=30s 5m ...` 在外部做 5 分鐘分段；SIGINT 會讓 harness 寫報告與 checkpoint，**不改腳本內部正式 timeout**
 - `--stop-at NIGHT_RESULT | DAY_RESULT | GAME_OVER`（預設 `DAY_RESULT`）
 - `--save-state <path>`：寫 `game.saveState()` ＋ `.events.json` ＋ `.log.json`
 - `--resume <path>`：`game.restoreState()` 直接進 `DAY_DISCUSSION`（跳過 ROLE_REVEAL/NIGHT），`ai.restoreLog()` 把前段 LLM log 縫回報告
@@ -748,8 +749,8 @@ DAY_DISCUSSION 開始（引擎 broadcast PHASE_CHANGED）
 
 **仍待做【目標／待實作】：**
 
-- **白天 V-Day 的 oracle／server stage 2 行為驗證**（夜間私頻已有 stage 1 基線；目前 V-Day 只完成 source／harness 接線與本機測試，尚未做 oracle 或 server 公頻實測）
-- **公頻策略洩漏觀察**（尚未驗證 AI 白天 expanded 發言是否洩漏夜頻策略／身分）；目前**沒有**「白天不得公開夜間私密資訊」的硬規則，等 V-Day 實測後再決定是否加入
+- **白天 V-Day 行為驗證（部分完成）**：`medium` 第一段 server 測試於 5 分鐘內完成 14/14 `DAY_STRATEGY` 與 13/14 `DAY_SPEECH`，28/28 個實際 request 都帶 `reasoning_effort=medium`；因 SGLang `max-running-requests=1`，尚未走到 `JUDGE`／`EXPAND`／`MESSAGE`。checkpoint `/tmp/day-medium-5m.json` 可續跑；公頻品質仍待後續分段與 oracle 驗證
+- **公頻策略洩漏觀察**（尚未驗證 AI 白天 expanded 發言是否洩漏夜頻策略／身分）；目前**沒有**「白天不得公開夜間私密資訊」的硬規則，等 expanded 公頻稿出現後再決定是否加入
 
 ### 13.7 模組
 
@@ -784,6 +785,7 @@ DAY_DISCUSSION 開始（引擎 broadcast PHASE_CHANGED）
 | `SGLANG_HOST` | `127.0.0.1` | SGLang host（同機）（`llm.ts` 會讀） |
 | `SGLANG_API_KEY` | —（部署時注入） | Bearer token（`llm.ts` 會讀；**production `wolfgame.service` 目前未注入**，見 §13.10） |
 | `LLM_MODEL` | `qwen3.8-27b` | model name（`--served-model-name`）（`llm.ts` 會讀） |
+| `LLM_REASONING_EFFORT` | 未設（不送） | Qwen3.8-27B per-request reasoning variant；值為 `xhigh`／`medium`／`low` 時，映射到 OpenAI request body 頂層 `reasoning_effort`；只影響目前 process |
 | `LLM_TIMEOUT_MS` | `60000` | **【注意】`AGENTS.md` 有列，但 `llm.ts` 未讀取**；實際 LLM 呼叫不設 timeout（等回傳） |
 | `AI_ENABLED` | `true` | **【production 未接線】程式碼完全未讀取這個變數**；目前沒有任何機制可用 `false` 關掉 AI 補位 |
 

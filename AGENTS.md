@@ -44,7 +44,7 @@ main 分支 server：
 
 lobby-server（ubuntu 分支）：
 
-- `PORT`（預設 2640）、`SGLANG_HOST`（127.0.0.1）、`SGLANG_PORT`（9090）、`SGLANG_API_KEY`、`LLM_MODEL`（qwen3.8-27b）、`LLM_TIMEOUT_MS`（60000）
+- `PORT`（預設 2640）、`SGLANG_HOST`（127.0.0.1）、`SGLANG_PORT`（9090）、`SGLANG_API_KEY`、`LLM_MODEL`（qwen3.8-27b）、`LLM_REASONING_EFFORT`（未設＝不送；Qwen3.8-27B 可設 `xhigh`／`medium`／`low`，映射到 OpenAI API 頂層 `reasoning_effort`）、`LLM_TIMEOUT_MS`（60000）
 - **沒有** zero-client 自動終止（只處理 SIGINT/SIGTERM）；空房立即回收、無活動 30 分鐘自動清理（room-manager 的 sweep timer）。
 
 ## 必知陷阱
