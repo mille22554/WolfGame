@@ -9,6 +9,8 @@ const SGLANG_HOST = process.env.SGLANG_HOST ?? '127.0.0.1';
 const SGLANG_PORT = process.env.SGLANG_PORT ?? '9090';
 const SGLANG_API_KEY = process.env.SGLANG_API_KEY ?? '';
 const LLM_MODEL = process.env.LLM_MODEL ?? 'qwen3.8-27b';
+/** Qwen3.8 reasoning variant（xhigh / medium / low）；僅對目前 process 的請求生效 */
+const LLM_REASONING_EFFORT = process.env.LLM_REASONING_EFFORT ?? '';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -34,6 +36,7 @@ export async function chat(messages: ChatMessage[], options: ChatOptions = {}): 
       messages,
       temperature,
     };
+    if (LLM_REASONING_EFFORT) body.reasoning_effort = LLM_REASONING_EFFORT;
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',

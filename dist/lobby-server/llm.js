@@ -8,6 +8,8 @@ const SGLANG_HOST = process.env.SGLANG_HOST ?? '127.0.0.1';
 const SGLANG_PORT = process.env.SGLANG_PORT ?? '9090';
 const SGLANG_API_KEY = process.env.SGLANG_API_KEY ?? '';
 const LLM_MODEL = process.env.LLM_MODEL ?? 'qwen3.8-27b';
+/** Qwen3.8 reasoning variant（xhigh / medium / low）；僅對目前 process 的請求生效 */
+const LLM_REASONING_EFFORT = process.env.LLM_REASONING_EFFORT ?? '';
 /**
  * 呼叫 SGLang /v1/chat/completions，回傳 assistant 回覆文字。
  * 不設 timeout：等待 LLM 回傳（reasoning model 長 prompt 可能 >60s）。
@@ -21,6 +23,8 @@ export async function chat(messages, options = {}) {
             messages,
             temperature,
         };
+        if (LLM_REASONING_EFFORT)
+            body.reasoning_effort = LLM_REASONING_EFFORT;
         const headers = {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${SGLANG_API_KEY}`,
