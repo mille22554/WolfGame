@@ -5,7 +5,7 @@
 
 ## 目前狀態
 
-**目前暫停點：** Phase 1 GameEngine checkpoint 已完成並 push；Phase 2 AI checkpoint state machine 已在本地完成 build／50 tests，但 Oracle Gate 2 依使用者要求暫停。Phase 3 external harness envelope 尚未開始，因此正式 5 分鐘 resume 仍不能跨段延續 pending day drafts；**不要重跑下一個 5 分鐘 segment，也不要開始正式 server 測試。**
+**目前暫停點：** Phase 1 GameEngine checkpoint 已完成並 push；Phase 2 AI checkpoint state machine WIP 已以 `cfc4659` push（build／50 tests 通過），但 Oracle Gate 2 依使用者要求暫停。Phase 3 external harness envelope 尚未開始，因此正式 5 分鐘 resume 仍不能跨段延續 pending day drafts；**不要重跑下一個 5 分鐘 segment，也不要開始正式 server 測試。**
 
 - ✅ **共有者 prompt V8 落地**（2026-09-24，oracle 雙共有者第 1 夜流程驗證後落地）：三函數（`masonContext`／`buildMasonDraftPrompts`／`buildMasonResponsePrompts`）全面對齊狼版編排，只有身分差異；草稿定位改為「行動筆記非發言稿」
 - ✅ **私頻稱呼修正**（2026-09-24，stage 1 實測發現＋oracle 驗證後落地）：2 人私頻用「你／名字＋你」，禁「他／她」與「你們」
@@ -15,26 +15,27 @@
 - ✅ **`docs/ubuntu-spec.md` source／harness 現況對齊**（2026-09-24）：全文改用【已上線】／【source 現況】／【production 未接線】／【目標／待實作】標記；同步 V-Day、實際 loops、WS 事件狀態、部署與 systemd 缺口；明確區分外部 harness 可跑與 production 尚未接 `AiController`
 - ✅ **Qwen `medium` variant 第一段 server 測試**（2026-09-24，5 分鐘）：新增 `LLM_REASONING_EFFORT` per-request 映射；28/28 個 SGLang request 都帶 `reasoning_effort=medium`；完成 14 個策略與 13 個白天草稿，1 個草稿在 SIGINT 時中止，尚未進入 judge／EXPAND
 - ✅ **Checkpoint Phase 1：GameEngine day restore**（2026-09-24，Oracle Gate 1 attempt 2 GO）：保留 dayReady／dayMessages、day/seq/id、copy-based getter、idempotent `setDayReady`／`reconcileDayReady`、wolfTargetId round-trip；focused build + 43/43 tests 通過。AI private snapshot／harness envelope 尚待 Phase 2/3
-- ⏳ **Checkpoint Phase 2：AI day snapshot/state machine（WIP，未 commit）**（2026-09-24）：已加入 `exportDayCheckpoint`／`importDayCheckpoint`／`resumeDayDiscussion`／`setPhaseStartEnabled`，涵蓋 strategy／draft／judge／expand／publish／response continuation；本機 build + 50/50 focused tests 通過，但 Gate 2 尚未審查，Phase 3 尚未接 harness
+- ⏳ **Checkpoint Phase 2：AI day snapshot/state machine（WIP，已 push）**（2026-09-24，commit `cfc4659`）：已加入 `exportDayCheckpoint`／`importDayCheckpoint`／`resumeDayDiscussion`／`setPhaseStartEnabled`，涵蓋 strategy／draft／judge／expand／publish／response continuation；本機 build + 50/50 focused tests 通過，但 Gate 2 尚未審查，Phase 3 尚未接 harness
 
 ## 本 session 暫停交接（2026-09-24）
 
-- **已推送基線**：`e2e3770`（Phase 1 GameEngine day restore；包含新增 checkpoint test 的 dist 產物）。`main` 未動。
-- **目前工作樹 WIP（刻意未 commit）**：
-  - 修改：`src/lobby-server/ai-controller.ts`（AI checkpoint state machine）、`src/lobby-server/game.ts`（`getNightState().day` 小型型別／觀察欄位）
-  - 新增：`src/lobby-server/ai-checkpoint.test.ts` 與其 4 個 `dist/lobby-server/ai-checkpoint.test.*` 產物
-  - 另有 build 產生的 `dist/lobby-server/ai-controller.*`、`dist/lobby-server/game.*` 修改
-  - `dist/lobby-server/llm.d.ts` 的 line-ending 狀態是既有雜訊，**不要暫存**
+- **已推送基線**：`e2e3770`（Phase 1 GameEngine day restore；包含新增 checkpoint test 的 dist 產物）、`cfc4659`（Phase 2 AI day continuation WIP；source/test/dist）。`main` 未動。
+- **目前工作樹狀態**：Phase 2 WIP 已 commit/push，不再是未 commit；只剩 `dist/lobby-server/llm.d.ts` 的既有 line-ending 狀態，**不要暫存**。
+- **Phase 2 WIP 內容**：
+  - `src/lobby-server/ai-controller.ts`：AI checkpoint state machine 與 continuation APIs
+  - `src/lobby-server/game.ts`：`getNightState().day` 小型觀察欄位
+  - `src/lobby-server/ai-checkpoint.test.ts` 與其 4 個 `dist/lobby-server/ai-checkpoint.test.*` 產物
+  - `dist/lobby-server/ai-controller.*`、`dist/lobby-server/game.*` build 產物
 - **Phase 2 已驗證**：`npm run build` 通過；`node --test dist/lobby-server/ai-checkpoint.test.js dist/lobby-server/game-checkpoint.test.js dist/lobby-server/game-wolf.test.js dist/lobby-server/server.test.js dist/lobby-server/room-manager.test.js` 為 **50/50 pass**。
 - **已修正的實際 bug**：合法 `selectedClientId: null` 曾被 roster validation 錯誤拒絕，造成 checkpoint safe-no-op 後重跑策略；目前已改為只在非 null 時檢查 roster。
 - **Gate 2 狀態**：Oracle Gate 2 與 explorer 結構掃描在 2026-09-24 依使用者要求取消，**沒有 GO/NO-GO 結果**；不可把 50/50 tests 當作 Gate 2 通過。
 - **Phase 2 範圍界線**：只支援 external harness 的 `DAY_DISCUSSION`；不宣稱 NIGHT／DAY_VOTING／DAY_RESULT restore。`importDayCheckpoint()` 只 hydrate、不自動啟動；Phase 3 必須在 restore game → import AI → `resumeDayDiscussion()` 後，於 all-ready 時呼叫 `game.reconcileDayReady()`。
 - **Phase 3 尚未做**：`scripts/external-test-stage2.mjs` 仍未保存單一 `{schemaVersion, game, ai}` envelope，仍未使用 `setPhaseStartEnabled(false)` restore barrier，也沒有 atomic temp/rename 或 SIGINT quiesce；因此現有 5 分鐘 checkpoint 仍不能實際續跑。
 - **下一 agent 的恢復順序**：
-  1. 先讀本節與 `.slim/deepwork/checkpoint-persistence.md`，檢查 WIP diff；不要重做 Phase 1。
+  1. 先 pull／讀取最新 `cfc4659` 與本節，確認接手的是已 push 的 Phase 2 WIP；不要重做 Phase 1，也不要把 WIP 當成 Gate 2 已通過。
   2. 重新跑 `npm run build` + 上述 5 個 focused test，確認接手時工作樹仍可編譯。
   3. 開新的 Oracle Gate 2 session，審查 AI snapshot continuation 的 stale-run fencing、partial completion、publish/ready replay、phaseStart barrier；Gate 2 通過前不要改 harness。
-  4. Gate 2 通過後才 commit Phase 2 的 source/test/dist（保留 `llm.d.ts` 雜訊），再實作 Phase 3 harness envelope、quiesce、atomic save。
+  4. Gate 2 若要求修正，另開修正 commit；目前 `cfc4659` 只是跨機交接 WIP，不是 Gate 2 acceptance。Gate 2 通過後才實作 Phase 3 harness envelope、quiesce、atomic save。
   5. Phase 3 本機測試通過後，才做 `medium` 5 分鐘 segment 2；第一個 `JUDGE → EXPAND → MESSAGE` 出現後，另開全新 Oracle session 盲評草稿與 expanded 公頻稿。
   6. 最後同步本 `docs/progress.md`／`docs/ubuntu-spec.md`；不要在 Gate 2/3 前部署或重啟正式服務。
 
