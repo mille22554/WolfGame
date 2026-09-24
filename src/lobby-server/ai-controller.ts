@@ -51,7 +51,7 @@ export interface AiLogEntry {
   clientId: string;
   characterId: string;
   role: string;
-  kind: 'WOLF_SPEECH' | 'JUDGE' | 'WOLF_STANCE' | 'WOLF_KILL' | 'SEER_CHECK' | 'GUARD_PROTECT' | 'MASON_TOGGLE' | 'MASON_SPEECH' | 'MASON_STANCE' | 'WOLF_ABORT' | 'DAY_STRATEGY' | 'DAY_SPEECH' | 'DAY_STANCE' | 'DAY_VOTE';
+  kind: 'WOLF_SPEECH' | 'JUDGE' | 'WOLF_STANCE' | 'WOLF_KILL' | 'SEER_CHECK' | 'GUARD_PROTECT' | 'MASON_TOGGLE' | 'MASON_SPEECH' | 'MASON_STANCE' | 'WOLF_ABORT' | 'DAY_STRATEGY' | 'DAY_SPEECH' | 'DAY_STANCE' | 'DAY_VOTE' | 'EXPAND';
   round: number;
   /** 第幾次嘗試（重試時 >1） */
   attempt: number;
@@ -297,16 +297,19 @@ export class AiController {
       // ② Judge 盲選一篇（LLM 盲評）→ 發布 speech 到白板
       const selected = await this.judgePickDraft(drafts, round);
       if (!selected) break;
-      this.game.handleWolfChat(selected.wolf.clientId, selected.speech);
+      // ②.5 展開：把選中的草稿要點展開成完整發言（重試全失敗 → fallback 草稿原文，不阻塞會議）
+      const selectedEntry = this.entries.get(selected.wolf.clientId);
+      const expanded = selectedEntry ? await this.expandSpeech(selectedEntry, selected.speech, 'wolf') : selected.speech;
+      this.game.handleWolfChat(selected.wolf.clientId, expanded);
       this.game.broadcastToWolves({
         type: 'WOLF_SPEECH_SELECTED',
         round: this.selectionSeq,
         from: selected.wolf.nickname,
-        text: selected.speech,
+        text: expanded,
       });
       // 記錄發言者的 stance + 本地 ready 追蹤（不呼叫 game.handleToggleWolfReady——會觸發 premature VOTING）
       // stance 正規化：speech 已點名刀人目標但 stance 漏寫「投」前綴 → 補上，視為已承諾（避免發布者被誤判為資訊不足而強制重出稿）
-      const publishedStance = this.normalizePublishedStance(selected.wolf, selected.speech, selected.stance);
+      const publishedStance = this.normalizePublishedStance(selected.wolf, expanded, selected.stance, selected.speech);
       this.wolfStanceMap.set(selected.wolf.clientId, publishedStance);
       if (publishedStance.startsWith('投')) {
         this.wolfReadyMap.set(selected.wolf.clientId, true);
@@ -319,7 +322,7 @@ export class AiController {
         if (this.destroyed || this.isAborted()) return;
         const entry = this.entries.get(w.clientId);
         if (!entry) return;
-        const resp = await this.wolfRespond(w, entry, selected.speech, round, 100 + i);
+        const resp = await this.wolfRespond(w, entry, expanded, round, 100 + i);
         if (!this.game) return;
         if (resp.type === 'vote') {
           this.wolfStanceMap.set(w.clientId, `投${resp.target}`);
@@ -423,13 +426,13 @@ export class AiController {
   }
 
   /** 發布稿 stance 正規化（對齊 spec §12.3：stance 只有「投XXX」或「資訊不足」二值）：
-   *  speech 已明確點名刀人目標時，視為已承諾——補上「投<目標>」；沒有目標才維持原樣（資訊不足）。 */
-  private normalizePublishedStance(wolf: GamePlayer, speech: string, stance: string): string {
+   *  發布稿或草稿原文任一已明確點名刀人目標時，視為已承諾——補上「投<目標>」；沒有目標才維持原樣（資訊不足）。 */
+  private normalizePublishedStance(wolf: GamePlayer, speech: string, stance: string, fallbackSpeech?: string): string {
     const s = stance.trim();
     if (s.startsWith('投')) return s;
     const targets = (this.game?.getPlayers() ?? [])
       .filter((p) => p.alive && p.clientId !== wolf.clientId && p.role !== Role.WEREWOLF && p.role !== Role.MADMAN);
-    const named = targets.find((p) => speech.includes(p.nickname));
+    const named = targets.find((p) => speech.includes(p.nickname) || (fallbackSpeech?.includes(p.nickname) ?? false));
     return named ? `投${named.nickname}` : s;
   }
 
@@ -504,7 +507,10 @@ export class AiController {
       // ② Judge 盲選一篇（LLM 盲評）→ 發布 speech 到白板
       const selected = await this.judgePickMasonDraft(drafts);
       if (!selected) break;
-      this.game.publishMasonSpeech(selected.mason.clientId, selected.speech, this.masonSelectionSeq);
+      // ②.5 展開：把選中的草稿要點展開成完整發言（重試全失敗 → fallback 草稿原文，不阻塞會議）
+      const selectedEntry = this.entries.get(selected.mason.clientId);
+      const expanded = selectedEntry ? await this.expandSpeech(selectedEntry, selected.speech, 'mason') : selected.speech;
+      this.game.publishMasonSpeech(selected.mason.clientId, expanded, this.masonSelectionSeq);
       // 記錄發言者的 stance（toggle 延後到回應之後，避免引擎提前推進）
       this.masonStanceMap.set(selected.mason.clientId, selected.stance);
 
@@ -515,7 +521,7 @@ export class AiController {
         if (m.clientId === selected.mason.clientId) continue; // 發言者不讀自己的話
         const entry = this.entries.get(m.clientId);
         if (!entry) continue;
-        const resp = await this.masonRespond(m, entry, selected.speech);
+        const resp = await this.masonRespond(m, entry, expanded);
         if (resp.type === 'vote') {
           this.masonStanceMap.set(m.clientId, '準備好了');
           if (!this.isMasonReady(m.clientId)) this.game.handleToggleMasonEndTurn(m.clientId);
@@ -597,6 +603,26 @@ export class AiController {
     if (p.action === 'vote') return { type: 'vote', target: p.target as string };
     if (p.action === 'speak') return { type: 'speak', speech: (p.speech as string).trim(), stance: (p.stance as string).trim() };
     return { type: 'wait' };
+  }
+
+  // --- 私頻會議通用（wolf / mason）：把選中的草稿要點展開成完整發言 ---
+
+  /** 展開 prompt：把選中的行動筆記（草稿要點）展開成該角色在會議上真正會說的話；輸出 {"speech":"完整發言"} */
+  private buildExpandPrompts(entry: AiEntry, draftSpeech: string, meeting: 'wolf' | 'mason'): ChatMessage[] {
+    const user = `你剛才在私頻會議上出了一份行動筆記。把它講成你在會議上真正會說的話。\n\n行動筆記：\n${draftSpeech}\n\n要求：\n- **用你的角色語氣重述**成你在會議上真正會說的話——不要照抄筆記的寫法\n- 不要新增筆記裡沒有的行動、對象或結論；但你可以用自己的說話方式重寫\n- 2-4 句\n- 排版：超過 50 字換行分段，≤3 段，順序＝判斷/結論→動作→給隊友提醒\n- 全繁體中文\n\nJSON：{"speech": "完整發言"}`;
+    return [
+      { role: 'system', content: `${this.buildSystemPrompt(entry)}\n${meeting === 'wolf' ? this.wolfContext(entry) : this.masonContext(entry)}` },
+      { role: 'user', content: user },
+    ];
+  }
+
+  /** 展開：LLM 把選中的草稿要點展開成完整發言（llmWithRetry 內建 3 次重試）；全失敗 → fallback 用草稿原文，不阻塞會議 */
+  private async expandSpeech(entry: AiEntry, draftSpeech: string, meeting: 'wolf' | 'mason'): Promise<string> {
+    const result = await this.llmWithRetry(
+      entry.def.clientId, 'EXPAND', this.day, this.buildExpandPrompts(entry, draftSpeech, meeting),
+      (p) => (typeof p.speech === 'string' && p.speech.trim() ? 'ok' : null));
+    // 3 次重試全失敗 → fallback 用草稿原文，不阻塞會議
+    return result.value !== null ? (result.parsed!.speech as string).trim() : draftSpeech;
   }
 
   // --- 白天討論（策略先行 + toggle 制） ---
@@ -949,8 +975,11 @@ export class AiController {
       '## 勝利綁定',
       '每步服務兩軸之一：夜間消耗（刀人優先序）／白天存活＋引導（票往錯方向走）。',
       '',
-      '## Level 2 角色',
+      '## Level 2 角色（只影響決策）',
       '用角色語氣，2-4 句，用名字稱呼隊友。說「占卜師」不說「預言家」。',
+      'speech 是給夥伴看的行動筆記，不是發言稿。**用短句列點，不要寫成完整句子**——每行一個重點（做什麼／關鍵理由／分工／預期走向），像筆記大綱一樣。',
+      '不要寫你明天要說的逐字台詞——那是之後才決定的。',
+      '你寫的是筆記，之後會有人把它展開成完整發言；你不需要把它講好講滿。',
     ].filter(Boolean).join('\n');
   }
 
@@ -983,8 +1012,9 @@ export class AiController {
       '## Level 2 角色（只影響決策）',
       '你的角色只決定你的決策偏好（風險承受、怎麼評估 CO、誰去拋話題），不決定措辭。',
       '草稿只寫行動與決策重點；用名字稱呼夥伴，說「占卜師」不說「預言家」。',
-      'speech 是給夥伴看的行動筆記，不是發言稿：用短句列重點（做什麼／關鍵理由／分工／預期走向），不需要完整敘述。',
+      'speech 是給夥伴看的行動筆記，不是發言稿。**用短句列點，不要寫成完整句子**——每行一個重點（做什麼／關鍵理由／分工／預期走向），像筆記大綱一樣。',
       '不要寫你明天要說的逐字台詞——那是之後才決定的。',
+      '你寫的是筆記，之後會有人把它展開成完整發言；你不需要把它講好講滿。',
     ].filter(Boolean).join('\n');
   }
 
@@ -1002,6 +1032,7 @@ export class AiController {
       ``,
       `任務：說一句話——① 你刀誰（會議已有共識目標時可省略）② 你明天白天做什麼（針對存活玩家）③ 你預期這個動作讓會議怎麼發展（潛伏時可省略）。`,
       `狼每晚必須刀人。「資訊不足」＝你還在考慮，最終必須選。`,
+      `**寫成短句要點，每行一個重點，不要寫成完整敘述句**——這是筆記不是發言稿，之後會被展開成完整發言。`,
       ``,
       `出稿前先想清楚四件事，再寫 speech：`,
       `① 刀的目標服務哪個軸（夜間消耗/白天存活＋引導）？**第 1 天刀人不用寫理由**——沒有任何發言可參考，寫理由就是廢話，直接選定一個；第 2 天起，理由若有觀察依據再寫。`,
@@ -1056,13 +1087,14 @@ export class AiController {
       ``,
       `任務：看完後決定你的立場（三選一）：`,
       `1. 同意（方案完整，準備投票）→ {"action": "vote", "target": "今晚刀人目標的名字"}`,
-      `2. 我要補充（有新角度或要改變立場）→ {"action": "speak", "speech": "完整通順口語、角色語氣、全繁體中文；開頭直接講判斷或動作，禁止任何「我接/我收到/同意你」類宣告開頭；超過50字須換行分段（≤3段）", "stance": "投[今晚刀的人名]"}`,
+      `2. 我要補充（有新角度或要改變立場）→ {"action": "speak", "speech": "短句要點（行動／關鍵理由／分工／預期走向）；全繁體中文；開頭直接講判斷或動作，禁止任何「我接/我收到/同意你」類宣告開頭", "stance": "投[今晚刀的人名]"}`,
       `3. 資訊不足、先不講 → {"action": "wait"}`,
       ``,
       `⚠️ target 永遠是「今晚要刀的玩家」（從可刀目標裡選）——不是提案者、不是發言人、不是白天質疑對象、更不是狼隊友。`,
       `⚠️ 如果你之前已在會議上表態過（白板有你的名字+投XXX），且新發言不改變你的判斷 → 用 action="vote" 確認，不要用 wait。wait 只給還沒表態過的狼。`,
       `⚠️ 刀人目標今晚就死，白天動作只針對存活玩家。用名字，不用代詞。此頻道只有狼，不引用白板外發言。`,
       `⚠️ 會議已有共識刀人目標時，speech 不再重宣布刀誰（「我同意刀X」「支持刀X」這類）——只想重申既定目標／沒有新戰術 → 直接 action="vote"。speech 只能用來提明天的新戰術安排（誰帶節奏、質疑誰、怎麼配合、有沒有要改戰術）。`,
+      `⚠️ speech 是行動筆記不是發言稿：短句列重點即可，不要寫成完整敘述、不要附上明天要說的逐字台詞。`,
     ].join('\n');
     return [
       { role: 'system', content: `${this.buildSystemPrompt(entry)}\n${this.wolfContext(entry)}` },
@@ -1087,7 +1119,8 @@ export class AiController {
       ``,
       `任務：說一句話——① 你 CO 還是隱匿（你們已決定時可省略）② 你明天白天做什麼（針對存活玩家）③ 你預期這個動作讓會議怎麼發展（隱匿時可省略）。`,
       `共有者沒有夜間動作。「資訊不足」＝你還在評估，還沒決定明天怎麼行動。`,
-      `speech 只寫行動與決策重點：做什麼（誰做什麼、CO 與否）＋關鍵理由一句＋預期走向一句。不用完整敘述。`,
+      `speech 只寫行動與決策重點：做什麼（誰做什麼、CO 與否）＋關鍵理由一句＋預期走向一句。`,
+      `**寫成短句要點，每行一個重點，不要寫成完整敘述句**——這是筆記不是發言稿，之後會被展開成完整發言。`,
       ``,
       `出稿前先想清楚四件事，再寫 speech：`,
       `① 明天的動作服務哪個軸（白天存活／引導）？**第 1 天不用寫質疑理由**——沒有任何發言可參考，質疑就是空砲還會暴露自己，直接選定要拋的話題或觀察對象；第 2 天起，質疑若有實際發言依據再寫。`,

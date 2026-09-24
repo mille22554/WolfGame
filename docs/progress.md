@@ -8,6 +8,7 @@
 **卡在哪：** 無阻塞。共有者（mason）prompt V8 已落地（對齊狼版編排＋草稿＝行動筆記定位）；白天（DAY_DISCUSSION）外部測試為先前進度（見下方）。
 
 - ✅ **共有者 prompt V8 落地**（2026-09-24，oracle 雙共有者第 1 夜流程驗證後落地）：三函數（`masonContext`／`buildMasonDraftPrompts`／`buildMasonResponsePrompts`）全面對齊狼版編排，只有身分差異；草稿定位改為「行動筆記非發言稿」
+- ✅ **私頻 EXPAND 機制＋草稿要點化**（2026-09-24，oracle 兩段式驗證後落地）：草稿＝行動筆記 → 引擎展開成角色語氣完整發言才進白板；狼與共有者兩側同步
 
 - ✅ 夜流程（NIGHT_RESULT）已通過多次驗證
 - ✅ 狼會議收斂邏輯修好（不再 premature VOTING）
@@ -22,6 +23,26 @@
 - ✅ 白天測試紀錄（`stage2-day-report.md`）：狼會議不完整是舊格式 `night1.json` 無 `.log.json`（非渲染 bug）——要完整狼會議需重跑整局 night
 - ✅ **白天開場「捏造他人立場」幻覺修復**：良子第一句「不跟佐雪的立場走」——佐雪全程零發言，立場是憑空捏造（白板空＋強迫點名的 prompt 側效果）。system prompt 證據邊界新增「禁止假設任何玩家持某立場/講過什麼，除非實際出現在白板」；strategy/draft/response prompt 加降級規則「只能質疑已發言的實際內容，沒人發言就談自己觀察」（參考 `docs/ai-rp-prompt-research.md` §4 anti-fabrication）
 - ⏳ 白天收斂測試重跑（用重跑的 night 存檔，待驗證新 prompt）
+
+**私頻 EXPAND 機制＋草稿要點化（2026-09-24，oracle 兩段式驗證通過後落地）：**
+
+修的是「引擎錯誤」——V8 把草稿定位改成行動筆記，但私頻 loop 缺展開步驟（SPEC §13.6 有 EXPAND，程式碼沒有），導致筆記直接進白板。
+
+- **新增 `buildExpandPrompts(entry, draftSpeech, meeting)`**：SYSTEM = `buildSystemPrompt` ＋ 對應的 `wolfContext`/`masonContext`；USER 把選中的行動筆記用角色語氣重述成完整發言
+- **新增 `expandSpeech()`**：`llmWithRetry`（內建 3 次重試，間隔 2s）→ 失敗 fallback 草稿原文，**不阻塞會議**
+- **插入點**：`runWolfDiscussion`（狼）／`runMasonDiscussion`（共有者），judge 選定後、發布前
+- **傳遞鏈**：展開後文字用於 `handleWolfChat`/`publishMasonSpeech`、廣播 `text`、`normalizePublishedStance`、回應輪 `wolfRespond`/`masonRespond`（夥伴讀到的是發言不是筆記）
+- **`normalizePublishedStance` 保險**：新增 `fallbackSpeech` 參數，展開稿或草稿原文任一含刀人暱稱即正規化 stance（防展開品質退化導致 stance 漏判）
+- **`AiLogEntry['kind']` 新增 `'EXPAND'`**：可從 ai-trace log 追蹤展開呼叫
+- **草稿要點化（狼＋共有者）**：`wolfContext`／`masonContext` 的 Level 2 改「只影響決策」＋三行筆記定位；狼與共有者的 draft prompt 任務段加「寫成短句要點，每行一個重點」；狼 response 的 `speak` 分支同步改要點定位
+- **關鍵設計句**（解除模型心理障礙）：`你寫的是筆記，之後會有人把它展開成完整發言；你不需要把它講好講滿。`
+- **SPEC 同步**：§12.3 狼／共有者流程各加 ②' 展開（EXPAND）步驟、§13.6 兩張表加「展開草稿」行、§12.8 協議表註明 `text` 為展開後發言或失敗時的草稿原文
+- **oracle 驗證兩段**：
+  - 草稿 V9：產出三行要點筆記（結構達成；「不要寫成完整句」與「禁逐字台詞」未完全遵守，殘留引號台詞）
+  - 展開 V9b：輸入該筆記 → **展開有效**（書面語「狼只要挑一個切」→「狼挑一個砍就完事了…留著這手牌」）、**零幻覺**（無新增行動/對象/結論）、排版三段符合
+- **第一版展開失敗的教訓**：原本寫「照筆記的行動與決策講，不要新增…」→ 輸出幾乎等於草稿原文，無展開效果。改成「用你的角色語氣**重述**…不要照抄筆記的寫法」＋放寬為「不要新增行動/對象/結論，但可以改寫」才有效
+- **未測路徑**：EXPAND 在真實 SGLang 上的行為、`normalizePublishedStance` 的 stance 補漏路徑、白天的 EXPAND（本次不實作，白天等測試範圍確定）
+- **測試**：`npm run build` 通過；`node --test dist/lobby-server/room-manager.test.js dist/lobby-server/server.test.js` 27 pass / 0 fail
 
 **共有者 prompt V8 落地（2026-09-24，oracle 雙共有者第 1 夜完整流程驗證通過後落地）：**
 

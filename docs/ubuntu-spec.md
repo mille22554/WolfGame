@@ -270,8 +270,14 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 
 **② Judge 盲選 → 發布：**
 - 從所有待選草稿中盲選一篇（不知道誰寫的）
-- 該篇的 `speech` 發布到狼白板（WOLF_MESSAGE）
+- 將選中的草稿**展開**（EXPAND，見下方 ②'）
+- 將展開後的完整發言發布到狼白板（WOLF_MESSAGE）
 - 該狼的 `stance` 記錄下來
+
+**②' 展開（EXPAND）：**
+- 將選中的草稿（行動筆記）用該狼的角色語氣重述成完整發言
+- LLM 失敗重試 3 次後，以草稿原文發布（不阻塞會議）
+- 展開不得新增草稿外的行動、對象或結論
 
 **③ 除發言者外所有狼讀白板 → 各自回應：**
 - 看到剛發布的那句話（白板是累積的，也能看到之前的發言）
@@ -324,7 +330,8 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 
 **流程（loop，直到收斂）：**
 - **初始**：兩個共有者各自獨立出草稿（互不可見）
-- **② Judge 盲選 → 發布**：從草稿中盲選一篇，`speech` 發布到共有者白板（`MASON_MESSAGE`）
+- **② Judge 盲選 → 發布**：從草稿中盲選一篇 → **展開**（EXPAND，見下）→ 將展開後的完整發言發布到共有者白板（`MASON_MESSAGE`）
+- **②' 展開（EXPAND）**：將選中的草稿（行動筆記）用該角色語氣重述成完整發言；LLM 失敗重試 3 次後，以草稿原文發布（不阻塞會議）。展開不得新增草稿外的行動、對象或結論
 - **③ 另一方讀白板 → 回應**：「準備好了」（ready）／「我要講」（出新草稿）／「資訊不足」（不出草稿）
 - **④ 收斂判斷**：有出新草稿 → 回 ②；都沒新草稿且雙方都 ready → **收斂** → 雙方 toggle ON
 - **安全上限**：白板累計 100 則 `MASON_MESSAGE` 未收斂 → 停止並報告
@@ -347,6 +354,8 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 - **不得寫明天要說的逐字台詞**（那是展開階段才決定的）
 - 角色（persona）**只參與決策**（風險承受、怎麼評估 CO、誰拋話題），**不決定措辭**；措辭留給後續展開步驟
 - 覆寫共享 `buildSystemPrompt` 的「完整通順口語」傾向：不寫成完整敘述，用短句列重點
+- 草稿的措辭不進入白板：發布前由引擎的 EXPAND 步驟展開（§13.6），草稿只承載行動與決策資訊
+- 展開失敗時以草稿原文發布（連續 3 次重試後），保證會議不中斷
 
 `buildMasonResponsePrompts` 的 `speak` 分支同樣遵守上述定位，並額外禁止：評價式開頭（「你的判斷是對的」）、覆述夥伴剛講的內容、逐字台詞。
 
@@ -417,8 +426,8 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | S→C | `VOTE_RESULT` | `{ votes: Record<number, number>, eliminatedId: number\|null, tie: bool }` | 投票結果（broadcast） |
 | S→C | `PLAYER_ELIMINATED` | `{ id, nickname, cause: 'wolf_kill'\|'vote' }` | 有人出局（broadcast） |
 | S→C | `GAME_OVER` | `{ winner: 'village'\|'werewolf', players: [{ id, nickname, role, alive }] }` | 終局（broadcast，公布全部角色） |
-| S→C | `WOLF_MESSAGE` | `{ from, text, ts }` | 人狼私頻（僅存活人狼） |
-| S→C | `MASON_MESSAGE` | `{ from, text, ts }` | 共有者私頻（僅雙方） |
+| S→C | `WOLF_MESSAGE` | `{ from, text, ts }` | 人狼私頻（僅存活人狼）。`text` 為 EXPAND 展開後的完整發言；展開失敗時為草稿原文 |
+| S→C | `MASON_MESSAGE` | `{ from, text, ts }` | 共有者私頻（僅雙方）。`text` 為 EXPAND 展開後的完整發言；展開失敗時為草稿原文 |
 
 ### 12.9 前端 UI 需求（M6）
 
@@ -576,6 +585,7 @@ AI 狼依 §12.3 的 loop 驅動（非 SpeechScheduler 管線，是持續對話�
 |---|---|
 | **出草稿** | 每隻 AI 狼獨立 LLM 生成草稿（`speech` + `stance`，≤50 字，符合 persona）；互不可見 |
 | **Judge 選言** | server 端 judge LLM 全盲評分所有草稿、選最高分 → 發布 `speech` 到白板（broadcast `WOLF_SPEECH_SELECTED`） |
+| **展開草稿** | 將選中的草稿用狼的角色語氣重述成完整發言（`EXPAND` log kind）；失敗重試 3 次後用草稿原文，不阻塞 |
 | **讀白板＋回應** | 除發言者外每隻 AI 狼 LLM 判斷：「投XXX」（準備投票）／「我要講」（出新草稿）／「資訊不足」（不出草稿）。已 ready 的狼也可撤回（改出草稿） |
 | **強制發言** | 若無人出草稿但有狼「資訊不足」→ server 通知那些狼必須發言（再出草稿） |
 | **投票** | 收斂後，每隻 AI 狼依自己的 stance 提交 `WOLF_KILL`（不可選自己/狂人） |
@@ -593,6 +603,7 @@ AI 狼依 §12.3 的 loop 驅動（非 SpeechScheduler 管線，是持續對話�
 |---|---|
 | **出草稿** | 每個 AI 共有者獨立 LLM 生成草稿（`speech` + `stance`，≤50 字，符合 persona）；互不可見 |
 | **Judge 選言** | server 端 judge LLM 全盲評分所有草稿、選最高分 → 發布 `speech` 到共有者白板（broadcast `MASON_SPEECH_SELECTED`） |
+| **展開草稿** | 將選中的草稿用共有者的角色語氣重述成完整發言（`EXPAND` log kind）；失敗重試 3 次後用草稿原文，不阻塞 |
 | **讀白板＋回應** | 非發言者 AI 共有者 LLM 判斷：「準備好了」（ready）／「我要講」（出新草稿）／「資訊不足」（不出草稿） |
 | **收斂** | 雙方都 ready 且無人出新草稿 → 雙方 toggle ON（`handleToggleMasonEndTurn`） |
 

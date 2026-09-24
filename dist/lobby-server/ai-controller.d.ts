@@ -10,7 +10,7 @@ export interface AiLogEntry {
     clientId: string;
     characterId: string;
     role: string;
-    kind: 'WOLF_SPEECH' | 'JUDGE' | 'WOLF_STANCE' | 'WOLF_KILL' | 'SEER_CHECK' | 'GUARD_PROTECT' | 'MASON_TOGGLE' | 'MASON_SPEECH' | 'MASON_STANCE' | 'WOLF_ABORT' | 'DAY_STRATEGY' | 'DAY_SPEECH' | 'DAY_STANCE' | 'DAY_VOTE';
+    kind: 'WOLF_SPEECH' | 'JUDGE' | 'WOLF_STANCE' | 'WOLF_KILL' | 'SEER_CHECK' | 'GUARD_PROTECT' | 'MASON_TOGGLE' | 'MASON_SPEECH' | 'MASON_STANCE' | 'WOLF_ABORT' | 'DAY_STRATEGY' | 'DAY_SPEECH' | 'DAY_STANCE' | 'DAY_VOTE' | 'EXPAND';
     round: number;
     /** 第幾次嘗試（重試時 >1） */
     attempt: number;
@@ -91,7 +91,7 @@ export declare class AiController {
     /** Judge 盲選一篇草稿（LLM 全盲評分，不告知作者）→ 回選中的 draft */
     private judgePickDraft;
     /** 發布稿 stance 正規化（對齊 spec §12.3：stance 只有「投XXX」或「資訊不足」二值）：
-     *  speech 已明確點名刀人目標時，視為已承諾——補上「投<目標>」；沒有目標才維持原樣（資訊不足）。 */
+     *  發布稿或草稿原文任一已明確點名刀人目標時，視為已承諾——補上「投<目標>」；沒有目標才維持原樣（資訊不足）。 */
     private normalizePublishedStance;
     /** 非發言者狼讀白板後回應：vote / speak / wait */
     private wolfRespond;
@@ -105,6 +105,10 @@ export declare class AiController {
     private judgePickMasonDraft;
     /** 非發言者共有者讀白板後回應：vote / speak / wait */
     private masonRespond;
+    /** 展開 prompt：把選中的行動筆記（草稿要點）展開成該角色在會議上真正會說的話；輸出 {"speech":"完整發言"} */
+    private buildExpandPrompts;
+    /** 展開：LLM 把選中的草稿要點展開成完整發言（llmWithRetry 內建 3 次重試）；全失敗 → fallback 用草稿原文，不阻塞會議 */
+    private expandSpeech;
     /** 白天開始時：每個 AI 依角色生成策略 → 寫入全局 memory（全併發） */
     private generateDayStrategies;
     /** 依角色生成策略 prompt */
