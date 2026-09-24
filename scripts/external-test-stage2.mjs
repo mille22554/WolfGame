@@ -1,55 +1,95 @@
 #!/usr/bin/env node
 /**
- * external-test-stage2.mjs — Stage 2 外部測試：15 人全 AI 局（分階段可選）
+ * external-test-stage2.mjs — Stage 2 外部測試：15 人全 AI 局（分階段可選、可恢復）
  *
  * 用法：
  *   node scripts/external-test-stage2.mjs [--stop-at PHASE] [--report PATH]
+ *   node scripts/external-test-stage2.mjs --stop-at NIGHT_RESULT --save-state /path/state.json
+ *   node scripts/external-test-stage2.mjs --stop-at DAY_RESULT --resume /path/state.json
  *
  * PHASE 選項：
  *   NIGHT_RESULT  — 只跑夜晚（mason→wolf→seer/guard→結算），到 DAY_DISCUSSION 開始時停止
  *   DAY_RESULT    — 跑完整天（night + day discussion + voting），到 DAY_RESULT 停止（預設）
  *   GAME_OVER     — 跑完整局（多天）直到 GAME_OVER
  *
+ * 存檔／恢復（單一 envelope，schemaVersion=2）：
+ *   { schemaVersion, savedAt, stopAt, game, ai, events, aiLog }
+ * - game / ai / events / aiLog 在同一 tick 抓取並原子寫入（temp file + rename）；失敗不覆蓋舊檔
+ * - resume 順序（明確，不自動重播）：
+ *     1. ai.setPhaseStartEnabled(false) — barrier：restoreState 的 PHASE_CHANGED 不自動啟動白天 loop
+ *     2. game.restoreState(env.game)
+ *     3. ai.restoreLog(env.aiLog)        — 縫回前段 LLM log
+ *     4. ai.importDayCheckpoint(env.ai)
+ *     5. ai.resumeDayDiscussion()        — 從存檔 stage 續跑；all-ready 時 loop 才呼叫 reconcileDayReady
+ * - 只支援 DAY_DISCUSSION restore；舊三檔格式（state + .events.json + .log.json）明確拒絕
+ *
+ * SIGINT/SIGTERM：停止新工作，等待目前 in-flight continuation/LLM 安全結束後再存一致 snapshot（避免半寫）。
+ *
  * 在 server 上跑：SGLANG_API_KEY=xxx node scripts/external-test-stage2.mjs --stop-at NIGHT_RESULT
  * - import dist/lobby-server/ 編譯產物（GameEngine + AiController）
  * - 建 15 人全 AI 局
  * - 各階段不限時（night/day 皆等待收斂，無 timeout 截斷）
  * - 產出 markdown 報告（--report 或 REPORT env 或依階段預設：night/day/full）
- * - exit code：0 = 目標階段完成、1 = 未收斂（安全上限 / timeout）
+ * - exit code：0 = 目標階段完成且（若指定 --save-state）存檔成功、1 = 未收斂（安全上限 / timeout / 中斷）或存檔失敗
  */
-import { writeFileSync, readFileSync, appendFileSync } from 'node:fs';
+import { writeFileSync, readFileSync, appendFileSync, renameSync, rmSync, mkdirSync } from 'node:fs';
+import { dirname, resolve, join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { GameEngine } from '../dist/lobby-server/game.js';
-import { AiController } from '../dist/lobby-server/ai-controller.js';
+import { AiController, AI_DAY_CHECKPOINT_SCHEMA_VERSION } from '../dist/lobby-server/ai-controller.js';
 
-// --- CLI 參數解析 ---
-const args = process.argv.slice(2);
-function getArg(flag, defaultValue) {
-  const idx = args.indexOf(flag);
-  if (idx !== -1 && idx + 1 < args.length) return args[idx + 1];
-  return defaultValue;
-}
-const STOP_AT = getArg('--stop-at', 'DAY_RESULT'); // NIGHT_RESULT | DAY_RESULT | GAME_OVER
+// --- 常數：存檔格式與觀察 ---
+export const STAGE2_STATE_SCHEMA_VERSION = 2; // 2 = 單一 envelope（含 ai checkpoint）；無 schemaVersion = 舊三檔格式（明確拒絕）
+/** SIGINT settle 上限：必須小於外部 runner 的 30s kill-after（`timeout --signal=INT --kill-after=30s`），
+ *  上限一過就該寫一致 snapshot 並 exit；25s 留約 5s 給「寫檔＋destroy＋exit」收尾，避免 30s 時被 runner 直接 KILL。
+ *  上限到期時 LLM 仍在飛也沒關係（目前 tick 的 snapshot 仍一致，下次 resume 依 pending 補做）。 */
+export const SIGINT_SETTLE_TIMEOUT_MS = 25_000;
+const POLL_INTERVAL_MS = 500;
+const PROGRESS_INTERVAL_MS = 600_000;
+const DISCUSSION_LOG = join(tmpdir(), 'day-discussion.log'); // 實時討論記錄（tail -f 可看；server 上 tmpdir 即 /tmp）
+
+// 各階段 timeout（0 = 不限時）
+const TIMEOUTS = {
+  NIGHT: 0,
+  DAY: 0,
+};
+
+// 15 個 AI 人格（characterId → 中文名；與 character/<id>/agents.md 的中文名一致）
+const CHARACTERS = [
+  ['aoi', '葵'], ['chihiro', '千尋'], ['futa', '二葉'], ['kenta', '健太'], ['koharu', '小晴'],
+  ['misaki', '美咲'], ['ren', '蓮'], ['rin', '鈴'], ['ryoko', '良子'], ['sayuki', '佐雪'],
+  ['shinichi', '真一'], ['shota', '翔太'], ['tatuya', '太助'], ['yuko', '裕子'], ['yuma', '優馬'],
+];
+
 // 未指定 --report 時依階段用不同預設路徑（避免 night/day 報告互相覆蓋）
 const DEFAULT_REPORT_BY_PHASE = {
   NIGHT_RESULT: 'ai-trace-stage2-night.md',
   DAY_RESULT: 'ai-trace-stage2-day.md',
   GAME_OVER: 'ai-trace-stage2-full.md',
 };
-const REPORT_PATH = getArg('--report', process.env.REPORT || DEFAULT_REPORT_BY_PHASE[STOP_AT] || 'ai-trace-stage2-output.md');
-const SAVE_STATE_PATH = getArg('--save-state', null); // 存檔路徑（跑完目標階段後存檔）
-const RESUME_PATH = getArg('--resume', null); // 存檔路徑（從存檔恢復，跳過 night）
 
-// 各階段 timeout
-const TIMEOUTS = {
-  NIGHT: 0,         // 夜晚：不限時
-  DAY: 0,           // 白天：不限時
-};
+// --stop-at 白名單（啟動時驗證；未知值明確報錯並 exit 1，不啟動遊戲）
+export const STOP_AT_PHASES = ['NIGHT_RESULT', 'DAY_RESULT', 'GAME_OVER'];
+
+/** 驗證 --stop-at 值；回傳錯誤說明（未知值）或 null（有效）。 */
+export function validateStopAt(value) {
+  return STOP_AT_PHASES.includes(value)
+    ? null
+    : `未知的 --stop-at 值「${String(value)}」（可用：${STOP_AT_PHASES.join(' / ')}）`;
+}
+
+function getArg(flag, defaultValue) {
+  const argv = process.argv.slice(2);
+  const idx = argv.indexOf(flag);
+  return idx !== -1 && idx + 1 < argv.length ? argv[idx + 1] : defaultValue;
+}
 
 // 判斷「目標階段完成」的條件
-function isTargetReached(phase) {
-  if (STOP_AT === 'NIGHT_RESULT') return phase === 'DAY_DISCUSSION' || phase === 'DAY_VOTING' || phase === 'DAY_RESULT' || phase === 'GAME_OVER';
-  if (STOP_AT === 'DAY_RESULT') return phase === 'DAY_RESULT' || phase === 'GAME_OVER';
-  if (STOP_AT === 'GAME_OVER') return phase === 'GAME_OVER';
+function isTargetReached(phase, stopAt) {
+  if (stopAt === 'NIGHT_RESULT') return phase === 'DAY_DISCUSSION' || phase === 'DAY_VOTING' || phase === 'DAY_RESULT' || phase === 'GAME_OVER';
+  if (stopAt === 'DAY_RESULT') return phase === 'DAY_RESULT' || phase === 'GAME_OVER';
+  if (stopAt === 'GAME_OVER') return phase === 'GAME_OVER';
   return false;
 }
 
@@ -59,75 +99,127 @@ function currentMajorPhase(phase) {
   return 'DAY'; // DAY_DISCUSSION / DAY_VOTING / DAY_RESULT 都算 day
 }
 
-// 15 個 AI 人格（characterId → 中文名；與 character/<id>/agents.md 的中文名一致）
-const CHARACTERS = [
-  ['aoi', '葵'], ['chihiro', '千尋'], ['futa', '二葉'], ['kenta', '健太'], ['koharu', '小晴'],
-  ['misaki', '美咲'], ['ren', '蓮'], ['rin', '鈴'], ['ryoko', '良子'], ['sayuki', '佐雪'],
-  ['shinichi', '真一'], ['shota', '翔太'], ['tatuya', '太助'], ['yuko', '裕子'], ['yuma', '優馬'],
-];
+// --- 存檔：單一 envelope ＋ 原子寫入 ---
 
-const POLL_INTERVAL_MS = 500;
-const DISCUSSION_LOG = '/tmp/day-discussion.log'; // 實時討論記錄（tail -f 可看）
-
-// --- 1) 組 15 個 AiPlayerDef ---
-const defs = CHARACTERS.map(([characterId, nickname], i) => ({ clientId: `ai-${i}`, nickname, characterId }));
-
-// --- 2) AI 控制器 + 遊戲引擎（engine callback 接進 AI 控制器） ---
-const ai = new AiController(defs, { messageCap: 100 });
-const events = []; // 所有 S→C 訊息（報告用）
-
-// 清空討論 log
-writeFileSync(DISCUSSION_LOG, '', 'utf-8');
-
-const game = new GameEngine('STAGE2', defs.map((d) => ({ clientId: d.clientId, nickname: d.nickname })), {
-  sendTo: (cid, m) => ai.handlePrivate(cid, m),
-  broadcast: (m, targets) => {
-    ai.handleBroadcast(m, targets);
-    events.push({ ts: Date.now(), type: m.type, ...m });
-    // 實時寫入討論 log（DAY_MESSAGE / WOLF_MESSAGE / DAY_READY_STATUS）
-    if (m.type === 'MESSAGE' || m.type === 'WOLF_MESSAGE' || m.type === 'DAY_READY_STATUS') {
-      const line = m.type === 'DAY_READY_STATUS'
-        ? `[READY] ${m.ready.map((r) => r.nickname).join(', ')} (${m.ready.length}/${m.total})`
-        : `[${new Date().toISOString().slice(11, 19)}] ${m.from}: ${m.text}`;
-      appendFileSync(DISCUSSION_LOG, line + '\n', 'utf-8');
-    }
-  },
-  onNightStepActive: (step, players) => ai.onNightStepActive(step, players),
-  onWolfSubphaseChange: (sub, round) => ai.onWolfSubphaseChange(sub, round),
-}, 100);
-ai.setGame(game);
-
-// --- 3) 開始遊戲（或從存檔恢復） ---
-if (RESUME_PATH) {
-  const snapshot = JSON.parse(readFileSync(RESUME_PATH, 'utf-8'));
-  game.restoreState(snapshot);
-  // 載入前段 events（報告用）
-  const eventsPath = RESUME_PATH.replace(/\.json$/, '.events.json');
-  try { events.push(...JSON.parse(readFileSync(eventsPath, 'utf-8'))); } catch {}
-  // 載入前段 AI log（報告用；跨段拼回完整 LLM 流程）
-  const logPath = RESUME_PATH.replace(/\.json$/, '.log.json');
-  try { ai.restoreLog(JSON.parse(readFileSync(logPath, 'utf-8'))); } catch {}
-  console.log(`[stage2] 從存檔恢復（${RESUME_PATH}），day=${snapshot.day}，events=${events.length}，直接進入 DAY_DISCUSSION`);
-} else {
-  game.start();
-  console.log(`[stage2] 遊戲已開始，目標：--stop-at ${STOP_AT}`);
+/** 原子寫入：先寫同目錄 temp 檔再 rename 到目標；失敗時清理 temp，絕不覆蓋舊檔。 */
+export function atomicWriteJson(finalPath, payload) {
+  mkdirSync(dirname(finalPath), { recursive: true });
+  const tmpPath = `${finalPath}.tmp.${process.pid}.${Math.random().toString(36).slice(2)}`;
+  try {
+    writeFileSync(tmpPath, JSON.stringify(payload, null, 2), 'utf-8');
+    renameSync(tmpPath, finalPath); // 同一 filesystem 的 rename 是原子替換
+  } catch (err) {
+    try { rmSync(tmpPath, { force: true }); } catch { /* temp 未建立成功，無需清理 */ }
+    throw err; // 舊檔維持原樣
+  }
 }
 
-// --- 4) 觀察：分階段 timeout 輪詢 ---
-let converged = false;
-let aborted = false;
-let externalStop = false;
-let stopPhase = null; // 記錄 stop 當下的 phase（避免 engine 推進後報告失真）
-process.on('SIGTERM', () => { externalStop = true; console.log('[stage2] 收到 SIGTERM，準備寫報告退出'); });
-process.on('SIGINT', () => { externalStop = true; console.log('[stage2] 收到 SIGINT，準備寫報告退出'); });
-let phaseTimeout = TIMEOUTS.NIGHT;
-let phaseStarted = Date.now();
-let lastMajorPhase = 'NIGHT';
-let lastProgressLog = Date.now();
-const PROGRESS_INTERVAL_MS = 600_000; // 每 10 分鐘輸出一次進度
+/**
+ * 組建單一 envelope：同一 tick 抓取 game/ai/events/aiLog，四段互不矛盾。
+ * phase 已不在 DAY_DISCUSSION 時 ai 為 null（存檔不可 resume，會印出警告）。
+ */
+export function buildEnvelope({ game, ai, events, stopAt }) {
+  const aiCheckpoint = ai.exportDayCheckpoint();
+  if (aiCheckpoint === null) {
+    console.warn('[stage2] ⚠️ 目前 phase 已不在 DAY_DISCUSSION；此存檔的 ai 段為 null，無法 --resume');
+  }
+  return {
+    schemaVersion: STAGE2_STATE_SCHEMA_VERSION,
+    savedAt: new Date().toISOString(),
+    stopAt,
+    game: game.saveState(),
+    ai: aiCheckpoint,
+    events: [...events],
+    aiLog: ai.getLog(),
+  };
+}
+
+/** 存單一 envelope（原子寫入）；失敗時丟出例外、舊檔保留。 */
+export function saveStage2State(path, parts) {
+  atomicWriteJson(path, buildEnvelope(parts));
+  console.log(`[stage2] 狀態存檔已寫入 ${path}（單一 envelope，可 --resume ${path} 接續）`);
+}
+
+/** 驗證 envelope 結構；回傳錯誤說明（無效）或 null（有效）。舊三檔格式與非 DAY_DISCUSSION 皆明確拒絕。 */
+export function validateEnvelope(env) {
+  if (!env || typeof env !== 'object' || Array.isArray(env)) return '存檔格式不明（頂層需為 JSON object）';
+  if (env.schemaVersion !== STAGE2_STATE_SCHEMA_VERSION) {
+    return `不支援的存檔格式（schemaVersion=${String(env.schemaVersion)}）：舊三檔格式（state + .events.json + .log.json）已停用，只能 resume 單一 envelope v${STAGE2_STATE_SCHEMA_VERSION}`;
+  }
+  if (!env.game || typeof env.game !== 'object') return 'envelope 缺少 game 段或格式無效';
+  if (env.game.phase !== 'DAY_DISCUSSION') return `只支援 DAY_DISCUSSION restore；存檔 game phase 為 ${String(env.game.phase)}`;
+  if (!Array.isArray(env.game.players) || env.game.players.length === 0) return 'game 段缺少 players 陣列或為空';
+  if (!env.ai || typeof env.ai !== 'object') return 'envelope 缺少 ai 段或無效（存檔時 phase 已不在 DAY_DISCUSSION 即無法 resume）';
+  if (env.ai.schemaVersion !== AI_DAY_CHECKPOINT_SCHEMA_VERSION) return `ai checkpoint 無效（schemaVersion=${String(env.ai.schemaVersion)}，預期 ${AI_DAY_CHECKPOINT_SCHEMA_VERSION}）`;
+  if (env.ai.phase !== 'DAY_DISCUSSION') return `ai checkpoint phase=${String(env.ai.phase)}；只支援 DAY_DISCUSSION`;
+  if (typeof env.game.day !== 'number' || env.game.day !== env.ai.day) return 'game 與 ai 段的 day 不一致';
+  if (!Array.isArray(env.events)) return 'envelope 缺少 events 段或無效';
+  if (!Array.isArray(env.aiLog)) return 'envelope 缺少 aiLog 段或無效';
+  return null;
+}
+
+/** 讀取並驗證存檔；舊格式 / 無效 / 非 DAY_DISCUSSION 皆明確丟出原因。 */
+export function loadEnvelope(path) {
+  let raw;
+  try {
+    raw = readFileSync(path, 'utf-8');
+  } catch (err) {
+    throw new Error(`無法讀取存檔 ${path}：${err.message}`);
+  }
+  let env;
+  try {
+    env = JSON.parse(raw);
+  } catch {
+    throw new Error(`存檔 ${path} 不是有效 JSON`);
+  }
+  const problem = validateEnvelope(env);
+  if (problem) throw new Error(problem);
+  return env;
+}
+
+// --- 恢復：barrier → game restore → ai import → ai resume ---
+
+/**
+ * 步驟 1：barrier → game.restoreState → ai.restoreLog → ai.importDayCheckpoint。
+ * barrier 避免 restoreState 送的 PHASE_CHANGED(DAY_DISCUSSION) 自動啟動白天 loop
+ * （否則會重做已完成階段）。import 對無效輸入是 safe no-op；這裡再驗證 import
+ * 真的有生效（runId 不再是 unstarted），否則明確丟出錯誤。
+ */
+export function stage2ResumeImport(game, ai, env) {
+  const problem = validateEnvelope(env);
+  if (problem) throw new Error(problem);
+  ai.setPhaseStartEnabled(false);
+  game.restoreState(env.game); // 它送出的 PHASE_CHANGED / DAY_READY_STATUS 廣播會被 barrier 吸收
+  ai.restoreLog(env.aiLog); // 縫回前段 LLM log（跨段報告用）
+  ai.importDayCheckpoint(env.ai);
+  const exported = ai.exportDayCheckpoint();
+  if (!exported || exported.runId.endsWith('-unstarted')) {
+    throw new Error('ai checkpoint 匯入未生效（roster/day/phase 或結構不符）；請確認存檔與本次 session 一致');
+  }
+  return exported;
+}
+
+/**
+ * 步驟 2：重新啟用白天自動啟動（供後續新的一天），再明確呼叫 resumeDayDiscussion。
+ * loop 從 import 的 stage 續跑：已完成階段不重做；只有 all AI ready 時才進 reconcile
+ * 階段並呼叫 game.reconcileDayReady()（推進到 DAY_VOTING）。
+ * 本函式不直接呼叫 reconcileDayReady，也不重播 publish/ready。
+ */
+export function stage2ResumeRun(game, ai) {
+  ai.setPhaseStartEnabled(true);
+  return ai.resumeDayDiscussion();
+}
+
+/** 完整 resume 流程（步驟 1 → 步驟 2，依序）。 */
+export async function resumeStage2State(game, ai, env) {
+  stage2ResumeImport(game, ai, env);
+  return stage2ResumeRun(game, ai);
+}
+
+// --- 觀察與 shutdown ---
 
 /** 輸出當前進度（每 10 分鐘一次） */
-function logProgress(s) {
+function logProgress(game, s, phaseStarted) {
   const elapsed = Math.round((Date.now() - phaseStarted) / 1000);
   const mins = Math.floor(elapsed / 60);
   const secs = elapsed % 60;
@@ -146,68 +238,193 @@ function logProgress(s) {
   }
 }
 
-while (true) {
-  if (externalStop) { stopPhase = game.getNightState().phase; break; }
-  const s = game.getNightState();
-  const major = currentMajorPhase(s.phase);
-
-  // 每 10 分鐘輸出進度
-  if (Date.now() - lastProgressLog >= PROGRESS_INTERVAL_MS) {
-    lastProgressLog = Date.now();
-    logProgress(s);
-  }
-
-  // 階段切換 → 重置該階段的 timeout
-  if (major !== lastMajorPhase) {
-    lastMajorPhase = major;
-    phaseStarted = Date.now();
-    phaseTimeout = TIMEOUTS[major] ?? TIMEOUTS.DAY;
-    console.log(`[stage2] 進入 ${s.phase}（timeout ${phaseTimeout > 0 ? phaseTimeout / 1000 + 's' : '不限時'}）`);
-  }
-
-  // 目標達成
-  if (isTargetReached(s.phase)) {
-    converged = true;
-    stopPhase = s.phase;
-    break;
-  }
-  // 狼會議 abort
-  if (s.wolfMeetingAborted) {
-    aborted = true;
-    stopPhase = s.phase;
-    break;
-  }
-  // 當前階段 timeout（0 = 不限時：直接等到 phase 推進或 process 被 kill）
-  if (phaseTimeout > 0 && Date.now() - phaseStarted > phaseTimeout) {
-    console.error(`[stage2] ⚠️ ${s.phase} 階段超時（${phaseTimeout / 1000}s）`);
-    stopPhase = s.phase;
-    break;
-  }
-
-  await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-}
-// 給引擎一點時間把剩餘 broadcast 送完
-await new Promise((r) => setTimeout(r, 3000));
-
-// --- 5) 報告（完整：含前段 events + 本段 events） ---
-const report = buildReport(game, ai, events, defs, converged, aborted, STOP_AT, stopPhase);
-writeFileSync(REPORT_PATH, report, 'utf-8');
-const status = converged ? `${STOP_AT} 達成` : aborted ? '未收斂（100 則白板上限）' : '未收斂（階段 timeout）';
-console.log(`[stage2] ${status}；報告已寫入 ${REPORT_PATH}`);
-
-// --- 5.5) 存檔（若指定 --save-state；含 events 供下次 resume 合併報告） ---
-if (SAVE_STATE_PATH) {
-  const snapshot = game.saveState();
-  writeFileSync(SAVE_STATE_PATH, JSON.stringify(snapshot, null, 2), 'utf-8');
-  writeFileSync(SAVE_STATE_PATH.replace(/\.json$/, '.events.json'), JSON.stringify(events, null, 2), 'utf-8');
-  writeFileSync(SAVE_STATE_PATH.replace(/\.json$/, '.log.json'), JSON.stringify(ai.getLog(), null, 2), 'utf-8');
-  console.log(`[stage2] 狀態存檔已寫入 ${SAVE_STATE_PATH}（可用 --resume ${SAVE_STATE_PATH} 接續）`);
+/**
+ * SIGINT/SIGTERM：若有 in-flight 的 DAY_DISCUSSION continuation，等待它安全結束再存 snapshot。
+ * resumeDayDiscussion 是 single-flight：有進行中 run 時回傳同一個 promise。
+ * 上限到期後仍在跑也沒關係——目前 tick 導出的 snapshot 仍是一致的（在飛的 LLM 結果只是
+ * 未包含在本次存檔；下次 resume 會依 pending 狀態補做）。
+ * resume promise 一律明確 catch（race 落敗或 run 自身 reject 時記錄錯誤，不丟 unhandled rejection）。
+ */
+export async function settleInFlightWork(game, ai) {
+  if (game.getNightState().phase !== 'DAY_DISCUSSION') return;
+  const probe = ai.exportDayCheckpoint();
+  if (!probe || probe.runId.endsWith('-unstarted')) return; // 沒有進行中的 continuation，直接走安全點
+  const resume = ai.resumeDayDiscussion();
+  // 明確 catch：timeout 贏走 race 時，落敗的 resume promise 不得變成 unhandled rejection
+  const settled = resume.catch((err) => {
+    console.error(`[stage2] ⚠️ 在飛的 discussion run 失敗：${err?.message ?? err}（snapshot 仍依目前 tick 一致寫入，下次 resume 補做）`);
+  });
+  const timeout = new Promise((done) => {
+    const timer = setTimeout(done, SIGINT_SETTLE_TIMEOUT_MS);
+    timer.unref(); // 不要讓這個上限 timer 撐住 event loop
+  });
+  await Promise.race([settled, timeout]);
 }
 
-// --- 6) 結束 ---
-ai.destroy();
-game.destroy();
-process.exit(converged ? 0 : 1);
+/** 註冊 SIGINT/SIGTERM：第一次訊號即停止新工作（回傳可觀測的 hooks 狀態）。 */
+function createShutdownHooks() {
+  const hooks = { requested: false, signal: null };
+  const onSignal = (sig) => {
+    if (hooks.requested) return;
+    hooks.requested = true;
+    hooks.signal = sig;
+    console.log(`[stage2] 收到 ${sig}：停止新工作；等待進行中的 continuation/LLM 安全結束後再存一致 snapshot`);
+  };
+  process.on('SIGTERM', () => onSignal('SIGTERM'));
+  process.on('SIGINT', () => onSignal('SIGINT'));
+  return hooks;
+}
+
+/** 分階段 timeout 輪詢觀察；目標達成／狼會議 abort／階段超時／外部訊號 → break。 */
+async function runObservationLoop(game, stopAt, isStopped) {
+  let converged = false;
+  let aborted = false;
+  let phaseTimeout = TIMEOUTS.NIGHT;
+  let phaseStarted = Date.now();
+  let lastMajorPhase = 'NIGHT';
+  let lastProgressLog = Date.now();
+  while (true) {
+    if (isStopped()) break; // SIGINT/SIGTERM：停止新工作
+    const s = game.getNightState();
+    const major = currentMajorPhase(s.phase);
+    if (Date.now() - lastProgressLog >= PROGRESS_INTERVAL_MS) {
+      lastProgressLog = Date.now();
+      logProgress(game, s, phaseStarted);
+    }
+    if (major !== lastMajorPhase) {
+      lastMajorPhase = major;
+      phaseStarted = Date.now();
+      phaseTimeout = TIMEOUTS[major] ?? TIMEOUTS.DAY;
+      console.log(`[stage2] 進入 ${s.phase}（timeout ${phaseTimeout > 0 ? phaseTimeout / 1000 + 's' : '不限時'}）`);
+    }
+    if (isTargetReached(s.phase, stopAt)) {
+      converged = true;
+      break;
+    }
+    if (s.wolfMeetingAborted) {
+      aborted = true;
+      break;
+    }
+    if (phaseTimeout > 0 && Date.now() - phaseStarted > phaseTimeout) {
+      console.error(`[stage2] ⚠️ ${s.phase} 階段超時（${phaseTimeout / 1000}s）`);
+      break;
+    }
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+  }
+  return { converged, aborted };
+}
+
+/** 組 15 個 AiPlayerDef 的 AiController ＋ GameEngine（engine callback 接進 AI 控制器）。 */
+function buildGameAndAi() {
+  const defs = CHARACTERS.map(([characterId, nickname], i) => ({ clientId: `ai-${i}`, nickname, characterId }));
+  const ai = new AiController(defs, { messageCap: 100 });
+  const events = []; // 所有 S→C 訊息（報告用）
+  writeFileSync(DISCUSSION_LOG, '', 'utf-8');
+  const game = new GameEngine('STAGE2', defs.map((d) => ({ clientId: d.clientId, nickname: d.nickname })), {
+    sendTo: (cid, m) => ai.handlePrivate(cid, m),
+    broadcast: (m, targets) => {
+      ai.handleBroadcast(m, targets);
+      events.push({ ts: Date.now(), type: m.type, ...m });
+      // 實時寫入討論 log（MESSAGE / WOLF_MESSAGE / DAY_READY_STATUS）
+      if (m.type === 'MESSAGE' || m.type === 'WOLF_MESSAGE' || m.type === 'DAY_READY_STATUS') {
+        const line = m.type === 'DAY_READY_STATUS'
+          ? `[READY] ${m.ready.map((r) => r.nickname).join(', ')} (${m.ready.length}/${m.total})`
+          : `[${new Date().toISOString().slice(11, 19)}] ${m.from}: ${m.text}`;
+        appendFileSync(DISCUSSION_LOG, line + '\n', 'utf-8');
+      }
+    },
+    onNightStepActive: (step, players) => ai.onNightStepActive(step, players),
+    onWolfSubphaseChange: (sub, round) => ai.onWolfSubphaseChange(sub, round),
+  }, 100);
+  ai.setGame(game);
+  return { game, ai, defs, events };
+}
+
+/** 從存檔恢復：驗證 envelope → barrier → restore → import → 明確 resume。 */
+function startResumedGame(game, ai, events, resumePath) {
+  const env = loadEnvelope(resumePath); // 舊格式 / 非 DAY_DISCUSSION / 損毀 → 明確 throw
+  events.push(...env.events); // 載入前段 events（報告用）
+  stage2ResumeImport(game, ai, env);
+  // 明確 resume（single-flight）；fire-and-forget 的 promise 要明確 catch，reject 時記錄而非 unhandled rejection
+  stage2ResumeRun(game, ai).catch((err) => {
+    console.error(`[stage2] ⚠️ resume 執行失敗：${err?.message ?? err}（遊戲照跑，最終以收斂狀態定 exit code）`);
+  });
+  console.log(`[stage2] 從存檔恢復（${resumePath}），day=${env.game.day}，stage=${env.ai.stage}，events=${events.length}，進入 DAY_DISCUSSION`);
+}
+
+async function main() {
+  const stopAt = getArg('--stop-at', 'DAY_RESULT');
+  const stopAtProblem = validateStopAt(stopAt);
+  if (stopAtProblem) {
+    console.error(`[stage2] 啟動參數錯誤：${stopAtProblem}`);
+    process.exit(1);
+  }
+  const reportPath = getArg('--report', process.env.REPORT || DEFAULT_REPORT_BY_PHASE[stopAt] || 'ai-trace-stage2-output.md');
+  const saveStatePath = getArg('--save-state', null);
+  const resumePath = getArg('--resume', null);
+  const { game, ai, defs, events } = buildGameAndAi();
+
+  if (resumePath) {
+    startResumedGame(game, ai, events, resumePath);
+  } else {
+    game.start();
+    console.log(`[stage2] 遊戲已開始，目標：--stop-at ${stopAt}`);
+  }
+
+  const shutdown = createShutdownHooks();
+  const { converged, aborted } = await runObservationLoop(game, stopAt, () => shutdown.requested);
+  if (shutdown.requested) {
+    await settleInFlightWork(game, ai); // 停止新工作，等 in-flight LLM 安全結束
+  } else {
+    await new Promise((r) => setTimeout(r, 3000)); // 給引擎一點時間把剩餘 broadcast 送完
+  }
+
+  const stopPhase = game.getNightState().phase;
+  const report = buildReport(game, ai, events, defs, converged, aborted, stopAt, stopPhase);
+  writeFileSync(reportPath, report, 'utf-8');
+  const status = converged
+    ? `${stopAt} 達成`
+    : shutdown.requested ? `中斷（${shutdown.signal}）`
+    : aborted ? '未收斂（100 則白板上限）'
+    : '未收斂（階段 timeout）';
+  console.log(`[stage2] ${status}；報告已寫入 ${reportPath}`);
+
+  let saveFailed = false;
+  if (saveStatePath) {
+    try {
+      saveStage2State(saveStatePath, { game, ai, events, stopAt });
+    } catch (err) {
+      saveFailed = true;
+      console.error(`[stage2] ⚠️ 存檔失敗：${err.message}（舊檔未覆寫；--save-state 失敗視為本輪失敗）`);
+    }
+  }
+  ai.destroy();
+  game.destroy();
+  process.exit(converged && !saveFailed ? 0 : 1); // 存檔失敗 = 1：即使收斂也不回報成功（resume 資料缺了）
+}
+
+/** 判斷 path 是否指向本檔；Windows 路徑大小寫 insensitive（同一檔），Linux 維持嚴格比較。 */
+export function isMainModule(path) {
+  if (path === undefined) return false;
+  const self = fileURLToPath(import.meta.url);
+  const entry = resolve(path);
+  return process.platform === 'win32' ? entry.toLowerCase() === self.toLowerCase() : entry === self;
+}
+
+// 只有直接執行本檔時才跑 main（被測試 import 時不啟動遊戲、不註冊訊號）
+const isMain = (() => {
+  try {
+    return isMainModule(process.argv[1]);
+  } catch {
+    return false;
+  }
+})();
+if (isMain) {
+  main().catch((err) => {
+    console.error(`[stage2] 致命錯誤：${err?.message ?? err}`);
+    process.exit(1);
+  });
+}
 
 // ============================================
 // 報告產生
@@ -228,9 +445,9 @@ function fmtJson(x) {
 /**
  * 狼會議流程（loop 制）：
  * - 初始草稿（WOLF_SPEECH log）
-  * - 每輪：JUDGE（judge 選言）→ WOLF_STANCE（其他狼回應：vote/speak/wait）
+ * - 每輪：JUDGE（judge 選言）→ WOLF_STANCE（其他狼回應：vote/speak/wait）
  * - 投票（WOLF_KILL）
-  * - 用 WOLF_SPEECH_SELECTED 事件分組輪次
+ * - 用 WOLF_SPEECH_SELECTED 事件分組輪次
  */
 function wolfMeetingFlowSection(log, events, players) {
   const L = [];
@@ -493,7 +710,7 @@ function dayDiscussionSection(log, events, players) {
   // 最終 ready 狀態
   const lastReady = readyEvents[readyEvents.length - 1];
   if (lastReady) {
-    L.push(`**最終：** ${lastReady.ready.length}/${lastReady.total} ready（${lastReady.ready.map((r) => r.nickname).join(', ')}）`);
+    L.push(`**最終：** ${lastReady.ready.length}/${lastReady.total} ready（${lastReady.ready.map((r) => r.nickname).join('、')}）`);
   }
   L.push('');
   return L;
