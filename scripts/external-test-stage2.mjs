@@ -691,9 +691,10 @@ export function dayDiscussionSection(log, events, players) {
     const msg = dayMessages[i];
     const tEnd = (i + 1 < dayMessages.length ? dayMessages[i + 1].ts : Infinity);
 
-    L.push(`### 第 ${i + 1} 輪：${msg.from} 發言`);
+    L.push(`### 輪次 ${i + 1}`);
     L.push('');
-    L.push(`- [${fmtTs(msg.ts)}] 「${msg.text}」`);
+    L.push(`- **Judge 選出：** ${msg.from} → 發布「${msg.text}」`);
+    L.push(`- **${msg.from}：** ✅ ready`);
     L.push('');
 
     // 該輪的 respond 決策（DAY_STANCE entries 在 [msg.ts, tEnd) 範圍內，排除發言者；白天回應的 log kind 是 DAY_STANCE 不是 WOLF_STANCE）

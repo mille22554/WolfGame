@@ -479,7 +479,10 @@ test('T12：dayDiscussionSection——DAY_STANCE 渲染為「其他 AI 回應」
     { ts: base + 1600, kind: 'WOLF_STANCE', clientId: 'ai-c', round: 1, attempt: 0, response: {}, parsed: { action: 'ready' } },
   ];
   const section = dayDiscussionSection(log, events, players).join('\n');
-  assert.ok(section.includes('### 第 1 輪：A 發言'), '流程摘要（輪次標題）保留');
+  assert.ok(section.includes('### 輪次 1'), '流程摘要使用輪次標題');
+  assert.ok(section.includes('Judge 選出：** A → 發布「A 先發言」'), '白天流程應顯示 Judge 選出與發布內容');
+  assert.ok(section.includes('**A：** ✅ ready'), '發言者 ready 狀態應保留');
+  assert.ok(!section.includes('2026-01-01T00:00:00.000Z'), '白天流程不應使用 timestamp 發言格式');
   assert.ok(section.includes('B：✅ ready'), 'DAY_STANCE 應被渲染為白天回應');
   assert.ok(!section.includes('C：✅ ready'), 'WOLF_STANCE 不應被誤渲染為白天回應');
 });
