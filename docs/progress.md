@@ -5,7 +5,7 @@
 
 ## 目前狀態
 
-**卡在哪：** 無阻塞。私頻（狼／共有者）已完成「草稿＝行動筆記 → EXPAND → 完整發言進白板」；白天 V-Day 已完成實作、本機驗證與第一段 server `medium` 測試。5 分鐘內完成全部 DAY_STRATEGY 與 13/14 個 DAY_SPEACH 草稿，**尚未輪到 judge／EXPAND，因此還沒有公頻發言**。
+**卡在哪：** 5 分鐘分段法無法跨段保存「已完成但尚未 publish 的白天草稿」。第一段完成 14 策略＋13/14 草稿；第二段 resume 後重跑 14 策略＋14/14 草稿，並在 08:09:46 啟動 judge，但 judge 回應尚未完成就中斷，state 裡仍沒有 pending drafts。**每個 5 分鐘新 segment 都會重做策略／草稿，無法靠反覆 resume 保證前進到 EXPAND。**
 
 - ✅ **共有者 prompt V8 落地**（2026-09-24，oracle 雙共有者第 1 夜流程驗證後落地）：三函數（`masonContext`／`buildMasonDraftPrompts`／`buildMasonResponsePrompts`）全面對齊狼版編排，只有身分差異；草稿定位改為「行動筆記非發言稿」
 - ✅ **私頻稱呼修正**（2026-09-24，stage 1 實測發現＋oracle 驗證後落地）：2 人私頻用「你／名字＋你」，禁「他／她」與「你們」
@@ -27,7 +27,7 @@
 - ✅ **persona 修正**：shinichi/yuko/tatuya 的「時間線/分鐘/看到的現象」範例改為發言矛盾型（真一「昨晚和誰同點、時間差三分鐘」即源自 persona 範例腦補）
 - ✅ 白天測試紀錄（`stage2-day-report.md`）：狼會議不完整是舊格式 `night1.json` 無 `.log.json`（非渲染 bug）——要完整狼會議需重跑整局 night
 - ✅ **白天開場「捏造他人立場」幻覺修復**：良子第一句「不跟佐雪的立場走」——佐雪全程零發言，立場是憑空捏造（白板空＋強迫點名的 prompt 側效果）。system prompt 證據邊界新增「禁止假設任何玩家持某立場/講過什麼，除非實際出現在白板」；strategy/draft/response prompt 加降級規則「只能質疑已發言的實際內容，沒人發言就談自己觀察」（參考 `docs/ai-rp-prompt-research.md` §4 anti-fabrication）
-- ⏳ **白天 V-Day 行為驗證**：先以全新 oracle sessions 驗證白天草稿／EXPAND，再通過安全 runner 到 server 跑 stage 2；目前只完成實作、build 與本機測試
+- ⏳ **白天 V-Day 行為驗證**：5 分鐘分段已證明無法保存 pending drafts；下一步須在「單次不中斷跑到首則公頻稿」與「持久化 pending day drafts」之間選一項
 
 **私頻稱呼修正（2026-09-24，stage 1 實測發現、oracle 驗證通過後落地）：**
 
@@ -76,9 +76,11 @@
 - **完成進度**：14/14 `DAY_STRATEGY` 完成；13/14 `DAY_SPEECH` 草稿完成，第 14 個在 5 分鐘 SIGINT 時中止；已完成的 27 筆皆 attempt=1、零重試
 - **尚未發生**：因全部策略＋草稿已吃掉 5 分鐘，尚未進入 `JUDGE`／`EXPAND`／`MESSAGE`；故這不是「EXPAND 失敗」或「引擎不發言」，而是時序預算尚未走到 publish
 - **checkpoint**：`/tmp/day-medium-5m.json`（另有 `.events.json`／`.log.json`），可從這裡續跑到 judge／EXPAND／公頻
+- **segment 2（08:05–08:10 UTC）**：從 `/tmp/day-medium-5m.json` resume；再次完成 14 策略＋14/14 草稿；08:09:46 已送出 judge request，但回應尚未完成就收到 SIGINT；沒有完成 JUDGE／EXPAND，最終 state 仍為 `ready=0`、`dayMessages=0`
+- **5 分鐘限制根因**：`game.saveState()` 只保存 `dayMessages`／`dayReady` 等 engine state，不保存已完成但尚未 publish 的策略／草稿集合；`runDayDiscussion()` resume 時會無條件重跑 `DAY_STRATEGY` 與所有未 ready AI 的 `DAY_SPEECH`。因此再跑第三個 5 分鐘 segment 只會重做同一輪，不能前進到 EXPAND
 - **報告**：server `/tmp/ai-trace-stage2-day.md`；本機 `C:\Users\user\Desktop\FrankTests\Temp\ai-trace-stage2-day.md`
 - **本機驗證**：build 通過；lobby-server 33/33；mock HTTP server 確認實際 request JSON 含 `reasoning_effort: "medium"`
-- **下一步**：先看本輪報告／草稿；確認後再從 checkpoint 分段續跑，至少直到出現第一筆 `JUDGE → EXPAND → MESSAGE`
+- **下一步**：不要再重複 5 分鐘 resume；先決定 (A) 單次不中斷跑到首則 `JUDGE → EXPAND → MESSAGE`，或 (B) 修改 engine/harness 持久化 pending day drafts／策略狀態
 
 **私頻 EXPAND 機制＋草稿要點化（2026-09-24，oracle 兩段式驗證通過後落地）：**
 
@@ -170,8 +172,8 @@
 - 併發實測補充（14 路全過）：5 併發 967 tokens 全 200；14 併發 ~9.2K tokens 全 200、~49s 完成（SGLang `--max-running-requests 1` 依 priority 排隊）。先前 5 併發測試因 PowerShell 管道把中文打成 `?`（prompt=65 是亂碼），改用 base64 上傳後為正常 prompt（~79 tokens）
 
 **下一步（依序）：**
-1. 先看本輪 5 分鐘報告與 13 筆草稿，確認是否要繼續 `medium`
-2. 若繼續，從 `/tmp/day-medium-5m.json` resume，不重跑已完成的 14 策略／13 草稿；仍設 `LLM_REASONING_EFFORT=medium`，每 5 分鐘優雅 SIGINT 存一段
+1. 先看本輪 5 分鐘報告與 13 筆草稿，確認是否要繼續 `medium`；不要再假設 5 分鐘 checkpoint 能跨段前進
+2. 若繼續，優先選單次不中斷跑到首則公頻稿；它會重做一次策略／草稿，但能繼續 judge／EXPAND。若要真正支援 5 分鐘分段，必須先持久化 pending drafts／策略狀態
 3. 直到報告出現第一條 `JUDGE → EXPAND → MESSAGE`；用**全新 oracle session** 獨立盲評草稿與展開稿，judge 不參與生成
 4. 驗收公頻發言、收斂速度、EXPAND attempt/fallback、簡體字與策略洩漏；尤其確認狼的刀人目標／占卜結果不會被帶進公頻
 5. 若品質有問題 → 先用 oracle 定位 prompt 問題，再調 prompt／重跑；不直接從單一 5 分鐘樣本下結論

@@ -693,7 +693,7 @@ AI 狼依 §12.3 的 loop 驅動（非 SpeechScheduler 管線，是持續對話�
 >
 > 這是白天 **V-Day** 概念規格：草稿是**行動筆記**（判斷誰／依據／要表態什麼），完整發言由 EXPAND 產生（§12.4）。
 
-**進入時的狀態重建（resume 友善）**：從 `game.getDayState()` 取回 `dayMessages` 補進本地 dayBoard、取回 `dayReady` 補進 `dayReadyMap`；**只讓未 ready 的 AI 參與**。全部已 ready → 直接結束（不重跑策略與發言）。
+**進入時的狀態重建（resume 有限）**：從 `game.getDayState()` 取回 `dayMessages` 補進本地 dayBoard、取回 `dayReady` 補進 `dayReadyMap`；**只讓未 ready 的 AI 參與**。全部已 ready → 直接結束（不重跑策略與發言）。但 save state **不保存尚未 publish 的 pending drafts／策略完成狀態**，resume 會重跑 `DAY_STRATEGY` 與全部未 ready AI 的 `DAY_SPEECH`；所以 5 分鐘 SIGINT 分段不能保證跨段前進到 judge／EXPAND。
 
 **流程：**
 
@@ -749,8 +749,8 @@ DAY_DISCUSSION 開始（引擎 broadcast PHASE_CHANGED）
 
 **仍待做【目標／待實作】：**
 
-- **白天 V-Day 行為驗證（部分完成）**：`medium` 第一段 server 測試於 5 分鐘內完成 14/14 `DAY_STRATEGY` 與 13/14 `DAY_SPEECH`，28/28 個實際 request 都帶 `reasoning_effort=medium`；因 SGLang `max-running-requests=1`，尚未走到 `JUDGE`／`EXPAND`／`MESSAGE`。checkpoint `/tmp/day-medium-5m.json` 可續跑；公頻品質仍待後續分段與 oracle 驗證
-- **公頻策略洩漏觀察**（尚未驗證 AI 白天 expanded 發言是否洩漏夜頻策略／身分）；目前**沒有**「白天不得公開夜間私密資訊」的硬規則，等 expanded 公頻稿出現後再決定是否加入
+- **白天 V-Day 行為驗證（兩段 5 分鐘，受 checkpoint 粒度限制）**：segment 1 完成 14 策略＋13/14 草稿；segment 2 resume 後重跑 14 策略＋14/14 草稿，並在 08:09:46 啟動 judge，但回應尚未完成就中斷。兩段 state 都仍 `ready=0`／`dayMessages=0`；segment 1 的 28/28、segment 2 的 29/29 實際 request 均帶 `reasoning_effort=medium`，但尚未驗證公頻 EXPAND；需單次連續跑到首則 `MESSAGE`，或先實作 pending day drafts 持久化
+- **公頻策略洩漏觀察**：尚無 expanded 公頻稿可驗證；目前**沒有**「白天不得公開夜間私密資訊」的硬規則，等單次跑到首則 `MESSAGE` 後再裁示
 
 ### 13.7 模組
 
