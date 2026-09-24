@@ -140,7 +140,7 @@ export declare class AiController {
     private eligibleTargets;
     /** 狼 wolf 情境（system prompt 附加：Two-Level Split 結構） */
     private wolfContext;
-    /** 共有者情境（system prompt 附加：共有者夥伴 + 私頻說明） */
+    /** 共有者情境（system prompt 附加：Two-Level Split，與 wolfContext 同構；V8） */
     private masonContext;
     /** 草稿 prompt（獨立出稿：speech + stance）；輸出 {"speech":"...", "stance":"投XXX"|"資訊不足"} */
     private buildDraftPrompts;
