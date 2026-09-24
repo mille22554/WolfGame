@@ -562,12 +562,17 @@ export class AiController {
             return { type: 'speak', speech: p.speech.trim(), stance: p.stance.trim() };
         return { type: 'wait' };
     }
-    // --- 私頻會議通用（wolf / mason）：把選中的草稿要點展開成完整發言 ---
-    /** 展開 prompt：把選中的行動筆記（草稿要點）展開成該角色在會議上真正會說的話；輸出 {"speech":"完整發言"} */
+    // --- 會議／白天討論通用：把選中的草稿要點展開成完整發言 ---
+    /** 展開 prompt：把選中的行動筆記（草稿要點）展開成該角色真正會說的話；輸出 {"speech":"完整發言"} */
     buildExpandPrompts(entry, draftSpeech, meeting) {
-        const user = `你剛才在私頻會議上出了一份行動筆記。把它講成你在會議上真正會說的話。\n\n行動筆記：\n${draftSpeech}\n\n要求：\n- **用你的角色語氣重述**成你在會議上真正會說的話——不要照抄筆記的寫法\n- 不要新增筆記裡沒有的行動、對象或結論；但你可以用自己的說話方式重寫\n- 2-4 句\n- 排版：超過 50 字換行分段，≤3 段，順序＝判斷/結論→動作→給隊友提醒\n- 全繁體中文\n\nJSON：{"speech": "完整發言"}`;
+        const isDay = meeting === 'day';
+        const channel = isDay ? '白天討論（公頻）' : '私頻會議';
+        const dayOnly = isDay ? '\n- 不要說「沒人發言」「目前沒人發言」' : '\n- 2-4 句';
+        const order = isDay ? '判斷/結論→動作/表態' : '判斷/結論→動作→給隊友提醒';
+        const user = `你剛才在${channel}上出了一份行動筆記。把它講成你真正會說的話。\n\n行動筆記：\n${draftSpeech}\n\n要求：\n- **用你的角色語氣重述**成你真正會說的話——不要照抄筆記的寫法\n- 不要新增筆記裡沒有的行動、對象或結論；但你可以用自己的說話方式重寫${dayOnly}\n- 排版：超過 50 字換行分段，≤3 段，順序＝${order}\n- 全繁體中文\n\nJSON：{"speech": "完整發言"}`;
+        const context = meeting === 'wolf' ? this.wolfContext(entry) : meeting === 'mason' ? this.masonContext(entry) : this.dayContext(entry);
         return [
-            { role: 'system', content: `${this.buildSystemPrompt(entry)}\n${meeting === 'wolf' ? this.wolfContext(entry) : this.masonContext(entry)}` },
+            { role: 'system', content: `${this.buildSystemPrompt(entry)}\n${context}` },
             { role: 'user', content: user },
         ];
     }
@@ -632,7 +637,7 @@ export class AiController {
             `禁止空泛策略：「觀察局勢」「引導討論」「見機行事」「呼籲冷靜」這類都算不合格。`,
             `禁止把「假設某人的立場」當作策略——例如「不跟佐雪的立場走」是無效的，因為佐雪根本沒發表過立場。`,
             ``,
-            `用一句話（≤50字）寫下你今天白天的策略。`,
+            `寫下你今天白天的策略：判斷誰、依據是什麼、你要怎麼表態；不要空泛。`,
             `回覆格式（JSON）：{"strategy": "你的策略"}`,
         ].filter(Boolean).join('\n');
         return [
@@ -682,7 +687,10 @@ export class AiController {
             const selected = await this.judgePickDayDraft(drafts);
             if (!selected)
                 break;
-            this.game.sendDayMessage(selected.player.clientId, selected.speech);
+            // ②.5 展開：把選中的草稿要點展開成完整發言（重試全失敗 → fallback 草稿原文，不阻塞討論）
+            const selectedEntry = this.entries.get(selected.player.clientId);
+            const expanded = selectedEntry ? await this.expandSpeech(selectedEntry, selected.speech, 'day') : selected.speech;
+            this.game.sendDayMessage(selected.player.clientId, expanded);
             // 發言者已發言 → toggle ready（無條件；dayReadyMap 同步：ON→true、OFF→false）
             this.dayReadyMap.set(selected.player.clientId, !this.dayReadyMap.get(selected.player.clientId));
             this.game.handleToggleVoteReady(selected.player.clientId);
@@ -694,7 +702,7 @@ export class AiController {
                 const entry = this.entries.get(p.clientId);
                 if (!entry)
                     return;
-                const resp = await this.dayRespond(p, entry, selected.speech, 100 + i);
+                const resp = await this.dayRespond(p, entry, expanded, 100 + i);
                 if (!this.game)
                     return;
                 if (resp.type === 'ready') {
@@ -958,6 +966,32 @@ export class AiController {
             '你寫的是筆記，之後會有人把它展開成完整發言；你不需要把它講好講滿。',
         ].filter(Boolean).join('\n');
     }
+    /** 白天情境（system prompt 附加：Two-Level Split，全角色共用；與 wolfContext/masonContext 同構） */
+    dayContext(entry) {
+        return [
+            '## Level 1 策略核心（優先於角色表現）',
+            `你是「${entry.def.nickname}」。你的角色目標由你所扮演的角色決定；白天要做出對這個目標最有利的選擇。`,
+            '判斷其他玩家時，能用的公開證據是發言：某人實際講過的內容、前後矛盾、表態變化、投票行為。',
+            '',
+            '**禁止：** 質疑還沒發言的人；假設某人持某立場；編造別人講過的話；只談討論方法（「先定規則」「口徑要公開」「逐條比對」）——那是空轉，不推進討論。',
+            '**正確：** 用名字指稱玩家，不用「他／她」；引用對方實際講過的具體內容；講清楚你對某個玩家的判斷。',
+            '',
+            '## 戰術字典',
+            '- 依據質疑：引用某人實際講過的句子，指出矛盾。',
+            '- 拉回人身上：有人談空泛規則時，把它轉成對具體玩家的判斷。',
+            '- 表態與投票：準備好投票前，先讓別人知道你的判斷。',
+            '',
+            '## 勝利綁定',
+            '每步服務兩軸之一：你的角色目標／白天存活與話語權。',
+            '',
+            '## Level 2 角色（只影響決策）',
+            '你的角色只決定你的決策偏好（敢不敢跳、保守或冒進、相信誰），不決定措辭。',
+            '草稿只寫行動與決策重點；用名字稱呼玩家。',
+            'speech 是行動筆記，不是發言稿：用短句列重點（判斷誰／依據是什麼／要表態什麼），不需要完整敘述。',
+            '不要寫你等一下要說的逐字台詞——那是之後才決定的。',
+            '你寫的是筆記，之後會被展開成完整發言；你只負責決策重點，不需要完成逐字發言。',
+        ].filter(Boolean).join('\n');
+    }
     /** 草稿 prompt（獨立出稿：speech + stance）；輸出 {"speech":"...", "stance":"投XXX"|"資訊不足"} */
     buildDraftPrompts(entry) {
         const aliveList = (this.game?.getPlayers() ?? []).filter((p) => p.alive).map((p) => p.nickname).join('、');
@@ -1145,8 +1179,9 @@ export class AiController {
             `目前的討論：`,
             boardText,
             ``,
-            `任務：發表你的看法（一句話，≤50字），並表明你是否準備投票了。`,
-            `要求：用你的角色語氣說話。不要說「沒人發言」「目前沒人發言」。要有具體內容（質疑、分析、表態）。`,
+            `任務：寫下你的行動筆記——① 你判斷誰、依據是對方實際講過的什麼 ② 你準備投票了嗎。`,
+            `speech 只寫行動與決策重點：判斷誰／依據是什麼／要表態什麼。**寫成短句要點，每行一個重點，不要寫成完整敘述句**——這是筆記不是發言稿，之後會被展開成完整發言。`,
+            `要求：不要說「沒人發言」「目前沒人發言」。要有具體內容（質疑、分析、表態）。`,
             `⚠️ 這是純口頭推論遊戲。沒有路徑、軌跡、不在場證明、操作記錄。唯一證據：發言內容、邏輯矛盾、表態變化、投票行為。`,
             `⚠️ 發言要針對「具體玩家」：質疑誰、支持誰、分析誰的發言。點名從存活玩家中選。`,
             `但只能質疑「已發過言」的玩家的實際內容。若目前沒人發言，就談你觀察到什麼、想先聽誰表態——不要質疑沒發言的人，更不要假設任何人的立場。`,
@@ -1155,13 +1190,13 @@ export class AiController {
             `發言前：根據目前白板狀況，你的策略要微調嗎？要的話先寫出更新。`,
             ``,
             `回覆格式（JSON）：`,
-            `{"strategy_update": "更新後的策略" 或 null, "speech": "你要說的話", "stance": "準備好了"}`,
+            `{"strategy_update": "更新後的策略" 或 null, "speech": "你要寫的行動筆記", "stance": "準備好了"}`,
             `或`,
-            `{"strategy_update": null, "speech": "你要說的話", "stance": "資訊不足"}`,
+            `{"strategy_update": null, "speech": "你要寫的行動筆記", "stance": "資訊不足"}`,
             `（「準備好了」＝你講完了，準備投票；「資訊不足」＝你還想再聽聽；strategy_update 為 null 表示策略不變）`,
         ].filter(Boolean).join('\n');
         return [
-            { role: 'system', content: this.buildSystemPrompt(entry) },
+            { role: 'system', content: `${this.buildSystemPrompt(entry)}\n${this.dayContext(entry)}` },
             { role: 'user', content: user },
         ];
     }
@@ -1183,10 +1218,11 @@ export class AiController {
             `聽完這段發言，你的策略需要調整嗎？需要就寫出更新。`,
             `然後決定你的反應（三選一）：`,
             `1. 我講完了，準備投票 → {"action": "ready"}`,
-            `2. 我要補充 → {"action": "speak", "speech": "你要說的話（≤50字）", "stance": "準備好了" 或 "資訊不足"}`,
+            `2. 我要補充 → {"action": "speak", "speech": "行動筆記要點（判斷誰／依據／要表態什麼）", "stance": "準備好了" 或 "資訊不足"}`,
             `3. 我先聽聽 → {"action": "wait"}`,
             ``,
-            `要求：同意就簡短。要講就講新的角度，不要重複別人講過的。用你的角色語氣。`,
+            `要求：同意就簡短。要講就講新的角度，不要重複別人講過的。`,
+            `speech 只寫行動與決策重點：判斷誰／依據是什麼／要表態什麼。**寫成短句要點，每行一個重點，不要寫成完整敘述句**——這是筆記不是發言稿，之後會被展開成完整發言。`,
             `⚠️ 純口頭推論遊戲。沒有路徑、軌跡、不在場證明、操作記錄。唯一證據：發言、矛盾、表態、投票。`,
             `⚠️ 發言要針對「具體玩家」：質疑誰/支持誰/分析誰。禁止只談討論方法（定規則、訂口徑、逐條比對）——那是空轉，不推進討論。`,
             `只能質疑「已發過言」的玩家的實際內容；不要假設沒發言的人的立場，也不要編造別人講過的話。`,
@@ -1198,7 +1234,7 @@ export class AiController {
             `或 {"strategy_update": null, "action": "wait"}`,
         ].join('\n');
         return [
-            { role: 'system', content: this.buildSystemPrompt(entry) },
+            { role: 'system', content: `${this.buildSystemPrompt(entry)}\n${this.dayContext(entry)}` },
             { role: 'user', content: user },
         ];
     }

@@ -5,11 +5,13 @@
 
 ## 目前狀態
 
-**卡在哪：** 無阻塞。共有者（mason）prompt V8 已落地（對齊狼版編排＋草稿＝行動筆記定位）；白天（DAY_DISCUSSION）外部測試為先前進度（見下方）。
+**卡在哪：** 無阻塞。私頻（狼／共有者）已完成「草稿＝行動筆記 → EXPAND → 完整發言進白板」；白天 V-Day 已完成實作與本機驗證，**尚未做 oracle 行為測試及 server stage 2 實測**。
 
 - ✅ **共有者 prompt V8 落地**（2026-09-24，oracle 雙共有者第 1 夜流程驗證後落地）：三函數（`masonContext`／`buildMasonDraftPrompts`／`buildMasonResponsePrompts`）全面對齊狼版編排，只有身分差異；草稿定位改為「行動筆記非發言稿」
 - ✅ **私頻稱呼修正**（2026-09-24，stage 1 實測發現＋oracle 驗證後落地）：2 人私頻用「你／名字＋你」，禁「他／她」與「你們」
 - ✅ **私頻 EXPAND 機制＋草稿要點化**（2026-09-24，oracle 兩段式驗證後落地）：草稿＝行動筆記 → 引擎展開成角色語氣完整發言才進白板；狼與共有者兩側同步
+- ✅ **白天 V-Day 實作＋本機驗證完成**（2026-09-24，尚未上伺服器實測）：新增全角色 `dayContext`；白天草稿／回應也走「行動筆記 → EXPAND → 公頻發言」；移除 3 處 `≤50字`
+- ✅ **外部測試安全 runner 已落地**（2026-09-24，尚未在 server 執行）：`scripts/run-external-test-safe.sh` 讓金鑰只進 process environment，不進 node／curl argv；用 `setpriv` 降權到 `morowin`；支援新開局與 `--resume`
 
 - ✅ 夜流程（NIGHT_RESULT）已通過多次驗證
 - ✅ 狼會議收斂邏輯修好（不再 premature VOTING）
@@ -23,7 +25,7 @@
 - ✅ **persona 修正**：shinichi/yuko/tatuya 的「時間線/分鐘/看到的現象」範例改為發言矛盾型（真一「昨晚和誰同點、時間差三分鐘」即源自 persona 範例腦補）
 - ✅ 白天測試紀錄（`stage2-day-report.md`）：狼會議不完整是舊格式 `night1.json` 無 `.log.json`（非渲染 bug）——要完整狼會議需重跑整局 night
 - ✅ **白天開場「捏造他人立場」幻覺修復**：良子第一句「不跟佐雪的立場走」——佐雪全程零發言，立場是憑空捏造（白板空＋強迫點名的 prompt 側效果）。system prompt 證據邊界新增「禁止假設任何玩家持某立場/講過什麼，除非實際出現在白板」；strategy/draft/response prompt 加降級規則「只能質疑已發言的實際內容，沒人發言就談自己觀察」（參考 `docs/ai-rp-prompt-research.md` §4 anti-fabrication）
-- ⏳ 白天收斂測試重跑（用重跑的 night 存檔，待驗證新 prompt）
+- ⏳ **白天 V-Day 行為驗證**：先以全新 oracle sessions 驗證白天草稿／EXPAND，再通過安全 runner 到 server 跑 stage 2；目前只完成實作、build 與本機測試
 
 **私頻稱呼修正（2026-09-24，stage 1 實測發現、oracle 驗證通過後落地）：**
 
@@ -48,6 +50,20 @@
 
 **stage 1 實測基線**（15 人全 AI 局，9m50s，到 NIGHT_RESULT）：EXPAND 12 次全部 attempt=1（零重試零 fallback）＝5 共有者＋7 狼；12 筆展開逐一比對**零幻覺**；簡體字僅 6 處且全在草稿（`两轮`/`抛话题`/`对`），EXPAND 輸出 0 處→夜晚對玩家零影響；白板文字全部為完整角色語氣發言。
 
+**白天 V-Day＋安全測試 runner（2026-09-24，實作與本機驗證完成；尚未 oracle／server 實測）：**
+
+- **使用者裁示**：白天比照私頻做 EXPAND；移除字數／句數約束；建立全角色 `dayContext`；公頻是否公開身分屬博弈內容，暫不加入隱私硬規則
+- **`dayContext`**：Two-Level Split，全角色共用；目標不寫死「好人必勝」，避免狼收到矛盾指令；含公開證據邊界、禁止空轉、依據質疑／拉回人身上／表態投票、角色只影響決策
+- **白天資料流**：`generateDayDrafts`／`dayRespond` 只產生行動筆記；judge 仍盲評草稿；選中後 `expandSpeech(..., 'day')`，再將同一份 `expanded` 用於 `sendDayMessage` 與其他 AI 的 `dayRespond`
+- **fallback**：`llmWithRetry` 內建 3 次重試；全失敗用草稿原文，不阻塞白天討論
+- **字數限制**：`DAY_STRATEGY`、`DAY_SPEECH`、`DAY_STANCE` 三處 `≤50字` 全移除，改用「判斷誰／依據／表態」結構描述
+- **展開差異**：day 不沿用私頻的 `2-4 句`與「給隊友提醒」；wolf/mason 既有展開規則不變；JSON 鍵與 stance 值域不動
+- **刻意未做**：沒有新增「白天不得公開夜間私密資訊」硬規則。狼的夜間刀人目標、占卜結果可能經 memory 進白天草稿，EXPAND 是否會把這些內容帶到公頻，留待 stage 2 觀察後再決定
+- **本機驗證**：`npm run build` 通過；`node --test dist/lobby-server/room-manager.test.js dist/lobby-server/server.test.js dist/lobby-server/game-wolf.test.js` 為 33 pass / 0 fail；`src` 與 `dist` 的 `≤50字` 均為 0 處；`git diff --check` 通過
+- **安全 runner**：新增 `scripts/run-external-test-safe.sh`。金鑰只從 `/etc/sglang/api-key.env` 進 process environment；curl header 由 stdin config 傳入；`setpriv` 降權到 `morowin` 後執行 `external-test-stage2.mjs "$@"`。支援新開局與 `--resume`，且不把金鑰放進 node／curl argv
+- **runner 驗證**：Git for Windows `sh -n` 語法檢查通過；尚未上傳、執行或連到 server
+- **目前邊界**：只證明引擎接線、編譯與本機測試正確；prompt 行為品質、公頻內容與 EXPAND 成效仍待 oracle＋stage 2 實測
+
 **私頻 EXPAND 機制＋草稿要點化（2026-09-24，oracle 兩段式驗證通過後落地）：**
 
 修的是「引擎錯誤」——V8 把草稿定位改成行動筆記，但私頻 loop 缺展開步驟（SPEC §13.6 有 EXPAND，程式碼沒有），導致筆記直接進白板。
@@ -65,7 +81,7 @@
   - 草稿 V9：產出三行要點筆記（結構達成；「不要寫成完整句」與「禁逐字台詞」未完全遵守，殘留引號台詞）
   - 展開 V9b：輸入該筆記 → **展開有效**（書面語「狼只要挑一個切」→「狼挑一個砍就完事了…留著這手牌」）、**零幻覺**（無新增行動/對象/結論）、排版三段符合
 - **第一版展開失敗的教訓**：原本寫「照筆記的行動與決策講，不要新增…」→ 輸出幾乎等於草稿原文，無展開效果。改成「用你的角色語氣**重述**…不要照抄筆記的寫法」＋放寬為「不要新增行動/對象/結論，但可以改寫」才有效
-- **未測路徑**：EXPAND 在真實 SGLang 上的行為、`normalizePublishedStance` 的 stance 補漏路徑、白天的 EXPAND（本次不實作，白天等測試範圍確定）
+- **當時未測路徑**：EXPAND 在真實 SGLang 上的行為、`normalizePublishedStance` 的 stance 補漏路徑；白天 EXPAND 已於上方 V-Day 完成實作，但 oracle／server 實測仍待完成
 - **測試**：`npm run build` 通過；`node --test dist/lobby-server/room-manager.test.js dist/lobby-server/server.test.js` 27 pass / 0 fail
 
 **共有者 prompt V8 落地（2026-09-24，oracle 雙共有者第 1 夜完整流程驗證通過後落地）：**
@@ -138,25 +154,27 @@
 - 併發實測補充（14 路全過）：5 併發 967 tokens 全 200；14 併發 ~9.2K tokens 全 200、~49s 完成（SGLang `--max-running-requests 1` 依 priority 排隊）。先前 5 併發測試因 PowerShell 管道把中文打成 `?`（prompt=65 是亂碼），改用 base64 上傳後為正常 prompt（~79 tokens）
 
 **下一步（依序）：**
-1. resume `/tmp/night1.json`（不重跑 night；resume 直接進 DAY_DISCUSSION）→ 跑白天收斂
-2. 驗證新 prompt：白天討論是否具體點名、不再 meta 繞圈、ready 收斂速度
-3. 觀察白天討論品質（發言內容、收斂速度、狼的表現）
-4. 若 AI 品質有問題 → 調 prompt → 重跑
-5. 全部通過 → Step 5（AI 接 production server）
+1. 用**全新 oracle sessions** 驗證白天 V-Day：草稿要點化、公頻 EXPAND、角色語氣、零新增行動／對象／結論；judge 另開 session 盲評
+2. oracle 通過後，將本 commit pull 到 server，使用 `scripts/run-external-test-safe.sh --resume ... --stop-at DAY_RESULT` 跑 stage 2；**不重啟正式服務**
+3. 驗收白天公頻發言、收斂速度、EXPAND attempt/fallback、簡體字與策略洩漏；尤其確認狼的刀人目標／占卜結果不會被帶進公頻
+4. 若品質有問題 → 調 prompt → 重跑 oracle，再重跑 stage 2
+5. 全部通過後才更新 `docs/ubuntu-spec.md` 的白天 EXPAND 規格，並處理 production `wolfgame` 的 `SGLANG_API_KEY` 環境設定，再考慮上線
+6. 金鑰不輪換；保留 `api.morowin.win` tunnel
 
-**Server 上跑測試的正確方式：**
+**Server 上跑測試的正確方式（金鑰不得放進 argv）：**
 ```bash
-# 先 kill 舊 process
-ssh ssh.morowin.win "pkill -f external-test-stage2"
+# 先 kill 舊 process；[e] 避免 pgrep/pkill 匹配到自己的 shell
+ssh ssh.morowin.win "pkill -f '[e]xternal-test-stage2' || true"
 
-# 跑夜晚 + 存檔（~3 min）
-ssh ssh.morowin.win "cd /opt/wolfgame && SGLANG_API_KEY=<REDACTED> node scripts/external-test-stage2.mjs --stop-at NIGHT_RESULT --save-state /tmp/night1.json"
+# 只 pull 測試程式碼，不重啟正式服務
+ssh ssh.morowin.win "cd /opt/wolfgame && git pull"
 
-# 從存檔接白天（5 分鐘一段，可多次接續）
-ssh ssh.morowin.win "cd /opt/wolfgame && SGLANG_API_KEY=<REDACTED> node scripts/external-test-stage2.mjs --resume /tmp/night1.json --stop-at DAY_RESULT --save-state /tmp/day1.json"
+# 跑夜晚 + 存檔；runner 會從 root 600 env 載入金鑰，再降權成 morowin
+ssh ssh.morowin.win "sudo sh /opt/wolfgame/scripts/run-external-test-safe.sh --stop-at NIGHT_RESULT --save-state /tmp/night1.json"
 
-# 接續下一段（報告會合併前段 events）
-ssh ssh.morowin.win "cd /opt/wolfgame && SGLANG_API_KEY=<REDACTED> node scripts/external-test-stage2.mjs --resume /tmp/day1.json --stop-at DAY_RESULT --save-state /tmp/day2.json"
+# 從存檔接白天（可多次接續）
+ssh ssh.morowin.win "sudo sh /opt/wolfgame/scripts/run-external-test-safe.sh --resume /tmp/night1.json --stop-at DAY_RESULT --save-state /tmp/day1.json"
+ssh ssh.morowin.win "sudo sh /opt/wolfgame/scripts/run-external-test-safe.sh --resume /tmp/day1.json --stop-at DAY_RESULT --save-state /tmp/day2.json"
 
 # 取回報告
 scp ssh.morowin.win:/opt/wolfgame/ai-trace-stage2-day.md "C:\Users\user\Desktop\FrankTests\Temp\ai-trace-stage2-day.md"
@@ -230,27 +248,41 @@ node scripts/external-test-stage2.mjs --stop-at GAME_OVER
 | `src/lobby-server/types.ts` | 協議類型（TOGGLE_VOTE_READY、DAY_READY_STATUS 等） |
 | `src/lobby-server/server.ts` | Production server；AiController 尚未接入（Step 5） |
 | `scripts/external-test-stage2.mjs` | 外部測試腳本；分階段 + 存檔/恢復 + events 合併報告 |
+| `scripts/run-external-test-safe.sh` | 安全 runner；金鑰不經 argv，支援新開局與 `--resume` |
 | `docs/ubuntu-spec.md` | 權威規格（WS 協定、房間生命週期、phase 狀態機、里程碑） |
 | `docs/ai-rp-prompt-research.md` | 社群 RP 指南（prompt engineering 研究彙整） |
 
 ## 部署流程
 
 ```bash
-# 本機
+# 本機：build 後明確暫存本次檔案，不使用 git add -A（避免帶入 runtime／line-ending 雜訊）
 cd C:\Users\user\Desktop\FrankTests\Other\人狼遊戲
 npm run build
-git add -A && git commit -m "..." && git push
+git add \
+  src/lobby-server/ai-controller.ts \
+  dist/lobby-server/ai-controller.d.ts \
+  dist/lobby-server/ai-controller.d.ts.map \
+  dist/lobby-server/ai-controller.js \
+  dist/lobby-server/ai-controller.js.map \
+  scripts/run-external-test-safe.sh \
+  docs/progress.md
+git diff --cached --name-only
+git commit -m "..."
+git push
 
-# Server
+# Server：正式部署才重啟服務
 ssh -F "C:\Users\user\Desktop\FrankTests\.ssh\config" ssh.morowin.win \
   "cd /opt/wolfgame && git pull && sudo systemctl restart wolfgame"
 
-# 跑外部測試（server 上，分階段）
+# Server：只跑外部測試時，僅 pull，不重啟正式服務
 ssh -F "C:\Users\user\Desktop\FrankTests\.ssh\config" ssh.morowin.win \
-  "cd /opt/wolfgame && SGLANG_API_KEY=<REDACTED> node scripts/external-test-stage2.mjs --stop-at NIGHT_RESULT --save-state /tmp/night1.json"
+  "cd /opt/wolfgame && git pull"
 
 ssh -F "C:\Users\user\Desktop\FrankTests\.ssh\config" ssh.morowin.win \
-  "cd /opt/wolfgame && SGLANG_API_KEY=<REDACTED> node scripts/external-test-stage2.mjs --resume /tmp/night1.json --stop-at DAY_RESULT --save-state /tmp/day1.json"
+  "sudo sh /opt/wolfgame/scripts/run-external-test-safe.sh --stop-at NIGHT_RESULT --save-state /tmp/night1.json"
+
+ssh -F "C:\Users\user\Desktop\FrankTests\.ssh\config" ssh.morowin.win \
+  "sudo sh /opt/wolfgame/scripts/run-external-test-safe.sh --resume /tmp/night1.json --stop-at DAY_RESULT --save-state /tmp/day1.json"
 
 # 取回報告
 scp -F "C:\Users\user\Desktop\FrankTests\.ssh\config" \

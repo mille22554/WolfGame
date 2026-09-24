@@ -105,7 +105,7 @@ export declare class AiController {
     private judgePickMasonDraft;
     /** 非發言者共有者讀白板後回應：vote / speak / wait */
     private masonRespond;
-    /** 展開 prompt：把選中的行動筆記（草稿要點）展開成該角色在會議上真正會說的話；輸出 {"speech":"完整發言"} */
+    /** 展開 prompt：把選中的行動筆記（草稿要點）展開成該角色真正會說的話；輸出 {"speech":"完整發言"} */
     private buildExpandPrompts;
     /** 展開：LLM 把選中的草稿要點展開成完整發言（llmWithRetry 內建 3 次重試）；全失敗 → fallback 用草稿原文，不阻塞會議 */
     private expandSpeech;
@@ -146,6 +146,8 @@ export declare class AiController {
     private wolfContext;
     /** 共有者情境（system prompt 附加：Two-Level Split，與 wolfContext 同構；V8） */
     private masonContext;
+    /** 白天情境（system prompt 附加：Two-Level Split，全角色共用；與 wolfContext/masonContext 同構） */
+    private dayContext;
     /** 草稿 prompt（獨立出稿：speech + stance）；輸出 {"speech":"...", "stance":"投XXX"|"資訊不足"} */
     private buildDraftPrompts;
     /** 回應 prompt（非發言者狼讀白板後回應）；輸出 {"action":"vote","target":"..."} 或 {"action":"speak","speech":"...","stance":"..."} 或 {"action":"wait"} */
