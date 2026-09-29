@@ -757,11 +757,40 @@ export class AiController {
         return results.filter((r) => r !== null);
     }
     /** 組裝 judge 盲評 prompt：system「你是裁判，全盲評分以下發言，不考慮作者」；user 列出所有 speech（編號，不標作者），要求 JSON 回 {"scores":[...],"best":index} */
-    buildJudgePrompts(speeches) {
-        const numbered = speeches.map((s, i) => `[${i + 1}]: ${s}`).join('\n');
+    buildJudgePrompts(speeches, meeting = 'wolf', ratings) {
+        const numbered = speeches.map((s, i) => {
+            const r = ratings?.[i];
+            const tag = r && (r.importance !== undefined || r.urgency !== undefined || r.impact)
+                ? ` [自評：重要性${r.importance ?? '?'}／急迫性${r.urgency ?? '?'}；預期影響：${r.impact ?? '未填'}]`
+                : '';
+            return `[${i + 1}]${tag}: ${s}`;
+        }).join('\n');
+        const sharedCriteria = [
+            `這是發言者私下的行動筆記，稍後會被展開成一篇發言並發到白板上。`,
+            `評分時請一併考慮：`,
+            `- 能否獨立成立：寫「等某人問完」「等那個問題拋出來」的筆記無法直接展開成成立的發言，要扣分。`,
+            `- 言行一致：寫「我不發言」「我沒有要補充」的筆記要扣分。`,
+            `- 用了討論不存在的結構詞（輪次、第幾段、發言位置、整段、流程）要扣分。`,
+            `- 是否引用了白板上已發言者的實際內容：有具體引用比泛泛表態更有價值。`,
+            `- 用詞是否日常：抽象比喻（接住、沉下去、裁判位、框架、安全牌）扣分。`,
+        ];
+        const dayOnlyCriteria = [
+            `- 公頻發言不能洩露筆記裡的私頻分工或欺騙計畫；但欺騙本身不扣分（角色本來就會演），只能寫成表面說法。`,
+            `- 有沒有新東西：只是把別人已經講過的話再講一遍，扣分。`,
+            `- 有沒有可核對的內容：說「我覺得他在演」但說不出他哪句話有問題，扣分。要點名、要引用、要講得出根據。`,
+            `  · 例外：占卜師報查驗結果（「昨晚查的誰，結果是狼」）本身就是證據，不需要再講怎麼查的，不用扣分。但「我確定不用再解釋」這類態度廢話照扣。`,
+            `- 有沒有實際動作：「我記住了」「我會注意」不算，除非講清楚記住之後要做什麼（要問誰、要聽哪一句、要投誰）。`,
+            `  · 「我記著，之後再講」必須同時講清楚觸發條件（誰講了什麼、發生了什麼事）。觸發條件必須是具體可能發生的事，「對不上的話」「有問題的話」這種空泛條件不算。`,
+            `- 是不是只定規矩不講遊戲：整篇都在格式要求，沒有對具體玩家下判斷、沒有引用具體發言、沒有推進討論的內容，扣分。`,
+            `  · 例外：定規矩如果有明確產出（例如「每個人一句話拿全場基線」），不扣。但只定規矩不講自己判斷的，扣。`,
+            `- 重要性自評：importance ≤3 或 impact 寫「無」的，優先過濾（除非其他篇更差）。`,
+            `  · 自評與內容不符的扣分：自評高分但內容只是「我要聽」「我記著」的，視為灌水。`,
+            `  · urgency 高的優先：現在不講就來不及的（例如被點名後必須回應、有人要帶錯方向），加分。`,
+        ];
         const user = [
             `以下是 ${speeches.length} 篇發言（不標明作者）：`,
             numbered,
+            ...(meeting === 'day' ? sharedCriteria.concat(dayOnlyCriteria) : sharedCriteria),
             `請給每篇打分（1-10 分），並選出最佳的一篇。`,
             `回覆 JSON：{"scores": [n, n, ...], "best": index}`,
             `（index 從 0 開始）`,
@@ -773,10 +802,10 @@ export class AiController {
     }
     /** Judge 盲評（LLM）：給所有 speech 打分（1-10），回最高分的 index；LLM 失敗 → 隨機 fallback（不阻塞）。
      *  LLM 呼叫本身由 llmWithRetry 記錄 log。 */
-    async judgeScoreIndex(speeches, round) {
+    async judgeScoreIndex(speeches, round, meeting = 'wolf', ratings) {
         if (speeches.length <= 1)
             return 0;
-        const prompts = this.buildJudgePrompts(speeches);
+        const prompts = this.buildJudgePrompts(speeches, meeting, ratings);
         const result = await this.llmWithRetry('', 'JUDGE', round, prompts, (p) => Array.isArray(p.scores) && p.scores.length === speeches.length ? 'ok' : null);
         if (result.value !== null && result.parsed) {
             const scores = result.parsed.scores.map((s) => (typeof s === 'number' && Number.isFinite(s) ? s : 0));
@@ -803,7 +832,7 @@ export class AiController {
             this.logEntry('', 'JUDGE', round, 1, [], null, { picked: drafts[0].wolf.nickname, from: 1 });
             return drafts[0];
         }
-        const idx = await this.judgeScoreIndex(drafts.map((d) => d.speech), round);
+        const idx = await this.judgeScoreIndex(drafts.map((d) => d.speech), round, 'wolf');
         this.selectionSeq += 1;
         this.logEntry('', 'JUDGE', round, 1, [], null, { picked: drafts[idx].wolf.nickname, from: drafts.length });
         return drafts[idx];
@@ -969,7 +998,7 @@ export class AiController {
             this.masonSelectionSeq += 1;
             return drafts[0];
         }
-        const idx = await this.judgeScoreIndex(drafts.map((d) => d.speech), this.day);
+        const idx = await this.judgeScoreIndex(drafts.map((d) => d.speech), this.day, 'mason');
         this.masonSelectionSeq += 1;
         this.logEntry('', 'JUDGE', this.day, 1, [], null, { picked: drafts[idx].mason.nickname, from: drafts.length, meeting: 'mason' });
         return drafts[idx];
@@ -997,12 +1026,53 @@ export class AiController {
     }
     // --- 會議／白天討論通用：把選中的草稿要點展開成完整發言 ---
     /** 展開 prompt：把選中的行動筆記（草稿要點）展開成該角色真正會說的話；輸出 {"speech":"完整發言"} */
-    buildExpandPrompts(entry, draftSpeech, meeting) {
+    buildExpandPrompts(entry, draftSpeech, meeting, boardText) {
         const isDay = meeting === 'day';
         const channel = isDay ? '白天討論（公頻）' : '私頻會議';
         const dayOnly = isDay ? '\n- 不要說「沒人發言」「目前沒人發言」「白板局」「白板狀態」' : '\n- 2-4 句';
         const order = isDay ? '判斷/結論→動作/表態' : '判斷/結論→動作→給隊友提醒';
-        const user = `你剛才在${channel}上出了一份行動筆記。把它講成你真正會說的話。\n\n行動筆記：\n${draftSpeech}\n\n要求：\n- **用你的角色語氣重述**成你真正會說的話——不要照抄筆記的寫法\n- 不要新增筆記裡沒有的行動、對象或結論；但你可以用自己的說話方式重寫${dayOnly}\n- 排版：超過 50 字換行分段，≤3 段，順序＝${order}\n- 全繁體中文\n\nJSON：{"speech": "完整發言"}`;
+        const sharedRules = [
+            '- 行動筆記是你私下的計畫。把它講成「當下就要說出口」的話：',
+            '  · 筆記寫「等某人問」「等那個問題拋出來」「我等一下再說」→ 講成「我想先聽 X 的說法」「我先不定人，聽完再說」；不要說成某件事已經發生。',
+            '  · 筆記寫「我不搶話」「我沒有要補充」→ 講成「我先不急着定人」之類的意圖。這段話本身就是你的發言，不能說自己現在不發言。',
+            '- 讀者只會看到你這段發言，看不到筆記——所以它必須能獨立成立。',
+        ];
+        const dayRules = [
+            '- 這是公頻，全場玩家都看得到：不要說出筆記裡的私頻分工、角色陰謀或欺騙計畫。',
+            '- 筆記提到「一輪」「一圈」「先各說一句」時，只能當成你的建議（「我建議大家先各說一句」），不能說成會議已排定的流程。',
+            '- 討論沒有輪次或段落，不要用這些詞描述現在的狀況。',
+            '- 白板上已經有其他人的發言，你的發言要能接得上那些具體內容，不要重複別人已經講過的。',
+            '- **用玩家會說的話，不要用引擎內部的說法**：',
+            '  · 指別人講過的話，說「你剛才」「你前面那句」「你一開始講的」「你剛開場說的」；不要說「同一場發言」「那次發言」「整段」「同一個場合」。',
+            '  · 說「我記著」「我記下來了」「我等一下會算」；不要說「我拿住了」「我帶進投票」「我擱在這」。',
+            '  · 說「等大家講到這裡」「聽到現在」「到目前為止」；不要說「在同一場發言裡」「整場下來」。',
+            '  · 說「站得住腳」「講得通」；不要說「落地」「形成框架」「建立框架」。',
+            '  · 講安排、規則時說「你定的那個規矩」「你剛才的安排」；不要說「框架」「流程」「裁判位」「框住」「安全牌」。',
+            '  · 說「我聽得進去」「我會順著接」「講完就不再多說」；不要說「接住」「沉下去」「有味道」。',
+            '  · 放東西的動詞不要用在人身上：「擺」「塞」「攛」「擱」「擺進去」「塞進去」→ 講人用「點」「叫」「扯」「拉」（「把她們點出來」「把他扯進來」）。',
+            '  · 全繁體中文，不要用大陸慣用語：實打實→真的、拉滿→拉高、秀操作→秀一手、咱們→我們、認慫→認輸、啥→什麼。',
+            '  · 占卜師報查驗結果時直接講「昨晚查的誰，結果是狼」，不要加「我算出來的」「我確定不用再解釋」這類廢話。查驗結果本身就是證據，不需要舉證。',
+            '  · 「跳」和「CO」分開用：說「有人要跳」「我先跳占卜師」或「有人 CO」「我 CO 占卜師」；不要寫「跳CO」「假跳CO」「反跳CO」。',
+            '  · 不要用策略詞：「鎖」「鎖票」「鎖死」「定人」「定票」「帶票」「第二條線」「第一條線」換成「投誰」「票投給誰」「信你」「跟你走」。',
+            '  · 語氣詞不要多餘：刪掉沒用的「了」「嘛」「呢」。',
+            '- **每句話都要有明確的對象**：牽涉到某人就把名字寫出來，不要用「他」「那個人」「他們」代替，也不要省略受詞。',
+            '  · 如果筆記沒寫清楚對象是誰，就不要寫「丟過來」「交給他」這種半截話，改成把對象點名講清楚。',
+            '  · 指自己或別人時直接說名字，不要用數量詞代替；不要為了補語意硬加字（「太助點了我」就夠了）。',
+            '  · 「對不上」「對得上」「合不起來」後面都要接「跟什麼」（跟誰講的、跟哪句話、跟實際情況），不寫就是半截話。',
+            '- **一句話只講一次**：同一件事不要換三種說法講三遍。同一個人點名一次就夠，同一個要求只提一次。寫完檢查整段有沒有重複的意思，有就合併。短比長好。',
+            '- **刪掉裝飾詞**：寫完檢查有沒有「刪掉也不影響意思」的詞，有就刪。',
+            '  · 「包了一層」「套了層殼」「裹著」「披著」→ 直接刪，前面那句就是意思。',
+            '  · 「進行一下」「做一個」「來一波」→ 直接刪。',
+            '  · 「某種程度上」「在某種意義上」「從某個角度來說」→ 直接刪。',
+            '- **空威脅直接刪**：「我記著，後面再講」「對不上的話我再說」如果講不出具體觸發條件（誰講了什麼才講），整句刪掉，不要留。',
+            '- 排版照規定：超過 50 字換行、**最多 3 段**。段落太多要合併，刪掉重複的意思。',
+            '  · **段與段之間空一行**（用兩個換行字元隔開）。單換行不算分段。',
+        ];
+        const rules = isDay ? sharedRules.concat(dayRules) : sharedRules;
+        const boardSection = boardText
+            ? `\n\n已經發表過的發言（依順序）：\n${boardText}\n\n**引用這些發言時，注意說話的先後**：越早講的人，當時知道的事情越少。指某人做某件事的時候，要用「他做那件事的時候」的狀態去評估，不要用現在的狀態回頭挑錯。`
+            : '';
+        const user = `你剛才在${channel}上出了一份行動筆記。把它講成你真正會說的話。\n\n行動筆記：\n${draftSpeech}\n\n要求：\n- **用你的角色語氣重述**成你真正會說的話——不要照抄筆記的寫法\n- 不要新增筆記裡沒有的行動、對象或結論；但你可以用自己的說話方式重寫\n${rules.join('\n')}${dayOnly}${boardSection}\n- 排版：超過 50 字換行分段，≤3 段，順序＝${order}\n- 全繁體中文\n\nJSON：{"speech": "完整發言"}`;
         const context = meeting === 'wolf' ? this.wolfContext(entry) : meeting === 'mason' ? this.masonContext(entry) : this.dayContext(entry);
         return [
             { role: 'system', content: `${this.buildSystemPrompt(entry)}\n${context}` },
@@ -1011,7 +1081,15 @@ export class AiController {
     }
     /** 展開：LLM 把選中的草稿要點展開成完整發言（llmWithRetry 內建 3 次重試）；全失敗 → fallback 用草稿原文，不阻塞會議 */
     async expandSpeech(entry, draftSpeech, meeting) {
-        const result = await this.llmWithRetry(entry.def.clientId, 'EXPAND', this.day, this.buildExpandPrompts(entry, draftSpeech, meeting), (p) => (typeof p.speech === 'string' && p.speech.trim() ? 'ok' : null));
+        // 白板全文傳給 expand，讓模型能判斷發言先後（時序推理），避免用現在的狀態回頭挑錯
+        const boardText = meeting === 'wolf'
+            ? (this.wolfBoardText() || undefined)
+            : meeting === 'mason'
+                ? (this.masonBoardText() || undefined)
+                : (this.dayBoard.length
+                    ? this.dayBoard.map((m, i) => `第 ${i + 1} 句　${m.from}：「${m.text.replace(/\n+/g, ' ')}」`).join('\n')
+                    : undefined);
+        const result = await this.llmWithRetry(entry.def.clientId, 'EXPAND', this.day, this.buildExpandPrompts(entry, draftSpeech, meeting, boardText), (p) => (typeof p.speech === 'string' && p.speech.trim() ? 'ok' : null));
         // 3 次重試全失敗 → fallback 用草稿原文，不阻塞會議
         return result.value !== null ? result.parsed.speech.trim() : draftSpeech;
     }
@@ -1147,7 +1225,7 @@ export class AiController {
                     const drafts = this.completedDayDrafts(state, aiPlayers)
                         .map((slot) => {
                         const player = aiPlayers.find((candidate) => candidate.clientId === slot.clientId);
-                        return player ? { player, speech: slot.speech, stance: slot.stance } : null;
+                        return player ? { player, speech: slot.speech, stance: slot.stance, importance: slot.importance, urgency: slot.urgency, impact: slot.impact } : null;
                     })
                         .filter((draft) => draft !== null);
                     if (drafts.length === 0) {
@@ -1402,6 +1480,7 @@ export class AiController {
             'speech 是給夥伴看的行動筆記，不是發言稿。**用短句列點，不要寫成完整句子**——每行一個重點（做什麼／關鍵理由／分工／預期走向），像筆記大綱一樣。',
             '不要寫你明天要說的逐字台詞——那是之後才決定的。',
             '你寫的是筆記，之後會有人把它展開成完整發言；你不需要把它講好講滿。',
+            this.discussionMechanism('wolf'),
         ].filter(Boolean).join('\n');
     }
     /** 共有者情境（system prompt 附加：Two-Level Split，與 wolfContext 同構；V8） */
@@ -1436,7 +1515,36 @@ export class AiController {
             'speech 是給夥伴看的行動筆記，不是發言稿。**用短句列點，不要寫成完整句子**——每行一個重點（做什麼／關鍵理由／分工／預期走向），像筆記大綱一樣。',
             '不要寫你明天要說的逐字台詞——那是之後才決定的。',
             '你寫的是筆記，之後會有人把它展開成完整發言；你不需要把它講好講滿。',
+            this.discussionMechanism('mason'),
         ].filter(Boolean).join('\n');
+    }
+    /** 會議流程機制說明（三個 context 共用；三種會議 loop 完全相同，差別只在可見範圍與議題） */
+    discussionMechanism(channel) {
+        const scope = channel === 'day'
+            ? '這個頻道所有人都看得到，發出去就收不回。'
+            : '這個頻道只有你們隊友看得到。';
+        return [
+            '## 會議是怎麼進行的（機制，先讀這段）',
+            '所有人私下各寫一份行動筆記（互不可見）→ 系統從想講的人的筆記裡挑一篇（不保證是誰寫的）→ 把它展開成完整發言發到白板 → 其他人讀完決定要不要再講。',
+            '有人想講就繼續下一輪；沒有人想講且都說「準備好了」就收斂。',
+            '',
+            '**因此，下面這些東西不存在，不要寫進筆記或發言：**',
+            '輪次、回合、第幾段、發言位置、發言順序、前面第幾個人講的。',
+            '你不能預期「下一個是我」或「接下來是某個人」——挑選是隨機的，你也可能整場都不被選中。',
+            '要表達就寫具體的人數或人名：「聽完三個人的判斷」「我想先聽翔太怎麼說」，不要用結構詞。',
+            '',
+            '**誰先講不代表什麼。**有意義的只有：他講了什麼、有沒有前後矛盾、和他之前說的對不對得上。',
+            `**可見範圍：**${scope}`,
+        ].join('\n');
+    }
+    /** 行動筆記的私有性規則（白天 draft／response prompt 共用） */
+    notePrivacyRules() {
+        return [
+            '⚠️ 筆記是私有的，但之後可能被展開成你實際的發言——所以筆記必須能獨立成立。',
+            '⚠️ 不要把未發生的事寫成已發生：不要寫「等某人問完」「等那個問題拋出來」「等 X 表態之後」。要寫意圖：「我想先聽 X 說」「聽完三個人我再決定」。',
+            '⚠️ 不要寫成自己現在不發言：不要寫「我沒有要補充」「我等大家說完我再說」——這篇會被展開成你實際的發言。',
+            '⚠️ speech 和 strategy_update 必須一致：strategy_update 說要主動點名，speech 就不能寫「我不點人」。',
+        ].join('\n');
     }
     /** 白天情境（system prompt 附加：Two-Level Split，全角色共用；與 wolfContext/masonContext 同構） */
     dayContext(entry) {
@@ -1462,6 +1570,7 @@ export class AiController {
             'speech 是行動筆記，不是發言稿：用短句列重點（判斷誰／依據是什麼／要表態什麼），不需要完整敘述。',
             '不要寫你等一下要說的逐字台詞——那是之後才決定的。',
             '你寫的是筆記，之後會被展開成完整發言；你只負責決策重點，不需要完成逐字發言。',
+            this.discussionMechanism('day'),
         ].filter(Boolean).join('\n');
     }
     /** 草稿 prompt（獨立出稿：speech + stance）；輸出 {"speech":"...", "stance":"投XXX"|"資訊不足"} */
@@ -1653,19 +1762,26 @@ export class AiController {
             ``,
             `任務：寫下你的行動筆記——① 你判斷誰、依據是對方實際講過的什麼 ② 你準備投票了嗎。`,
             `speech 只寫行動與決策重點：判斷誰／依據是什麼／要表態什麼。**寫成短句要點，每行一個重點，不要寫成完整敘述句**——這是筆記不是發言稿，之後會被展開成完整發言。`,
-            `要求：不要說「沒人發言」「目前沒人發言」「白板局」「白板狀態」。要有具體內容（質疑、分析、表態）。`,
+            `要求：不要在你的發言裡說「沒人發言」「目前沒人發言」。要有具體內容（質疑、分析、表態）。`,
             `⚠️ 這是純口頭推論遊戲。沒有路徑、軌跡、不在場證明、操作記錄。唯一證據：發言內容、邏輯矛盾、表態變化、投票行為。`,
             `⚠️ 發言要針對「具體玩家」：質疑誰、支持誰、分析誰的發言。點名從存活玩家中選。`,
             `但只能質疑「已發過言」的玩家的實際內容。若目前沒人發言，就談你觀察到什麼、想先聽誰表態——不要質疑沒發言的人，更不要假設任何人的立場。`,
             `⚠️ 禁止只談討論方法（「我們先定規則」「逐條比對」「口徑要公開」）——那是空轉，不算有效發言。要講就講對某個玩家的看法。`,
             ``,
-            `發言前：根據目前白板狀況，你的策略要微調嗎？要的話先寫出更新。`,
+            `發言前：根據目前的討論狀況，你的策略要微調嗎？要的話先寫出更新。`,
+            ``,
+            this.notePrivacyRules(),
+            `⚠️ 不要只寫格式要求：「每人一句」「指一個名字」「不許講廢話」都不是判斷。要講就講對某個玩家的看法——他哪句話有問題、你懷疑誰、你站誰。`,
+            `⚠️ 筆記要寫實際能用的東西：判斷誰、依據是他哪句話、你要問他什麼或投誰。「我記住了」「我會注意」不算內容。`,
+            `⚠️ 判斷時要注意先後：誰先開口，當時還沒有人發言過。不要寫「他挑了沒發言的人」這種用現在的狀態回頭挑錯的話。`,
+            `⚠️ 同一個人只點名一次：對某人的要求和觀察寫進同一個要點，不要分兩行。`,
             ``,
             `回覆格式（JSON）：`,
-            `{"strategy_update": "更新後的策略" 或 null, "speech": "你要寫的行動筆記", "stance": "準備好了"}`,
+            `{"strategy_update": "更新後的策略" 或 null, "speech": "你要寫的行動筆記", "stance": "準備好了", "importance": 1-10, "urgency": 1-10, "impact": "公開後預期改變什麼，沒影響寫無"}`,
             `或`,
-            `{"strategy_update": null, "speech": "你要寫的行動筆記", "stance": "資訊不足"}`,
+            `{"strategy_update": null, "speech": "你要寫的行動筆記", "stance": "資訊不足", "importance": 1-10, "urgency": 1-10, "impact": "公開後預期改變什麼，沒影響寫無"}`,
             `（「準備好了」＝你講完了，準備投票；「資訊不足」＝你還想再聽聽；strategy_update 為 null 表示策略不變）`,
+            `（importance＝這篇公開後對局勢的影響；urgency＝現在不講會不會來不及；自評要誠實，judge 會核對分數與內容是否相符，灌水扣分）`,
         ].filter(Boolean).join('\n');
         return [
             { role: 'system', content: `${this.buildSystemPrompt(entry)}\n${this.dayContext(entry)}` },
@@ -1695,6 +1811,12 @@ export class AiController {
             ``,
             `要求：同意就簡短。要講就講新的角度，不要重複別人講過的。`,
             `speech 只寫行動與決策重點：判斷誰／依據是什麼／要表態什麼。**寫成短句要點，每行一個重點，不要寫成完整敘述句**——這是筆記不是發言稿，之後會被展開成完整發言。`,
+            this.notePrivacyRules(),
+            `⚠️ 不要只寫格式要求：「每人一句」「指一個名字」「不許講廢話」都不是判斷。要講就講對某個玩家的看法。`,
+            `⚠️ 筆記要寫實際能用的東西：判斷誰、依據是他哪句話、你要問他什麼或投誰。「我記住了」「我會注意」不算內容。`,
+            `⚠️ 判斷時要注意先後：誰先開口，當時還沒有人發言過。不要寫「他挑了沒發言的人」這種用現在的狀態回頭挑錯的話。`,
+            `⚠️ 同一個人只點名一次：對某人的要求和觀察寫進同一個要點，不要分兩行。`,
+            `⚠️ 選「我要補充」時多回三個欄位："importance"（1-10：公開後對局勢的影響）、"urgency"（1-10：現在不講會不會來不及）、"impact"（一句話：公開後預期改變什麼；沒影響寫「無」）。自評要誠實，judge 會核對，灌水扣分。`,
             `⚠️ 純口頭推論遊戲。沒有路徑、軌跡、不在場證明、操作記錄。唯一證據：發言、矛盾、表態、投票。`,
             `⚠️ 發言要針對「具體玩家」：質疑誰/支持誰/分析誰。禁止只談討論方法（定規則、訂口徑、逐條比對）——那是空轉，不推進討論。`,
             `只能質疑「已發過言」的玩家的實際內容；不要假設沒發言的人的立場，也不要編造別人講過的話。`,
@@ -1702,7 +1824,7 @@ export class AiController {
             ``,
             `回覆格式（JSON）：`,
             `{"strategy_update": "更新後的策略" 或 null, "action": "ready"}`,
-            `或 {"strategy_update": null, "action": "speak", "speech": "...", "stance": "..."}`,
+            `或 {"strategy_update": null, "action": "speak", "speech": "...", "stance": "...", "importance": 1-10, "urgency": 1-10, "impact": "公開後預期改變什麼，沒影響寫無"}`,
             `或 {"strategy_update": null, "action": "wait"}`,
         ].join('\n');
         return [
@@ -1852,6 +1974,12 @@ export class AiController {
             if (result.value !== null && result.parsed) {
                 slot.speech = result.parsed.speech.trim();
                 slot.stance = result.parsed.stance.trim();
+                if (typeof result.parsed.importance === 'number')
+                    slot.importance = result.parsed.importance;
+                if (typeof result.parsed.urgency === 'number')
+                    slot.urgency = result.parsed.urgency;
+                if (typeof result.parsed.impact === 'string' && result.parsed.impact.trim())
+                    slot.impact = result.parsed.impact.trim();
             }
         }));
     }
@@ -1871,7 +1999,7 @@ export class AiController {
             }
         }
         else {
-            idx = await this.judgeScoreIndex(drafts.map((draft) => draft.speech), this.day);
+            idx = await this.judgeScoreIndex(drafts.map((draft) => draft.speech), this.day, 'day', drafts.map((draft) => ({ importance: draft.importance, urgency: draft.urgency, impact: draft.impact })));
         }
         if (!Number.isInteger(idx) || idx < 0 || idx >= drafts.length)
             idx = Math.floor(Math.random() * drafts.length);
@@ -1977,8 +2105,16 @@ export class AiController {
                 if (result.strategyUpdate?.trim())
                     this.appendMemory(player.clientId, `[Day${state.day}] ${result.strategyUpdate.trim()}`);
                 response.status = result.type;
-                if (result.type === 'speak')
-                    response.draft = { speech: result.speech, stance: result.stance };
+                if (result.type === 'speak') {
+                    const draft = { speech: result.speech, stance: result.stance };
+                    if (typeof result.importance === 'number')
+                        draft.importance = result.importance;
+                    if (typeof result.urgency === 'number')
+                        draft.urgency = result.urgency;
+                    if (typeof result.impact === 'string' && result.impact.trim())
+                        draft.impact = result.impact.trim();
+                    response.draft = draft;
+                }
                 else
                     delete response.draft;
             }
@@ -1992,7 +2128,7 @@ export class AiController {
         const nextDrafts = aiPlayers.flatMap((player) => {
             const response = state.responses.find((entry) => entry.clientId === player.clientId);
             return response?.status === 'speak' && response.draft
-                ? [{ clientId: player.clientId, speech: response.draft.speech, stance: response.draft.stance }]
+                ? [{ clientId: player.clientId, speech: response.draft.speech, stance: response.draft.stance, importance: response.draft.importance, urgency: response.draft.urgency, impact: response.draft.impact }]
                 : [];
         });
         if (nextDrafts.length > 0) {
@@ -2073,7 +2209,16 @@ export class AiController {
         if (parsed.action === 'ready')
             return { type: 'ready', strategyUpdate };
         if (parsed.action === 'speak') {
-            return { type: 'speak', speech: parsed.speech.trim(), stance: parsed.stance.trim(), strategyUpdate };
+            const out = {
+                type: 'speak', speech: parsed.speech.trim(), stance: parsed.stance.trim(), strategyUpdate,
+            };
+            if (typeof parsed.importance === 'number')
+                out.importance = parsed.importance;
+            if (typeof parsed.urgency === 'number')
+                out.urgency = parsed.urgency;
+            if (typeof parsed.impact === 'string' && parsed.impact.trim())
+                out.impact = parsed.impact.trim();
+            return out;
         }
         return { type: 'wait', strategyUpdate };
     }

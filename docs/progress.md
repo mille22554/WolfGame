@@ -5,7 +5,7 @@
 
 ## 目前狀態
 
-**目前暫停點：** Phase 1/2/3 checkpoint 程式已 push（`e2e3770`、`cfc4659`、`d36f032`、`a0e8fe5`）。2026-09-29 attempt-01 夜晚通過後，已用 raw SGLang 直接模擬 14 strategy → 14 draft → judge → expand；未修改 prompt source、未接回遊戲 engine。judge 選中裕子；目前等待使用者檢視 EXPAND 問題，所有臨時 prompt／runner 都未落地 commit。
+**目前暫停點：** 白天 prompt 修正已落地 source 並 push（見下方「白天 prompt 五項修正落地」）。第二輪直呼測試進行中：白板 3 句（太助 → 美咲 → 翔太），0 人準備投票。正式 service 未重啟。
 
 - ✅ **共有者 prompt V8 落地**（2026-09-24，oracle 雙共有者第 1 夜流程驗證後落地）：三函數（`masonContext`／`buildMasonDraftPrompts`／`buildMasonResponsePrompts`）全面對齊狼版編排，只有身分差異；草稿定位改為「行動筆記非發言稿」
 - ✅ **私頻稱呼修正**（2026-09-24，stage 1 實測發現＋oracle 驗證後落地）：2 人私頻用「你／名字＋你」，禁「他／她」與「你們」
@@ -22,6 +22,14 @@
 - ✅ **原始 EXPAND 結果**（2026-09-29）：實際輸出含簡體字；曾以 OpenCC `cn→tw` 轉換後展示，但轉換只改字形，沒有修正語意，也未落地到程式。
 - ✅ **臨時 EXPAND 規則驗證**（2026-09-29，未修改 source）：在暫存 prompt 以正式規則口吻加入「私有計畫不可寫成公頻既成事實」；重跑後不再假設千尋問題已發生，但仍出現「一輪／一圈」。
 - ⏳ **目前等待使用者指出問題**（2026-09-29）：不要把任何臨時 prompt／OpenCC 轉換結果當成已落地修正。
+- ✅ **白天 prompt 五項修正落地**（2026-09-29，raw SGLang 直呼多輪驗證後落地，已 commit，`src`＋`dist`）：
+  1. 新增 `discussionMechanism()` helper，注入三個 context（`wolfContext`／`masonContext`／`dayContext`）——說明連續對話制（無輪次、無順序、挑選隨機），禁用輪次／回合／第幾段／發言位置等結構詞。
+  2. 修正兩處 prompt 自相矛盾：`buildDayDraftPrompts` 的「沒人發言」禁令改為「不要在你的發言裡說」；「白板狀況」改為「討論狀況」。
+  3. 新增 `notePrivacyRules()` helper，注入白天 draft＋response prompt（狼／共有者暫不同步）：筆記獨立成立、未發生不寫成已發生、不寫成自己不發言、speech 與 strategy_update 一致；另加骨幹要求（實質判斷、時序正確、同人只點一次）。
+  4. `buildExpandPrompts()` 拆三會議共用段＋白天專屬段：私有計畫轉當前意圖、公頻不洩漏私頻、輪次詞只能是建議、用玩家日常話（正面範本）、受詞明確、一句一次、刪裝飾詞、刪空威脅、段落空行；新增 `boardText` 參數，`expandSpeech()` 按會議傳入白板供時序推理。
+  5. `buildJudgePrompts()` 加 `meeting` 參數＋評分標準（獨立成立、言行一致、結構詞、有新東西、可核對、實際動作、時序、格式vs遊戲）；draft／response 輸出新增 `importance`／`urgency`／`impact` 自評欄位，judge 顯示並核對（灌水扣分、低分過濾）。
+  - 驗證：`npm run build` 通過；`npm test` 186 pass／0 fail；lobby 27／27；checkpoint 17／17。
+  - 未落地：OpenCC 繁體強轉（需加 npm 依賴，待決策）、狼／共有者 draft prompt 同步、段落數驗證、同分選擇規則。
 
 ## 本 session 交接（2026-09-29）
 

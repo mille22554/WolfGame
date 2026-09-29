@@ -12,10 +12,27 @@ export interface AiDayDraftSlotCheckpoint {
     clientId: string;
     speech?: string;
     stance?: string;
+    /** 發言者自評：公開後對局勢的影響（1-10）、現在不講會不會來不及（1-10）、預期改變什麼。 */
+    importance?: number;
+    urgency?: number;
+    impact?: string;
 }
 export interface AiDaySpeakDraft {
     speech: string;
     stance: string;
+    /** 同上（回應階段出稿時的自評）。 */
+    importance?: number;
+    urgency?: number;
+    impact?: string;
+}
+/** 白天 judge 候選：一份草稿＋發言者＋自評（可選）。 */
+export interface AiDayDraftPick {
+    player: GamePlayer;
+    speech: string;
+    stance: string;
+    importance?: number;
+    urgency?: number;
+    impact?: string;
 }
 /** 某一 published turn 中，每位回應者的完成狀態。 */
 export interface AiDayResponseCheckpoint {
@@ -294,6 +311,10 @@ export declare class AiController {
     private wolfContext;
     /** 共有者情境（system prompt 附加：Two-Level Split，與 wolfContext 同構；V8） */
     private masonContext;
+    /** 會議流程機制說明（三個 context 共用；三種會議 loop 完全相同，差別只在可見範圍與議題） */
+    private discussionMechanism;
+    /** 行動筆記的私有性規則（白天 draft／response prompt 共用） */
+    private notePrivacyRules;
     /** 白天情境（system prompt 附加：Two-Level Split，全角色共用；與 wolfContext/masonContext 同構） */
     private dayContext;
     /** 草稿 prompt（獨立出稿：speech + stance）；輸出 {"speech":"...", "stance":"投XXX"|"資訊不足"} */
