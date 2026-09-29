@@ -30,6 +30,11 @@
   5. `buildJudgePrompts()` 加 `meeting` 參數＋評分標準（獨立成立、言行一致、結構詞、有新東西、可核對、實際動作、時序、格式vs遊戲）；draft／response 輸出新增 `importance`／`urgency`／`impact` 自評欄位，judge 顯示並核對（灌水扣分、低分過濾）。
   - 驗證：`npm run build` 通過；`npm test` 186 pass／0 fail；lobby 27／27；checkpoint 17／17。
   - 未落地：OpenCC 繁體強轉（需加 npm 依賴，待決策）、狼／共有者 draft prompt 同步、段落數驗證、同分選擇規則。
+- ✅ **OpenCC＋狼／共有者同步落地**（2026-09-29，已 commit，`src`＋`dist`＋依賴）：
+  - 新增 `opencc-js` 依賴；`expandSpeech()` 發布邊界 `cn→tw` 強轉（三會議共用，含 fallback 草稿原文）。Codepoint 驗證通過（剛→剛、對／講／尋／實／們正確；沉默的沉、兩岸同形字正確保留）。
+  - `notePrivacyRules()` 同步注入狼 draft／response、共有者 draft／response 四個 prompt。
+  - 使用者決策：段落數驗證＝不管；同分選擇＝維持現狀（LLM 決定）。
+  - 驗證：`npm run build` 通過；`npm test` 186 pass／0 fail；lobby＋checkpoint 44／44。
 
 ## 本 session 交接（2026-09-29）
 

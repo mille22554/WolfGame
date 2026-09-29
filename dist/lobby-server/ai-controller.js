@@ -16,6 +16,18 @@
 import { Role } from '../types.js';
 import { chat } from './llm.js';
 import { loadCharacterProfile, parseJsonResponse, } from './ai-player.js';
+import { Converter } from 'opencc-js';
+/** OpenCC 簡轉繁（cn→tw）單例；expand 發布邊界強制轉換用（prompt 寫「全繁體中文」壓不住模型）。 */
+let openccTw = null;
+function toTraditional(text) {
+    try {
+        const convert = openccTw ?? (openccTw = Converter({ from: 'cn', to: 'tw' }));
+        return convert(text);
+    }
+    catch {
+        return text;
+    }
+}
 export const AI_DAY_CHECKPOINT_SCHEMA_VERSION = 1;
 const MAX_LLM_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
@@ -1091,7 +1103,9 @@ export class AiController {
                     : undefined);
         const result = await this.llmWithRetry(entry.def.clientId, 'EXPAND', this.day, this.buildExpandPrompts(entry, draftSpeech, meeting, boardText), (p) => (typeof p.speech === 'string' && p.speech.trim() ? 'ok' : null));
         // 3 次重試全失敗 → fallback 用草稿原文，不阻塞會議
-        return result.value !== null ? result.parsed.speech.trim() : draftSpeech;
+        const raw = result.value !== null ? result.parsed.speech.trim() : draftSpeech;
+        // 發布邊界 OpenCC 強轉繁體（草稿與展開都可能含簡體）
+        return toTraditional(raw);
     }
     // --- 白天討論（策略先行 + toggle 制） ---
     /** 白天策略：只補 strategyDone 缺漏者；每個完成即 commit。 */
@@ -1588,6 +1602,7 @@ export class AiController {
             `任務：說一句話——① 你刀誰（會議已有共識目標時可省略）② 你明天白天做什麼（針對存活玩家）③ 你預期這個動作讓會議怎麼發展（潛伏時可省略）。`,
             `狼每晚必須刀人。「資訊不足」＝你還在考慮，最終必須選。`,
             `**寫成短句要點，每行一個重點，不要寫成完整敘述句**——這是筆記不是發言稿，之後會被展開成完整發言。`,
+            this.notePrivacyRules(),
             ``,
             `出稿前先想清楚四件事，再寫 speech：`,
             `① 刀的目標服務哪個軸（夜間消耗/白天存活＋引導）？**第 1 天刀人不用寫理由**——沒有任何發言可參考，寫理由就是廢話，直接選定一個；第 2 天起，理由若有觀察依據再寫。`,
@@ -1648,6 +1663,7 @@ export class AiController {
             `⚠️ 如果你之前已在會議上表態過（白板有你的名字+投XXX），且新發言不改變你的判斷 → 用 action="vote" 確認，不要用 wait。wait 只給還沒表態過的狼。`,
             `⚠️ 刀人目標今晚就死，白天動作只針對存活玩家。用「名字＋你」或直接用名字稱呼隊友，不要用「他／她」。此頻道只有狼，不引用白板外發言。`,
             `⚠️ 會議已有共識刀人目標時，speech 不再重宣布刀誰（「我同意刀X」「支持刀X」這類）——只想重申既定目標／沒有新戰術 → 直接 action="vote"。speech 只能用來提明天的新戰術安排（誰帶節奏、質疑誰、怎麼配合、有沒有要改戰術）。`,
+            this.notePrivacyRules(),
             `⚠️ speech 是行動筆記不是發言稿：短句列重點即可，不要寫成完整敘述、不要附上明天要說的逐字台詞。`,
         ].join('\n');
         return [
@@ -1674,6 +1690,7 @@ export class AiController {
             `共有者沒有夜間動作。「資訊不足」＝你還在評估，還沒決定明天怎麼行動。`,
             `speech 只寫行動與決策重點：做什麼（誰做什麼、CO 與否）＋關鍵理由一句＋預期走向一句。`,
             `**寫成短句要點，每行一個重點，不要寫成完整敘述句**——這是筆記不是發言稿，之後會被展開成完整發言。`,
+            this.notePrivacyRules(),
             ``,
             `出稿前先想清楚四件事，再寫 speech：`,
             `① 明天的動作服務哪個軸（白天存活／引導）？**第 1 天不用寫質疑理由**——沒有任何發言可參考，質疑就是空砲還會暴露自己，直接選定要拋的話題或觀察對象；第 2 天起，質疑若有實際發言依據再寫。`,
@@ -1738,6 +1755,7 @@ export class AiController {
             `⚠️ 如果你之前已在會議上表態過（白板有你的名字），且新發言不改變你的判斷 → 用 action="vote" 確認，不要用 wait。wait 只給還沒表態過的夥伴。`,
             `⚠️ 白天動作只針對存活玩家。用「你」或「名字＋你」稱呼對方，不要用「他／她」。此頻道只有你和夥伴兩個人，不引用白板外發言。`,
             `⚠️ 會議已有共識的白天安排時，speech 不再重宣布（「就這麼辦」這類）——只想重申既定安排／沒有新戰術 → 直接 action="vote"。speech 只能用來提新的分工（誰拋話題、誰觀察、被質疑時誰救、怎麼配合）。`,
+            this.notePrivacyRules(),
             `⚠️ speech 是行動筆記不是發言稿：短句列重點即可，不要寫成完整敘述、不要附上明天要說的逐字台詞。`,
         ].join('\n');
         return [
