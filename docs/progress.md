@@ -5,7 +5,7 @@
 
 ## 目前狀態
 
-**目前暫停點：** Phase 1/2/3 checkpoint 程式已 push（`e2e3770`、`cfc4659`、`d36f032`、`a0e8fe5`）。2026-09-29 已用 `medium` 重跑 night，產生可 resume 的 v2 envelope，並從該存檔成功只跑到第一則公頻 `MESSAGE`；沒有進 day responses、投票或完整白天。Oracle 尚未啟動，目前等你先看兩份 md；正式 service 未重啟。
+**目前暫停點：** Phase 1/2/3 checkpoint 程式已 push（`e2e3770`、`cfc4659`、`d36f032`、`a0e8fe5`）。2026-09-29 最新夜晚重跑 attempt-01 已通過：只有村民鈴死亡，狼與狂人皆存活，v2 envelope 結構有效；本輪不啟動白天。舊的第一則公頻稿樣本仍保留供 Oracle review，正式 service 未重啟。
 
 - ✅ **共有者 prompt V8 落地**（2026-09-24，oracle 雙共有者第 1 夜流程驗證後落地）：三函數（`masonContext`／`buildMasonDraftPrompts`／`buildMasonResponsePrompts`）全面對齊狼版編排，只有身分差異；草稿定位改為「行動筆記非發言稿」
 - ✅ **私頻稱呼修正**（2026-09-24，stage 1 實測發現＋oracle 驗證後落地）：2 人私頻用「你／名字＋你」，禁「他／她」與「你們」
@@ -17,24 +17,22 @@
 - ✅ **Checkpoint Phase 1：GameEngine day restore**（2026-09-24，Oracle Gate 1 attempt 2 GO）：保留 dayReady／dayMessages、day/seq/id、copy-based getter、idempotent `setDayReady`／`reconcileDayReady`、wolfTargetId round-trip；focused build + 43/43 tests 通過。AI private snapshot／harness envelope 尚待 Phase 2/3
 - ✅ **Checkpoint Phase 2/3 + 首句 bounded 控制（已 push）**（2026-09-29，commits `cfc4659`／`d36f032`／`a0e8fe5`）：AI day snapshot、單一 v2 envelope、restore barrier、SIGINT settle、atomic save、`--stop-after-first-message`；本機 harness 17/17＋lobby focused 50/50 通過
 - ✅ **本輪 medium server 實測**（2026-09-29）：night 重跑完成並產生 `/tmp/night-v2-medium.json`（schemaVersion=2、`game.phase=DAY_DISCUSSION`、`ai.stage=strategies`）；再 resume 到第一則公頻 `MESSAGE` 後停止，沒有 day responses／第二輪 draft
-- ⏳ **首則 expanded 公頻稿待 Oracle 盲評**（2026-09-29）：本機報告已保存為 `C:\Users\user\Desktop\FrankTests\Temp\ai-trace-stage2-night.md` 與 `...\ai-trace-stage2-day.md`；等你看過後才開新 Oracle session
+- ✅ **夜晚重跑 attempt-01 已通過**（2026-09-29，`LLM_REASONING_EFFORT=medium`）：`NIGHT_RESULT` 只有村民鈴死亡；狼（健太、美咲、翔太）與狂人（小晴）皆存活。v2 envelope 驗證有效：`schemaVersion=2`、`game.phase=DAY_DISCUSSION`、`ai.stage=strategies`、21 events／20 aiLog。server 存檔：`/tmp/night-v2-medium-attempt-01.json`；本機 night 報告已覆蓋 `C:\Users\user\Desktop\FrankTests\Temp\ai-trace-stage2-night.md`
+- ⏳ **首則 expanded 公頻稿待 Oracle 盲評**（2026-09-29）：本機仍保留上一輪第一句測試報告 `...\ai-trace-stage2-day.md`；等你看過最新 night 報告後再決定是否沿用該樣本
 
 ## 本 session 交接（2026-09-29）
 
 - **已推送程式基線**：`e2e3770`（Phase 1 GameEngine restore）、`cfc4659`（Phase 2 AI day snapshot）、`d36f032`（v2 envelope／resume harness）、`a0e8fe5`（`--stop-after-first-message`）。`main` 未動。
-- **本輪 server 實測**：server 正式 service 未重啟；測試 process 使用 `LLM_REASONING_EFFORT=medium`。night 重跑完成，產生 `/tmp/night-v2-medium.json`；結構驗證為 `schemaVersion=2`、`game.phase=DAY_DISCUSSION`、`ai.schemaVersion=1`、`ai.stage=strategies`。
-- **首句 bounded resume**：從 night v2 envelope resume，使用 `--stop-after-first-message`；結果只產生 1 則公頻 `MESSAGE`，published checkpoint 已 committed（`messageId=day-1-1`、`messageSeq=1`），14 個 response slot 保持 pending，沒有進 day responses／第二輪 draft。server 存檔：`/tmp/day-v2-medium-first.json`。
-- **本機報告（固定檔名）**：
-  - `C:\Users\user\Desktop\FrankTests\Temp\ai-trace-stage2-night.md`
-  - `C:\Users\user\Desktop\FrankTests\Temp\ai-trace-stage2-day.md`
-- **本機驗證**：`npm run build` 通過；`node --test scripts/external-test-stage2.test.mjs` 為 17/17；lobby focused 測試為 50/50。
+- **本輪 server 實測（最新）**：attempt-01 通過；只有 villager 鈴死亡，狼與狂人皆存活。server 存檔：`/tmp/night-v2-medium-attempt-01.json`；本機 night 報告已取回。
+- **本輪沒有 resume 白天**：依使用者指示，成功建立夜晚存檔後只回報，不產生第一句；`ai-trace-stage2-day.md` 仍是上一輪 bounded 測試報告。
+- **本機驗證（程式／前輪）**：`npm run build` 通過；harness 17/17；lobby focused 50/50。
 - **Gate 2 狀態**：獨立的 Oracle Gate 2 尚未做；本輪 server 行為證據不等於 Oracle review 通過。
 - **目前工作樹**：只剩 `dist/lobby-server/llm.d.ts` 的既有 line-ending 狀態，**不要暫存**。
 - **下一 agent 的恢復順序**：
-  1. 不要重跑完整白天；先讓使用者閱讀 `ai-trace-stage2-night.md` 與 `ai-trace-stage2-day.md`。
-  2. 使用者確認後才開新 Oracle session，盲評第一則 expanded 公頻稿與其 draft/judge 脈絡。
-  3. Oracle 結果回填 progress/spec；不要在未檢視報告前修改 prompt。
-  4. 之後若要繼續，才從 `/tmp/day-v2-medium-first.json` 續跑 day responses；不要重跑 night。
+  1. 不要重跑 night，也不要自行 resume 白天。
+  2. 先讓使用者閱讀最新 `ai-trace-stage2-night.md`。
+  3. 使用者確認後才決定是否沿用上一輪 day 報告，或另開 Oracle session 評估 prompt 問題。
+  4. 若日後要測白天，使用 `/tmp/night-v2-medium-attempt-01.json`，不要重跑 night。
 
 - ✅ 夜流程（NIGHT_RESULT）已通過多次驗證
 - ✅ 狼會議收斂邏輯修好（不再 premature VOTING）
@@ -48,7 +46,7 @@
 - ✅ **persona 修正**：shinichi/yuko/tatuya 的「時間線/分鐘/看到的現象」範例改為發言矛盾型（真一「昨晚和誰同點、時間差三分鐘」即源自 persona 範例腦補）
 - ✅ 白天測試紀錄（`stage2-day-report.md`）：狼會議不完整是舊格式 `night1.json` 無 `.log.json`（非渲染 bug）——要完整狼會議需重跑整局 night
 - ✅ **白天開場「捏造他人立場」幻覺修復**：良子第一句「不跟佐雪的立場走」——佐雪全程零發言，立場是憑空捏造（白板空＋強迫點名的 prompt 側效果）。system prompt 證據邊界新增「禁止假設任何玩家持某立場/講過什麼，除非實際出現在白板」；strategy/draft/response prompt 加降級規則「只能質疑已發言的實際內容，沒人發言就談自己觀察」（參考 `docs/ai-rp-prompt-research.md` §4 anti-fabrication）
-- ⏳ **白天 V-Day 行為驗證**：使用者已選擇先修 checkpoint 持久化；目前 Phase 2 AI WIP 已通過本機 50/50 tests，但 Gate 2 暫停，Phase 3 harness 尚未完成。完成 envelope 前不要再重複 5 分鐘 resume。
+- ⏳ **白天 V-Day 行為驗證**：最新 attempt-01 只完成夜晚篩選，本輪依指示未 resume 白天；上一輪第一句 bounded 報告仍保留，等待 Oracle 診斷後再決定 prompt。
 
 **私頻稱呼修正（2026-09-24，stage 1 實測發現、oracle 驗證通過後落地）：**
 
@@ -193,11 +191,10 @@
 - 併發實測補充（14 路全過）：5 併發 967 tokens 全 200；14 併發 ~9.2K tokens 全 200、~49s 完成（SGLang `--max-running-requests 1` 依 priority 排隊）。先前 5 併發測試因 PowerShell 管道把中文打成 `?`（prompt=65 是亂碼），改用 base64 上傳後為正常 prompt（~79 tokens）
 
 **下一步（依序）：**
-1. 先讓使用者閱讀本輪兩份固定檔名報告：`ai-trace-stage2-night.md`、`ai-trace-stage2-day.md`；不要重跑 night 或完整白天。
-2. 使用者確認報告內容後，開新的 Oracle session 盲評第一則 expanded 公頻稿、對應 draft 與 judge 脈絡；先診斷，不直接改 prompt。
-3. Oracle 結果回填本文件與 `docs/ubuntu-spec.md`；若發現 prompt 問題，另開修改範圍。
-4. 若要繼續白天，從 server `/tmp/day-v2-medium-first.json` resume，不重做 night；正式 service 仍不重啟，金鑰不輪換。
-5. 之後才處理 production `AiController` 接線與完整多日遊戲；前端維持待做。
+1. 先讓使用者閱讀最新 `ai-trace-stage2-night.md`；本輪 attempt-01 已通過夜晚篩選，不要重跑 night。
+2. `ai-trace-stage2-day.md` 是上一輪 bounded 測試報告；若要繼續分析 prompt，再用新 Oracle session 評估該第一句，不把它當成 attempt-01 的白天結果。
+3. 若要進行新的白天測試，使用 `/tmp/night-v2-medium-attempt-01.json`，不要重做 night；正式 service 仍不重啟，金鑰不輪換。
+4. 之後才處理 production `AiController` 接線與完整多日遊戲；前端維持待做。
 
 **Server 上跑測試的正確方式（金鑰不得放進 argv）：**
 ```bash
@@ -205,14 +202,13 @@
 ssh ssh.morowin.win "cd /opt/wolfgame && git pull --ff-only"
 
 # 重跑夜晚，產生 v2 envelope；medium 只作用於此測試 process
-ssh ssh.morowin.win "sudo timeout --signal=INT --kill-after=30s 20m env LLM_REASONING_EFFORT=medium sh /opt/wolfgame/scripts/run-external-test-safe.sh --stop-at NIGHT_RESULT --save-state /tmp/night-v2-medium.json --report /tmp/ai-trace-stage2-night-v2-medium.md"
+ssh ssh.morowin.win "sudo timeout --signal=INT --kill-after=30s 20m env LLM_REASONING_EFFORT=medium sh /opt/wolfgame/scripts/run-external-test-safe.sh --stop-at NIGHT_RESULT --save-state /tmp/night-v2-medium-attempt-01.json --report /tmp/ai-trace-stage2-night-v2-medium-attempt-01.md"
 
-# 從 v2 night envelope resume，只跑到第一則公頻 MESSAGE
-ssh ssh.morowin.win "sudo timeout --signal=INT --kill-after=30s 15m env LLM_REASONING_EFFORT=medium sh /opt/wolfgame/scripts/run-external-test-safe.sh --resume /tmp/night-v2-medium.json --stop-after-first-message --save-state /tmp/day-v2-medium-first.json --report /tmp/ai-trace-stage2-day-v2-medium-first.md"
+# 只有在 NIGHT_RESULT 死亡清單全部是 villager 時，才取回並覆蓋本機 night 報告
+scp ssh.morowin.win:/tmp/ai-trace-stage2-night-v2-medium-attempt-01.md "C:\Users\user\Desktop\FrankTests\Temp\ai-trace-stage2-night.md"
 
-# 取回報告，覆蓋本機固定檔名
-scp ssh.morowin.win:/tmp/ai-trace-stage2-night-v2-medium.md "C:\Users\user\Desktop\FrankTests\Temp\ai-trace-stage2-night.md"
-scp ssh.morowin.win:/tmp/ai-trace-stage2-day-v2-medium-first.md "C:\Users\user\Desktop\FrankTests\Temp\ai-trace-stage2-day.md"
+# 本輪不 resume 白天；若之後要做，使用已通過的 night attempt-01 存檔
+# ssh ssh.morowin.win "sudo timeout --signal=INT --kill-after=30s 15m env LLM_REASONING_EFFORT=medium sh /opt/wolfgame/scripts/run-external-test-safe.sh --resume /tmp/night-v2-medium-attempt-01.json --stop-after-first-message --save-state /tmp/day-v2-medium-seer-alive-first.json --report /tmp/ai-trace-stage2-day-v2-medium-seer-alive-first.md"
 ```
 
 舊的 `/tmp/night1.json` 是 legacy 三檔格式，不能餵給目前 v2 harness；勿刪除，作为歷史 night 記錄。
@@ -250,9 +246,9 @@ scp ssh.morowin.win:/tmp/ai-trace-stage2-day-v2-medium-first.md "C:\Users\user\D
 
 ## 待做
 
-1. **[HIGH] 使用者檢視本輪兩份 md** → `ai-trace-stage2-night.md`、`ai-trace-stage2-day.md` 已生成於本機
-2. **[HIGH] 首則公頻稿品質盲評** → 使用者確認報告後，開全新 Oracle session 評估 expanded 稿、draft、judge 與私密資訊洩漏
-3. **[MED] 完整白天續跑** → 若需要，從 `/tmp/day-v2-medium-first.json` 繼續 day responses；不重跑 night
+1. **[HIGH] 使用者檢視最新 night 報告** → `ai-trace-stage2-night.md` 已更新為 attempt-01；`ai-trace-stage2-day.md` 仍是上一輪 bounded 樣本
+2. **[HIGH] Prompt 問題診斷** → 若要處理「預設別人持有情報／輪次用詞」，開新 Oracle session 評估上一輪 day 報告，不直接修改 prompt
+3. **[MED] 新的白天測試** → 只有在使用者指示後，從 `/tmp/night-v2-medium-attempt-01.json` resume；不重跑 night
 4. **[MED] Step 5：AI 接 production server** → `server.ts` 實例化 `AiController`（本輪行為驗證與品質裁示後才做）
 5. **[LOW] 前端（ubuntu-web/）** → 等外部測試跑通完整一局再開
 
