@@ -60,6 +60,8 @@ export class AiController {
     dayResumePromise = null;
     dayResumeEpoch = null;
     dayResumeRunId = null;
+    /** 一次性 stop control；預設 false（正式 server 永不開啟）。消費後立即清除。 */
+    stopAfterNextPublish = false;
     dayTestLlm;
     messageCap;
     constructor(defs, opts) {
@@ -252,11 +254,27 @@ export class AiController {
         });
         return promise;
     }
+    /**
+     * 一次性、bounded 的 stop control（測試／外部 harness 專用；正式 server 不接線）。
+     *
+     * 語意：開啟後，下一個「selected draft 的 publish」一旦完整 commit，runDayDiscussion 立即結束，
+     * 不再進入 DAY responses、也不再開下一輪 draft。
+     * 結束時的 checkpoint 必須自洽且可再 export——已發布訊息、`published.status='committed'`、
+     * `messageId/messageSeq`、發言者 ready 目標全部保留（不呼叫 destroy，否則 export 會遺失 state）。
+     *
+     * 一次性：只對「本次的下一次 publish」生效，消費後清除；不會影響後續 resume。
+     * 若在發生 publish 之前 run 就結束（例如 all-ready 直接 reconcile），旗標保留待下次 publish，
+     * 該 run 正常 return，不會卡死。
+     */
+    requestStopAfterNextDayPublish() {
+        this.stopAfterNextPublish = true;
+    }
     /** 取消進行中的重試排程（進行中的 fetch 無法中斷，但其結果會被丟棄） */
     destroy() {
         this.destroyed = true;
         this.invalidateDayRun();
         this.dayContinuation = null;
+        this.stopAfterNextPublish = false;
         for (const t of this.timers)
             clearTimeout(t);
         this.timers = [];
@@ -1165,7 +1183,10 @@ export class AiController {
                     break;
                 }
                 case 'publish': {
-                    this.publishSelectedDayDraft(state, aiPlayers, runId);
+                    // bounded stop：publish 完整 commit 後立即結束本次 run——
+                    // 不進 responses、不開下一輪 draft；已發布訊息與 checkpoint 完整保留（不呼叫 destroy）。
+                    if (this.publishSelectedDayDraft(state, aiPlayers, runId))
+                        return;
                     break;
                 }
                 case 'responses': {
@@ -1869,14 +1890,20 @@ export class AiController {
         }
         return this.expandSpeech(entry, draftSpeech, 'day');
     }
-    /** 發布 identity 與 ready 目標同 tick commit；resume 看 committed state 不重送。 */
+    /**
+     * 發布 identity 與 ready 目標同 tick commit；resume 看 committed state 不重送。
+     *
+     * 回傳 true 代表「本次 bounded stop 已在此 publish 生效」：sendDayMessage 已成功、
+     * published 已 committed、發言者 ready 已補齊，caller 應立即結束 runDayDiscussion
+     * （不進 responses、不開下一輪 draft）。此時不呼叫 destroy——checkpoint 必須仍可 export。
+     */
     publishSelectedDayDraft(state, aiPlayers, runId) {
         if (!this.isCurrentDayRun(state, runId) || !this.game)
-            return;
+            return false;
         const selectedId = state.selectedClientId;
         const expandedText = state.expandedText;
         if (!selectedId || expandedText === null || !aiPlayers.some((player) => player.clientId === selectedId))
-            return;
+            return false;
         let published = state.published;
         if (!published) {
             this.dayTurnCounter += 1;
@@ -1911,6 +1938,12 @@ export class AiController {
         }
         state.stage = 'responses';
         this.commitDayReady(published.clientId, published.readyValue, state, runId);
+        // 一次性 stop control：只在 publish 完整 commit 之後消費，消費後清除。
+        if (this.stopAfterNextPublish && published.status === 'committed') {
+            this.stopAfterNextPublish = false;
+            return true;
+        }
+        return false;
     }
     /** 已完成 response 不再叫 LLM；speak draft 依 aiPlayers 輸入順序組成下一個 judge batch。 */
     async runDayResponses(state, aiPlayers, runId) {

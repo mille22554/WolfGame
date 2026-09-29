@@ -17,6 +17,11 @@
  *   T10 boardSection：三種白板（狼/共有者/白天）標題與每則訊息格式一致
  *   T11 discussionLogLine：MASON_MESSAGE 與另兩塊白板同格式入 log；其他事件 null
  *   T12 dayDiscussionSection：DAY_STANCE 可被渲染、WOLF_STANCE 不再誤渲染為白天回應
+ *   T13 --stop-after-first-message：無值 flag 解析、預設關閉；baseline 只算公頻 MESSAGE 且需 baseline+1
+ *   T14 bounded stop：resume 只發一則 public MESSAGE、無 day response LLM 呼叫；published committed ＋ speaker ready
+ *   T15 stop 一次性消費（第二次 resume 續跑 responses）；沒有 publish 就結束時不卡死
+ *   T16 first-message stop 的報告／存檔不會撞上未完成的 publish，resume reject 不變 unhandled rejection
+ *   T17 first-message stop 在 status／report／exit code 都是成功目標（既有 stop-at 語意不變）
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -30,15 +35,25 @@ import {
   STAGE2_STATE_SCHEMA_VERSION,
   SIGINT_SETTLE_TIMEOUT_MS,
   STOP_AT_PHASES,
+  STOP_AFTER_FIRST_MESSAGE_FLAG,
+  FIRST_MESSAGE_STOP_LABEL,
   validateStopAt,
   isMainModule,
   settleInFlightWork,
   atomicWriteJson,
   buildEnvelope,
+  buildReport,
   loadEnvelope,
+  validateEnvelope,
   stage2ResumeImport,
   stage2ResumeRun,
   resumeStage2State,
+  parseStopAfterFirstMessage,
+  publicDayMessageCount,
+  firstMessageStopReached,
+  awaitResumeCommit,
+  stage2StatusLine,
+  stage2ExitCode,
   boardSection,
   discussionLogLine,
   dayDiscussionSection,
@@ -485,4 +500,200 @@ test('T12：dayDiscussionSection——DAY_STANCE 渲染為「其他 AI 回應」
   assert.ok(!section.includes('2026-01-01T00:00:00.000Z'), '白天流程不應使用 timestamp 發言格式');
   assert.ok(section.includes('B：✅ ready'), 'DAY_STANCE 應被渲染為白天回應');
   assert.ok(!section.includes('C：✅ ready'), 'WOLF_STANCE 不應被誤渲染為白天回應');
+});
+
+// --- T13：--stop-after-first-message flag 解析與 baseline 計算 ---
+
+test('T13：--stop-after-first-message 是無值 flag 且預設關閉；baseline 只算公頻 MESSAGE 並需 baseline+1', async () => {
+  // 解析：只看 token 是否存在，不消費後面值；未給 flag 一律 false（既有命令行為不變）
+  assert.equal(parseStopAfterFirstMessage([]), false);
+  assert.equal(parseStopAfterFirstMessage(['--stop-at', 'DAY_RESULT']), false);
+  assert.equal(parseStopAfterFirstMessage(['--resume', '/tmp/state.json']), false);
+  assert.equal(parseStopAfterFirstMessage(['--resume', '/tmp/state.json', '--stop-after-first-message']), true);
+  assert.equal(parseStopAfterFirstMessage([STOP_AFTER_FIRST_MESSAGE_FLAG, '--report', 'out.md']), true);
+  // 無值 flag：後面接的任何 token 都不被當成它的值
+  assert.equal(parseStopAfterFirstMessage([STOP_AFTER_FIRST_MESSAGE_FLAG, 'false']), true);
+
+  const harness = makeHarness();
+  try {
+    assert.equal(publicDayMessageCount(harness.game), 0, '未發言時公頻訊息數為 0');
+    harness.game.sendDayMessage('ai-a', '第一則');
+    // WOLF_MESSAGE / MASON_MESSAGE 屬私頻：不進 dayMessages，不得被算進 baseline
+    harness.broadcasts.push({ type: 'WOLF_MESSAGE', from: 'A', text: '狼文字' });
+    harness.broadcasts.push({ type: 'MASON_MESSAGE', from: 'A', text: '共有者文字' });
+    const baseline = publicDayMessageCount(harness.game);
+    assert.equal(baseline, 1, '私頻訊息不計入公頻 baseline');
+    assert.equal(firstMessageStopReached(harness.game, baseline), false, '還沒到 baseline+1 不得停止');
+    harness.game.sendDayMessage('ai-b', '第二則');
+    assert.equal(firstMessageStopReached(harness.game, baseline), true, '到 baseline+1 即為 bounded stop 達成');
+  } finally {
+    destroyHarness(harness);
+  }
+});
+
+// --- T14：bounded stop 只跑一則 public MESSAGE（controller 層） ---
+
+test('T14：requestStopAfterNextDayPublish——publish commit 後立即結束，只有一則 public MESSAGE、無 day response LLM 呼叫', async () => {
+  const counts = { strategy: [], draft: [], judge: [], expand: [], respond: [] };
+  const harness = makeHarness(makeCountingAdapter(counts));
+  try {
+    const baseline = publicDayMessageCount(harness.game);
+    harness.ai.setPhaseStartEnabled(true);
+    harness.ai.requestStopAfterNextDayPublish(); // resume 前開啟 bounded stop
+    await harness.ai.resumeDayDiscussion();
+
+    // 只跑到第一則公頻發言：不進 responses、不開下一輪 draft
+    assert.equal(countType(harness.broadcasts, 'MESSAGE'), 1);
+    assert.equal(publicDayMessageCount(harness.game), baseline + 1);
+    assert.equal(firstMessageStopReached(harness.game, baseline), true);
+    assert.deepEqual(counts.respond, [], 'stop 之後不得再呼叫 day response LLM');
+    assert.deepEqual(counts.judge, [1], '只 judge 一次（只 publish 一輪）');
+
+    // published checkpoint 已 committed ＋ identity 已記錄
+    const checkpoint = harness.ai.exportDayCheckpoint();
+    assert.ok(checkpoint, '不得呼叫 destroy；stop 後 checkpoint 必須仍可 export');
+    assert.equal(checkpoint.published.status, 'committed');
+    assert.equal(checkpoint.stage, 'responses', 'stop 後 checkpoint 停在 publish 後的 responses（可再 resume 續跑）');
+    const publishedMessage = harness.game.getDayState().dayMessages[0];
+    assert.equal(checkpoint.published.messageId, publishedMessage.id);
+    assert.equal(checkpoint.published.messageSeq, publishedMessage.seq);
+    assert.equal(checkpoint.published.clientId, checkpoint.selectedClientId);
+
+    // 發言者 ready 已 commit
+    assert.equal(checkpoint.published.readyValue, true);
+    assert.equal(harness.game.getDayState().dayReady.get(checkpoint.published.clientId), true);
+    // 其他 AI 未 ready（沒跑 responses），engine 留在 DAY_DISCUSSION
+    assert.equal(harness.game.getNightState().phase, 'DAY_DISCUSSION');
+    assert.deepEqual(
+      checkpoint.responses.map((entry) => entry.status),
+      ['pending', 'pending'],
+      'response slots 保留為 pending，尚未執行',
+    );
+  } finally {
+    destroyHarness(harness);
+  }
+});
+
+// --- T15：一次性消費；沒有 publish 就不卡死 ---
+
+test('T15：bounded stop 只對下一次 publish 生效（消費後清除）；沒有 publish 就結束時正常 return 不卡死', async () => {
+  // (a) 沒有 publish 的 run：all-AI-ready 直接 reconcile——正常結束，不發言、不呼叫 LLM
+  const stuckCounts = { strategy: [], draft: [], judge: [], expand: [], respond: [] };
+  const stuck = makeHarness(makeCountingAdapter(stuckCounts));
+  try {
+    // 只有 AI ready（human 永不 ready）：engine 留在 DAY_DISCUSSION，AI loop 走 reconcile→complete
+    stuck.game.state.dayReady = new Map(CLIENT_IDS.map((clientId) => [clientId, clientId !== 'human']));
+    stuck.ai.requestStopAfterNextDayPublish();
+    await stuck.ai.resumeDayDiscussion(); // 必須 resolve（不可卡死）
+    assert.equal(countType(stuck.broadcasts, 'MESSAGE'), 0);
+    assert.deepEqual(stuckCounts.strategy, []);
+    assert.deepEqual(stuckCounts.draft, []);
+    assert.deepEqual(stuckCounts.respond, []);
+    const afterReconcile = stuck.ai.exportDayCheckpoint();
+    assert.ok(afterReconcile);
+    assert.equal(afterReconcile.stage, 'complete', '沒有 publish 時旗標不影響原本的 reconcile→complete 流程');
+    assert.equal(stuck.game.getNightState().phase, 'DAY_DISCUSSION'); // human 未 ready
+  } finally {
+    destroyHarness(stuck);
+  }
+
+  // (b) 已消費的 stop 不可殘留：再 resume 一次會續跑 responses，而不是再次在第一則發言後停住
+  const counts = { strategy: [], draft: [], judge: [], expand: [], respond: [] };
+  const harness = makeHarness(makeCountingAdapter(counts));
+  try {
+    harness.ai.setPhaseStartEnabled(true);
+    harness.ai.requestStopAfterNextDayPublish();
+    await harness.ai.resumeDayDiscussion();
+    assert.equal(countType(harness.broadcasts, 'MESSAGE'), 1);
+    assert.deepEqual(counts.respond, []);
+
+    await harness.ai.resumeDayDiscussion(); // 第二次 resume：沒有再請求 stop
+    assert.deepEqual(counts.respond.sort(), ['ai-b', 'ai-c'], '消費後的 resume 應續跑 day responses');
+    assert.equal(countType(harness.broadcasts, 'MESSAGE'), 1, 'responses 沒有新草稿時不得再發布');
+    const after = harness.ai.exportDayCheckpoint();
+    assert.ok(after);
+    assert.equal(after.stage, 'complete');
+  } finally {
+    destroyHarness(harness);
+  }
+});
+
+// --- T16：first-message stop 的報告／存檔 race 與 unhandled rejection ---
+
+test('T16：first-message stop 的存檔不會撞上未完成的 publish；resume reject 不產生 unhandled rejection', async () => {
+  const counts = { strategy: [], draft: [], judge: [], expand: [], respond: [] };
+  const harness = makeHarness(makeCountingAdapter(counts));
+  const unhandled = [];
+  const onUnhandled = (reason) => { unhandled.push(reason); };
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    const baseline = publicDayMessageCount(harness.game);
+    harness.ai.setPhaseStartEnabled(true);
+    harness.ai.requestStopAfterNextDayPublish();
+    // 與 main() 相同：resume promise 先明確 catch，之後 await 才寫報告／存檔
+    const resumePromise = awaitResumeCommit(harness.ai.resumeDayDiscussion());
+
+    // 模擬 observation loop：數到 baseline+1 就 break
+    await eventually(() => firstMessageStopReached(harness.game, baseline), 'bounded stop 沒有在第一則公頻 MESSAGE 後達成');
+    // 寫檔前必須等這次 resume 完成——publish commit 此時才完整
+    await resumePromise;
+    const envelope = buildEnvelope({ game: harness.game, ai: harness.ai, events: harness.broadcasts, stopAt: 'DAY_RESULT' });
+    assert.equal(envelope.ai.published.status, 'committed', '存檔時 published 必須已 committed（不可是 pending）');
+    assert.ok(envelope.ai.published.messageId, '存檔時 published identity 必須已寫入');
+    assert.equal(envelope.game.dayMessages.length, baseline + 1, '存檔時只應有一則新公頻訊息');
+    assert.deepEqual(counts.respond, []);
+    // envelope 必須可再 --resume（走真正的 validateEnvelope 契約）
+    assert.equal(validateEnvelope(envelope), null);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(unhandled.length, 0, `仍有 ${unhandled.length} 個 unhandled rejection：${unhandled[0]?.message ?? unhandled[0]}`);
+  } finally {
+    process.removeListener('unhandledRejection', onUnhandled);
+    destroyHarness(harness);
+  }
+
+  // awaitResumeCommit 對 reject 的 resume 也必須吸收（不得變成 unhandled rejection）
+  const rejecting = [];
+  const onUnhandledReject = (reason) => { rejecting.push(reason); };
+  process.on('unhandledRejection', onUnhandledReject);
+  try {
+    await awaitResumeCommit(Promise.reject(new Error('resume boom')));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(rejecting.length, 0, `reject 的 resume 仍產生 ${rejecting.length} 個 unhandled rejection`);
+  } finally {
+    process.removeListener('unhandledRejection', onUnhandledReject);
+  }
+});
+
+// --- T17：status／report／exit code 把 first-message stop 當成功目標 ---
+
+test('T17：first-message stop 在 status／report／exit code 都是成功目標；既有 stop-at 語意不變', async () => {
+  // status
+  assert.match(stage2StatusLine({ stopAt: 'DAY_RESULT', converged: false, firstMessageStop: true }), /first public message stop/);
+  // exit code：first-message stop = 成功目標；存檔失敗仍為 1
+  assert.equal(stage2ExitCode({ converged: false, firstMessageStop: true, saveFailed: false }), 0);
+  assert.equal(stage2ExitCode({ converged: false, firstMessageStop: true, saveFailed: true }), 1);
+  // 既有行為不變
+  assert.equal(stage2StatusLine({ stopAt: 'DAY_RESULT', converged: true }), 'DAY_RESULT 達成');
+  assert.match(stage2StatusLine({ converged: false, aborted: true }), /未收斂/);
+  assert.match(stage2StatusLine({ converged: false, signal: 'SIGINT' }), /中斷/);
+  assert.equal(stage2ExitCode({ converged: true, saveFailed: false }), 0);
+  assert.equal(stage2ExitCode({ converged: true, saveFailed: true }), 1);
+  assert.equal(stage2ExitCode({ converged: false, firstMessageStop: false, saveFailed: false }), 1);
+
+  const harness = makeHarness();
+  try {
+    const stopped = buildReport(harness.game, harness.ai, harness.broadcasts, DEFS, false, false, 'DAY_RESULT', 'DAY_DISCUSSION', { firstMessageStop: true, baseline: 0 });
+    assert.match(stopped, /- 結果：✅ 達成（first public message stop）/);
+    assert.match(stopped, /- 停止控制：--stop-after-first-message/);
+    assert.match(stopped, /## 收斂[\s\S]*first public message stop/);
+    assert.ok(!stopped.includes('未收斂（階段 timeout）'), 'first-message stop 不可被標成未收斂');
+
+    // 未使用 stop 時 report 不出現該標記（既有命令輸出不變）
+    const plain = buildReport(harness.game, harness.ai, harness.broadcasts, DEFS, true, false, 'DAY_RESULT', 'DAY_RESULT');
+    assert.ok(!plain.includes('first public message stop'));
+    assert.match(plain, /- 結果：✅ 達成/);
+  } finally {
+    destroyHarness(harness);
+  }
 });

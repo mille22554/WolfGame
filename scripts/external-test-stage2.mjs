@@ -6,11 +6,25 @@
  *   node scripts/external-test-stage2.mjs [--stop-at PHASE] [--report PATH]
  *   node scripts/external-test-stage2.mjs --stop-at NIGHT_RESULT --save-state /path/state.json
  *   node scripts/external-test-stage2.mjs --stop-at DAY_RESULT --resume /path/state.json
+ *   node scripts/external-test-stage2.mjs --resume /path/state.json --stop-after-first-message
  *
  * PHASE 選項：
  *   NIGHT_RESULT  — 只跑夜晚（mason→wolf→seer/guard→結算），到 DAY_DISCUSSION 開始時停止
  *   DAY_RESULT    — 跑完整天（night + day discussion + voting），到 DAY_RESULT 停止（預設）
  *   GAME_OVER     — 跑完整局（多天）直到 GAME_OVER
+ *
+ * --stop-after-first-message（無值 flag，預設關閉；只與 --resume 併用）：
+ *   bounded 驗證用。resume 前對 AI 控制器開啟 requestStopAfterNextDayPublish()，
+ *   讓白天討論在「下一個 selected draft 的 publish 完整 commit 後」立即結束
+ *   （不進 day responses、不開下一輪 draft），以此驗證 v2 night envelope resume 而不跑完整白天。
+ *   - 只計算公頻 MESSAGE（WOLF_MESSAGE / MASON_MESSAGE 不計）。
+ *   - 以 resume 當下的 dayMessages 數為 baseline，必須等到 baseline+1 才停止。
+ *   - 觀察迴圈看到第一則新 public MESSAGE 後停止；此時不呼叫 settleInFlightWork
+ *     （那會再推動 loop），而是明確 await 這次 resume promise——publish commit 完成後才寫報告／存檔。
+ *   - 算作成功目標（exit 0），不是「未收斂」；輸出標記 `first public message stop`。
+ *   - 沒有 --resume 時此 flag 不適用（無 baseline），會明確警告並沿用原有流程。
+ *   - 目標階段若在觀察到 baseline+1 之前就先達成（例如 resume 時帶 --stop-at NIGHT_RESULT），
+ *     bounded stop 不會觸發，會明確警告；bounded 驗證請用預設 --stop-at DAY_RESULT。
  *
  * 存檔／恢復（單一 envelope，schemaVersion=2）：
  *   { schemaVersion, savedAt, stopAt, game, ai, events, aiLog }
@@ -83,6 +97,29 @@ function getArg(flag, defaultValue) {
   const argv = process.argv.slice(2);
   const idx = argv.indexOf(flag);
   return idx !== -1 && idx + 1 < argv.length ? argv[idx + 1] : defaultValue;
+}
+
+/** 無值 CLI flag：`--stop-after-first-message`（bounded resume 驗證；預設關閉）。 */
+export const STOP_AFTER_FIRST_MESSAGE_FLAG = '--stop-after-first-message';
+/** 報告／狀態／exit 判定共用的標記字串。 */
+export const FIRST_MESSAGE_STOP_LABEL = 'first public message stop';
+
+/** 解析無值 flag；只看 argv 是否含該 token，不消費後面值（預設 false＝關閉）。 */
+export function parseStopAfterFirstMessage(argv = process.argv.slice(2)) {
+  return Array.isArray(argv) && argv.includes(STOP_AFTER_FIRST_MESSAGE_FLAG);
+}
+
+/** 公頻 MESSAGE 數（engine 唯一 truth；不含 WOLF_MESSAGE / MASON_MESSAGE）。 */
+export function publicDayMessageCount(game) {
+  return game.getDayState().dayMessages.length;
+}
+
+/**
+ * bounded stop 是否達成：以 resume 當下的 dayMessages 數為 baseline，必須到達 baseline+1。
+ * 只看公頻（MESSAGE）訊息；狼／共有者私頻不計。
+ */
+export function firstMessageStopReached(game, baseline) {
+  return publicDayMessageCount(game) >= baseline + 1;
 }
 
 // 判斷「目標階段完成」的條件
@@ -216,6 +253,16 @@ export async function resumeStage2State(game, ai, env) {
   return stage2ResumeRun(game, ai);
 }
 
+/**
+ * 明確等待一條 resume promise 結束，並把失敗轉成已處理狀態。
+ * 回傳的 promise 永不 reject：呼叫端（報告／存檔前）await 它不會變成 unhandled rejection。
+ */
+export function awaitResumeCommit(resumePromise) {
+  return Promise.resolve(resumePromise).catch((err) => {
+    console.error(`[stage2] ⚠️ resume 執行失敗：${err?.message ?? err}（遊戲照跑；報告與存檔仍依已完成的工作寫入）`);
+  });
+}
+
 // --- 觀察與 shutdown ---
 
 /** 輸出當前進度（每 10 分鐘一次） */
@@ -275,10 +322,17 @@ function createShutdownHooks() {
   return hooks;
 }
 
-/** 分階段 timeout 輪詢觀察；目標達成／狼會議 abort／階段超時／外部訊號 → break。 */
-async function runObservationLoop(game, stopAt, isStopped) {
+/**
+ * 分階段 timeout 輪詢觀察；目標達成／狼會議 abort／階段超時／外部訊號 → break。
+ *
+ * options.stopAfterFirstMessage=true 時以 resume 當下的 dayMessages 數為 baseline，
+ * 只看公頻 MESSAGE，數到 baseline+1 就以 firstMessageStop 結束（bounded 驗證用的成功目標）。
+ */
+async function runObservationLoop(game, stopAt, isStopped, options = {}) {
+  const { stopAfterFirstMessage = false, baseline = 0 } = options;
   let converged = false;
   let aborted = false;
+  let firstMessageStop = false;
   let phaseTimeout = TIMEOUTS.NIGHT;
   let phaseStarted = Date.now();
   let lastMajorPhase = 'NIGHT';
@@ -297,6 +351,11 @@ async function runObservationLoop(game, stopAt, isStopped) {
       phaseTimeout = TIMEOUTS[major] ?? TIMEOUTS.DAY;
       console.log(`[stage2] 進入 ${s.phase}（timeout ${phaseTimeout > 0 ? phaseTimeout / 1000 + 's' : '不限時'}）`);
     }
+    // bounded stop 先判：只看公頻 MESSAGE 數到 baseline+1；不算「未收斂」。
+    if (stopAfterFirstMessage && firstMessageStopReached(game, baseline)) {
+      firstMessageStop = true;
+      break;
+    }
     if (isTargetReached(s.phase, stopAt)) {
       converged = true;
       break;
@@ -311,7 +370,7 @@ async function runObservationLoop(game, stopAt, isStopped) {
     }
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
   }
-  return { converged, aborted };
+  return { converged, aborted, firstMessageStop };
 }
 
 /**
@@ -350,16 +409,48 @@ function buildGameAndAi() {
   return { game, ai, defs, events };
 }
 
-/** 從存檔恢復：驗證 envelope → barrier → restore → import → 明確 resume。 */
-function startResumedGame(game, ai, events, resumePath) {
+/**
+ * 從存檔恢復：驗證 envelope → barrier → restore → import → 明確 resume。
+ *
+ * 回傳 resume handle 給 main：
+ * - `resumePromise`  ＝ 明確 catch 過的 resume promise；寫報告／存檔前 await 它，
+ *                      確保 publish commit 已完成（不在半寫的 tick 存檔）。
+ * - `baseline`       ＝ resume 當下（restore 之後）的公頻 dayMessages 數，作為 bounded stop 基準。
+ * - `stopAfterFirstMessage` ＝ 是否已對控制器開啟 requestStopAfterNextDayPublish()。
+ */
+function startResumedGame(game, ai, events, resumePath, options = {}) {
+  const stopAfterFirstMessage = options.stopAfterFirstMessage === true;
   const env = loadEnvelope(resumePath); // 舊格式 / 非 DAY_DISCUSSION / 損毀 → 明確 throw
   events.push(...env.events); // 載入前段 events（報告用）
   stage2ResumeImport(game, ai, env);
+  // baseline 必須在 restore 之後量（此時 dayMessages 才是 resume 當下的真實值）。
+  const baseline = publicDayMessageCount(game);
+  if (stopAfterFirstMessage) {
+    // bounded：本次 resume 的下一次 publish commit 後即結束白天討論。
+    ai.requestStopAfterNextDayPublish();
+    console.log(`[stage2] 已開啟 bounded stop（--stop-after-first-message）：baseline 公頻訊息 ${baseline} 則，預計停在 ${baseline + 1} 則`);
+  }
   // 明確 resume（single-flight）；fire-and-forget 的 promise 要明確 catch，reject 時記錄而非 unhandled rejection
-  stage2ResumeRun(game, ai).catch((err) => {
-    console.error(`[stage2] ⚠️ resume 執行失敗：${err?.message ?? err}（遊戲照跑，最終以收斂狀態定 exit code）`);
-  });
+  const resumePromise = awaitResumeCommit(stage2ResumeRun(game, ai));
   console.log(`[stage2] 從存檔恢復（${resumePath}），day=${env.game.day}，stage=${env.ai.stage}，events=${events.length}，進入 DAY_DISCUSSION`);
+  return { resumePromise, baseline, stopAfterFirstMessage };
+}
+
+/**
+ * 本輪結果狀態字串。
+ * bounded first-message stop 是「成功目標」，不是未收斂；既有 stop-at / 中斷 / abort 語意不變。
+ */
+export function stage2StatusLine({ stopAt = 'DAY_RESULT', converged = false, firstMessageStop = false, aborted = false, signal = null } = {}) {
+  if (firstMessageStop) return `${FIRST_MESSAGE_STOP_LABEL}（${STOP_AFTER_FIRST_MESSAGE_FLAG}；已達成目標）`;
+  if (converged) return `${stopAt} 達成`;
+  if (signal) return `中斷（${signal}）`;
+  if (aborted) return '未收斂（100 則白板上限）';
+  return '未收斂（階段 timeout）';
+}
+
+/** exit code：first-message stop 與 stop-at 達成同樣算成功；存檔失敗一律 1。 */
+export function stage2ExitCode({ converged = false, firstMessageStop = false, saveFailed = false } = {}) {
+  return (converged || firstMessageStop) && !saveFailed ? 0 : 1;
 }
 
 async function main() {
@@ -372,31 +463,57 @@ async function main() {
   const reportPath = getArg('--report', process.env.REPORT || DEFAULT_REPORT_BY_PHASE[stopAt] || 'ai-trace-stage2-output.md');
   const saveStatePath = getArg('--save-state', null);
   const resumePath = getArg('--resume', null);
+  const stopAfterFirstMessage = parseStopAfterFirstMessage();
   const { game, ai, defs, events } = buildGameAndAi();
 
+  let resumeHandle = null;
   if (resumePath) {
-    startResumedGame(game, ai, events, resumePath);
+    resumeHandle = startResumedGame(game, ai, events, resumePath, { stopAfterFirstMessage });
   } else {
+    if (stopAfterFirstMessage) {
+      console.warn(`[stage2] ⚠️ ${STOP_AFTER_FIRST_MESSAGE_FLAG} 需要 --resume（bounded stop 以 resume 當下的 dayMessages 為 baseline）；本次沿用一般流程`);
+    }
     game.start();
     console.log(`[stage2] 遊戲已開始，目標：--stop-at ${stopAt}`);
   }
 
   const shutdown = createShutdownHooks();
-  const { converged, aborted } = await runObservationLoop(game, stopAt, () => shutdown.requested);
-  if (shutdown.requested) {
+  const { converged, aborted, firstMessageStop } = await runObservationLoop(
+    game,
+    stopAt,
+    () => shutdown.requested,
+    {
+      stopAfterFirstMessage: resumeHandle?.stopAfterFirstMessage === true,
+      baseline: resumeHandle?.baseline ?? 0,
+    },
+  );
+  if (firstMessageStop) {
+    // 只等這一次 resume promise（publish commit 已完成）——不呼叫 settleInFlightWork，那會再推動 loop。
+    await resumeHandle.resumePromise;
+    console.log(`[stage2] ${FIRST_MESSAGE_STOP_LABEL}：已觀察到 baseline+1 則公頻 MESSAGE 且 publish commit 完成`);
+  } else if (resumeHandle?.stopAfterFirstMessage && converged) {
+    // bounded stop 已開啟但目標階段先達成（例如 --stop-at NIGHT_RESULT 的 resume：phase 一開始就符合目標）。
+    // 明確提示而不是靜默當作成功——要驗 bounded stop 就別讓目標階段提前達成。
+    console.warn(`[stage2] ⚠️ 已開啟 ${STOP_AFTER_FIRST_MESSAGE_FLAG} 但在觀察到 baseline+1 則公頻 MESSAGE 前就達成 --stop-at ${stopAt}；本次不是 ${FIRST_MESSAGE_STOP_LABEL}。要跑 bounded 驗證請勿讓目標階段提前達成（例如 resume 時不要帶 --stop-at NIGHT_RESULT）`);
+  } else if (shutdown.requested) {
     await settleInFlightWork(game, ai); // 停止新工作，等 in-flight LLM 安全結束
   } else {
     await new Promise((r) => setTimeout(r, 3000)); // 給引擎一點時間把剩餘 broadcast 送完
   }
 
   const stopPhase = game.getNightState().phase;
-  const report = buildReport(game, ai, events, defs, converged, aborted, stopAt, stopPhase);
+  const report = buildReport(game, ai, events, defs, converged, aborted, stopAt, stopPhase, {
+    firstMessageStop,
+    baseline: resumeHandle?.baseline ?? 0,
+  });
   writeFileSync(reportPath, report, 'utf-8');
-  const status = converged
-    ? `${stopAt} 達成`
-    : shutdown.requested ? `中斷（${shutdown.signal}）`
-    : aborted ? '未收斂（100 則白板上限）'
-    : '未收斂（階段 timeout）';
+  const status = stage2StatusLine({
+    stopAt,
+    converged,
+    firstMessageStop,
+    aborted,
+    signal: shutdown.requested ? shutdown.signal : null,
+  });
   console.log(`[stage2] ${status}；報告已寫入 ${reportPath}`);
 
   let saveFailed = false;
@@ -410,7 +527,7 @@ async function main() {
   }
   ai.destroy();
   game.destroy();
-  process.exit(converged && !saveFailed ? 0 : 1); // 存檔失敗 = 1：即使收斂也不回報成功（resume 資料缺了）
+  process.exit(stage2ExitCode({ converged, firstMessageStop, saveFailed })); // 存檔失敗 = 1：即使收斂也不回報成功（resume 資料缺了）
 }
 
 /** 判斷 path 是否指向本檔；Windows 路徑大小寫 insensitive（同一檔），Linux 維持嚴格比較。 */
@@ -742,7 +859,12 @@ export function dayDiscussionSection(log, events, players) {
   return L;
 }
 
-function buildReport(game, ai, events, defs, converged, aborted, stopAt, stopPhase) {
+/**
+ * 組 markdown 報告。
+ * options.firstMessageStop=true 時以 `first public message stop` 標記為成功目標（不是未收斂）。
+ */
+export function buildReport(game, ai, events, defs, converged, aborted, stopAt, stopPhase, options = {}) {
+  const { firstMessageStop = false, baseline = 0 } = options;
   const players = game.getPlayers();
   const state = game.getNightState();
   const log = ai.getLog();
@@ -752,9 +874,12 @@ function buildReport(game, ai, events, defs, converged, aborted, stopAt, stopPha
   L.push(`# Stage 2 外部測試報告：15 人全 AI 局（--stop-at ${stopAt}）`);
   L.push('');
   L.push(`- 產生時間：${new Date().toISOString()}`);
-  L.push(`- 目標階段：${stopAt}`);
-  L.push(`- 結果：${converged ? '✅ 達成' : aborted ? '❌ 未收斂（100 則白板上限）' : '❌ 未收斂（階段 timeout）'}`);
-  L.push(`- 最終 phase：${converged ? stopAt : (stopPhase ?? state.phase)}`);
+  L.push(`- 目標階段：${stopAt}${firstMessageStop ? `（${FIRST_MESSAGE_STOP_LABEL}）` : ''}`);
+  L.push(`- 結果：${firstMessageStop ? `✅ 達成（${FIRST_MESSAGE_STOP_LABEL}）` : converged ? '✅ 達成' : aborted ? '❌ 未收斂（100 則白板上限）' : '❌ 未收斂（階段 timeout）'}`);
+  if (firstMessageStop) {
+    L.push(`- 停止控制：${STOP_AFTER_FIRST_MESSAGE_FLAG}（baseline 公頻訊息 ${baseline} 則 → 停在 ${baseline + 1} 則；publish commit 完成後即結束，未進入 day responses／下一輪 draft）`);
+  }
+  L.push(`- 最終 phase：${firstMessageStop ? (stopPhase ?? state.phase) : converged ? stopAt : (stopPhase ?? state.phase)}`);
   L.push(`- 狼會議 engine round：${state.wolfMeetingRound}（平票才 +1）`);
   L.push(`- 白板訊息總數：${state.wolfMessageCount}`);
   L.push(`- 最終刀人目標：${state.wolfTargetId ? `${nicknameOf(players, state.wolfTargetId)}（${state.wolfTargetId}）` : '（無）'}`);
@@ -814,7 +939,10 @@ function buildReport(game, ai, events, defs, converged, aborted, stopAt, stopPha
   L.push('');
   L.push('## 收斂');
   L.push('');
-  if (converged) {
+  if (firstMessageStop) {
+    L.push(`- ${FIRST_MESSAGE_STOP_LABEL}：公頻 MESSAGE 從 baseline ${baseline} 則到 ${baseline + 1} 則後即停止`);
+    L.push('- 已發布訊息、published checkpoint（status/messageId/messageSeq）與發言者 ready 皆保留，可再 --resume 續跑');
+  } else if (converged) {
     L.push(`- 收斂（engine round=${state.wolfMeetingRound}，白板 ${state.wolfMessageCount} 則）`);
     L.push(`- 最終刀人目標：${nicknameOf(players, state.wolfTargetId)}（${state.wolfTargetId}）`);
     L.push('- 收斂原因：全狼 toggle ready → 投票明確多數（wolfVotes 計票後 leaders 唯一）');
