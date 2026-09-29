@@ -5,7 +5,7 @@
 
 ## 目前狀態
 
-**目前暫停點：** Phase 1/2/3 checkpoint 程式已 push（`e2e3770`、`cfc4659`、`d36f032`、`a0e8fe5`）。2026-09-29 最新夜晚重跑 attempt-01 已通過：只有村民鈴死亡，狼與狂人皆存活，v2 envelope 結構有效；本輪不啟動白天。舊的第一則公頻稿樣本仍保留供 Oracle review，正式 service 未重啟。
+**目前暫停點：** Phase 1/2/3 checkpoint 程式已 push（`e2e3770`、`cfc4659`、`d36f032`、`a0e8fe5`）。2026-09-29 attempt-01 夜晚通過後，已用 raw SGLang 直接模擬 14 strategy → 14 draft → judge → expand；未修改 prompt source、未接回遊戲 engine。judge 選中裕子；目前等待使用者檢視 EXPAND 問題，所有臨時 prompt／runner 都未落地 commit。
 
 - ✅ **共有者 prompt V8 落地**（2026-09-24，oracle 雙共有者第 1 夜流程驗證後落地）：三函數（`masonContext`／`buildMasonDraftPrompts`／`buildMasonResponsePrompts`）全面對齊狼版編排，只有身分差異；草稿定位改為「行動筆記非發言稿」
 - ✅ **私頻稱呼修正**（2026-09-24，stage 1 實測發現＋oracle 驗證後落地）：2 人私頻用「你／名字＋你」，禁「他／她」與「你們」
@@ -18,21 +18,24 @@
 - ✅ **Checkpoint Phase 2/3 + 首句 bounded 控制（已 push）**（2026-09-29，commits `cfc4659`／`d36f032`／`a0e8fe5`）：AI day snapshot、單一 v2 envelope、restore barrier、SIGINT settle、atomic save、`--stop-after-first-message`；本機 harness 17/17＋lobby focused 50/50 通過
 - ✅ **本輪 medium server 實測**（2026-09-29）：night 重跑完成並產生 `/tmp/night-v2-medium.json`（schemaVersion=2、`game.phase=DAY_DISCUSSION`、`ai.stage=strategies`）；再 resume 到第一則公頻 `MESSAGE` 後停止，沒有 day responses／第二輪 draft
 - ✅ **夜晚重跑 attempt-01 已通過**（2026-09-29，`LLM_REASONING_EFFORT=medium`）：`NIGHT_RESULT` 只有村民鈴死亡；狼（健太、美咲、翔太）與狂人（小晴）皆存活。v2 envelope 驗證有效：`schemaVersion=2`、`game.phase=DAY_DISCUSSION`、`ai.stage=strategies`、21 events／20 aiLog。server 存檔：`/tmp/night-v2-medium-attempt-01.json`；本機 night 報告已覆蓋 `C:\Users\user\Desktop\FrankTests\Temp\ai-trace-stage2-night.md`
-- ⏳ **首則 expanded 公頻稿待 Oracle 盲評**（2026-09-29）：本機仍保留上一輪第一句測試報告 `...\ai-trace-stage2-day.md`；等你看過最新 night 報告後再決定是否沿用該樣本
+- ✅ **raw SGLang 白天模擬完成**（2026-09-29，未接回 engine）：用 attempt-01 的實際 `ChatMessage[]` 檔案直呼 SGLang，14 strategy、14 draft、judge、expand 全部 HTTP 200；最多 3 條並行。judge `best=12`，選中裕子。
+- ✅ **原始 EXPAND 結果**（2026-09-29）：實際輸出含簡體字；曾以 OpenCC `cn→tw` 轉換後展示，但轉換只改字形，沒有修正語意，也未落地到程式。
+- ✅ **臨時 EXPAND 規則驗證**（2026-09-29，未修改 source）：在暫存 prompt 以正式規則口吻加入「私有計畫不可寫成公頻既成事實」；重跑後不再假設千尋問題已發生，但仍出現「一輪／一圈」。
+- ⏳ **目前等待使用者指出問題**（2026-09-29）：不要把任何臨時 prompt／OpenCC 轉換結果當成已落地修正。
 
 ## 本 session 交接（2026-09-29）
 
 - **已推送程式基線**：`e2e3770`（Phase 1 GameEngine restore）、`cfc4659`（Phase 2 AI day snapshot）、`d36f032`（v2 envelope／resume harness）、`a0e8fe5`（`--stop-after-first-message`）。`main` 未動。
-- **本輪 server 實測（最新）**：attempt-01 通過；只有 villager 鈴死亡，狼與狂人皆存活。server 存檔：`/tmp/night-v2-medium-attempt-01.json`；本機 night 報告已取回。
-- **本輪沒有 resume 白天**：依使用者指示，成功建立夜晚存檔後只回報，不產生第一句；`ai-trace-stage2-day.md` 仍是上一輪 bounded 測試報告。
-- **本機驗證（程式／前輪）**：`npm run build` 通過；harness 17/17；lobby focused 50/50。
-- **Gate 2 狀態**：獨立的 Oracle Gate 2 尚未做；本輪 server 行為證據不等於 Oracle review 通過。
+- **本輪 server 實測**：attempt-01 通過；只有 villager 鈴死亡，狼與狂人皆存活。server 存檔：`/tmp/night-v2-medium-attempt-01.json`。
+- **本輪白天驗證方式**：沒有 resume 實際遊戲 engine；改以 raw SGLang runner 直接送實際 builder 產生的 `ChatMessage[]`，最多 3 條並行。這是 prompt／模型行為驗證，不是 game state 接續。
+- **已驗證結果**：14 strategy、14 draft、judge、expand 全部 HTTP 200；judge 選中裕子。原始 EXPAND 有簡體字；OpenCC 轉換只在展示層做過，未落地。
+- **臨時 EXPAND 測試**：加入正式口吻的「私有計畫不可寫成公頻既成事實」規則後，重跑不再把千尋的問題當成已發生；但仍出現「一輪／一圈」。暫存 prompt 沒有修改 source。
 - **目前工作樹**：只剩 `dist/lobby-server/llm.d.ts` 的既有 line-ending 狀態，**不要暫存**。
 - **下一 agent 的恢復順序**：
-  1. 不要重跑 night，也不要自行 resume 白天。
-  2. 先讓使用者閱讀最新 `ai-trace-stage2-night.md`。
-  3. 使用者確認後才決定是否沿用上一輪 day 報告，或另開 Oracle session 評估 prompt 問題。
-  4. 若日後要測白天，使用 `/tmp/night-v2-medium-attempt-01.json`，不要重跑 night。
+  1. 等使用者檢視本輪 raw 結果與指出問題。
+  2. 不要重開 subagent 模擬；目前已改用 raw SGLang 才能保證 prompt 內容。
+  3. 若使用者批准修 prompt，先決定只改 `buildExpandPrompts()` 還是同時處理「一輪／一圈」與繁體輸出 enforcement。
+  4. 未經使用者明確批准，不把臨時 prompt 或 OpenCC 轉換落地到 source。
 
 - ✅ 夜流程（NIGHT_RESULT）已通過多次驗證
 - ✅ 狼會議收斂邏輯修好（不再 premature VOTING）
@@ -46,7 +49,7 @@
 - ✅ **persona 修正**：shinichi/yuko/tatuya 的「時間線/分鐘/看到的現象」範例改為發言矛盾型（真一「昨晚和誰同點、時間差三分鐘」即源自 persona 範例腦補）
 - ✅ 白天測試紀錄（`stage2-day-report.md`）：狼會議不完整是舊格式 `night1.json` 無 `.log.json`（非渲染 bug）——要完整狼會議需重跑整局 night
 - ✅ **白天開場「捏造他人立場」幻覺修復**：良子第一句「不跟佐雪的立場走」——佐雪全程零發言，立場是憑空捏造（白板空＋強迫點名的 prompt 側效果）。system prompt 證據邊界新增「禁止假設任何玩家持某立場/講過什麼，除非實際出現在白板」；strategy/draft/response prompt 加降級規則「只能質疑已發言的實際內容，沒人發言就談自己觀察」（參考 `docs/ai-rp-prompt-research.md` §4 anti-fabrication）
-- ⏳ **白天 V-Day 行為驗證**：最新 attempt-01 只完成夜晚篩選，本輪依指示未 resume 白天；上一輪第一句 bounded 報告仍保留，等待 Oracle 診斷後再決定 prompt。
+- ⏳ **白天 V-Day 行為驗證**：已完成 raw SGLang 14 strategy／14 draft／judge／expand 模擬；未接回遊戲 engine。EXPAND 語意問題與暫時修正驗證結果已記錄於上方，等待使用者裁示。
 
 **私頻稱呼修正（2026-09-24，stage 1 實測發現、oracle 驗證通過後落地）：**
 
@@ -191,10 +194,11 @@
 - 併發實測補充（14 路全過）：5 併發 967 tokens 全 200；14 併發 ~9.2K tokens 全 200、~49s 完成（SGLang `--max-running-requests 1` 依 priority 排隊）。先前 5 併發測試因 PowerShell 管道把中文打成 `?`（prompt=65 是亂碼），改用 base64 上傳後為正常 prompt（~79 tokens）
 
 **下一步（依序）：**
-1. 先讓使用者閱讀最新 `ai-trace-stage2-night.md`；本輪 attempt-01 已通過夜晚篩選，不要重跑 night。
-2. `ai-trace-stage2-day.md` 是上一輪 bounded 測試報告；若要繼續分析 prompt，再用新 Oracle session 評估該第一句，不把它當成 attempt-01 的白天結果。
-3. 若要進行新的白天測試，使用 `/tmp/night-v2-medium-attempt-01.json`，不要重做 night；正式 service 仍不重啟，金鑰不輪換。
-4. 之後才處理 production `AiController` 接線與完整多日遊戲；前端維持待做。
+1. 等使用者檢視本輪 raw SGLang 的第一句結果與指出問題。
+2. 若要修正，先決定是否只改 `buildExpandPrompts()`：把 action note 的私有計畫轉成公頻發言時，不把「等某人問／某人會說」寫成已發生事實。
+3. 「一輪／一圈」是另一個獨立問題，不要與私頻計畫問題混為一談。
+4. 繁體輸出目前只有展示時 OpenCC 轉換，尚未落地；是否加入程式強制轉換，等使用者明確批准。
+5. 未經批准，不修改 source、不重跑 night、不啟動正式服務。
 
 **Server 上跑測試的正確方式（金鑰不得放進 argv）：**
 ```bash
@@ -246,11 +250,12 @@ scp ssh.morowin.win:/tmp/ai-trace-stage2-night-v2-medium-attempt-01.md "C:\Users
 
 ## 待做
 
-1. **[HIGH] 使用者檢視最新 night 報告** → `ai-trace-stage2-night.md` 已更新為 attempt-01；`ai-trace-stage2-day.md` 仍是上一輪 bounded 樣本
-2. **[HIGH] Prompt 問題診斷** → 若要處理「預設別人持有情報／輪次用詞」，開新 Oracle session 評估上一輪 day 報告，不直接修改 prompt
-3. **[MED] 新的白天測試** → 只有在使用者指示後，從 `/tmp/night-v2-medium-attempt-01.json` resume；不重跑 night
-4. **[MED] Step 5：AI 接 production server** → `server.ts` 實例化 `AiController`（本輪行為驗證與品質裁示後才做）
-5. **[LOW] 前端（ubuntu-web/）** → 等外部測試跑通完整一局再開
+1. **[HIGH] 使用者檢視 raw SGLang 第一句** → 14 strategy／14 draft／judge／expand 已完成；目前只等指出問題
+2. **[HIGH] EXPAND 語意修正決策** → 私頻計畫轉公頻發言的規則已用臨時 direct prompt 驗證有效，但未修改 source；需使用者批准後才落地
+3. **[MED] 輪次／一圈詞彙決策** → 目前仍殘留「一輪／一圈」，與私頻計畫問題分開處理
+4. **[MED] 繁體輸出 enforcement** → 目前只做過 OpenCC 展示轉換，是否落地到程式待批准
+5. **[MED] 新的引擎白天測試** → 需使用者批准 prompt 修正後，從 `/tmp/night-v2-medium-attempt-01.json` 走真實 harness；不重跑 night
+6. **[LOW] 前端（ubuntu-web/）** → 等外部測試跑通完整一局再開
 
 ## 測試腳本用法
 
