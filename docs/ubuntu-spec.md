@@ -564,15 +564,15 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | 節點 | Prompt 輸入 | 期望輸出（JSON） | 限制 |
 |---|---|---|---|
 | 白天策略（`DAY_STRATEGY`） | `buildStrategyPrompt`：角色分支（占卜師／共有者／狼／其他）＋存活玩家＋`privateInfo`＋昨晚私頻白板 | `{"strategy": "..."}` | **不掛 `dayContext`**；成功才寫入 memory |
-| 白天草稿（`DAY_SPEECH`） | `buildDayDraftPrompts`：`dayContext`＋存活玩家＋`privateInfo`＋當天公頻白板 | `{"strategy_update": "..." 或 null, "speech": "行動筆記", "stance": "準備好了｜資訊不足"}` | **無字數上限**；草稿是決策筆記，不是發言稿 |
-| 白天回應（`DAY_STANCE`） | `buildDayResponsePrompts`：`dayContext`＋公頻白板＋剛發表的 expanded | `{"strategy_update": "..." 或 null, "action": "ready｜speak｜wait", "speech": "...", "stance": "..."}` | 只有 `speak` 才需要 `speech`＋`stance` |
+| 白天草稿（`DAY_SPEECH`） | `buildDayDraftPrompts`：`dayContext`＋存活玩家＋`privateInfo`＋當天公頻白板 | `{"strategy_update": "..." 或 null, "speech": "行動筆記", "stance": "準備好了｜資訊不足", "importance": 1-10, "urgency": 1-10, "impact": "..."}` | **無字數上限**；草稿是決策筆記，不是發言稿；自評欄位供 judge 過濾（灌水扣分） |
+| 白天回應（`DAY_STANCE`） | `buildDayResponsePrompts`：`dayContext`＋公頻白板＋剛發表的 expanded | `{"strategy_update": "..." 或 null, "action": "ready｜speak｜wait", "speech": "...", "stance": "...", "importance": 1-10, "urgency": 1-10, "impact": "..."}` | 只有 `speak` 才需要 `speech`＋`stance`（＋自評三欄位） |
 | 白天投票（`DAY_VOTE`） | `buildDayVotePrompts`：存活玩家（排除自己）＋`privateInfo`＋當天公頻白板 | `{"target": "<displayName>"}` 或 `{"target": null}`（棄票） | 不可投自己；名字對不到存活玩家 → 觸發重試 |
 | 狼草稿／回應（`WOLF_SPEECH` / `WOLF_STANCE`） | `buildDraftPrompts` / `buildResponsePrompts`：`wolfContext`＋可刀目標＋狼白板＋剛發布的 expanded | 草稿 `{"speech": "...", "stance": "投[人名]｜資訊不足"}`；回應 `{"action": "vote"｜"speak"｜"wait", "target"／"speech"／"stance": ...}` | stance 硬規則＝**今晚刀人目標**；可刀目標排除自己／狼隊／狂人 |
 | 共有者草稿／回應（`MASON_SPEECH` / `MASON_STANCE`） | `buildMasonDraftPrompts` / `buildMasonResponsePrompts`：`masonContext`＋白天可鎖定對象＋共有者白板 | 草稿 `{"speech": "...", "stance": "準備好了｜資訊不足"}`；回應 `{"action": "vote"（`target` 固定 `"ready"`）｜"speak"｜"wait", ...}` | stance 硬規則＝**明天安排的準備狀態**（引擎既有 `masonReadyMap` 語意） |
-| EXPAND（三個會議共用） | `buildExpandPrompts`：被選中的草稿筆記＋該會議的 context | `{"speech": "完整發言"}` | 3 次重試；全失敗 → fallback 草稿原文；不得新增筆記外的行動、對象或結論 |
+| EXPAND（三個會議共用） | `buildExpandPrompts`：被選中的草稿筆記＋該會議的 context＋白板全文（`boardText`，供時序推理） | `{"speech": "完整發言"}` | 3 次重試；全失敗 → fallback 草稿原文；不得新增筆記外的行動、對象或結論；發布邊界 OpenCC `cn→tw` 強轉繁體（含 fallback） |
 | 狼刀（`WOLF_KILL`） | `buildWolfKillPrompts`：狼隊同夥＋狂人＋可刀目標＋最近訊息 | `{"target": "<displayName>"}` | 不可選自己／狂人 |
 | 占い（`SEER_CHECK`）／守衛（`GUARD_PROTECT`） | `buildTargetPrompts`：角色＋存活玩家＋`privateInfo` | `{"target": "<displayName>"}` | 不可選自己；守衛 Day1 不行動（引擎擋） |
-| judge 選言（`JUDGE`） | `buildJudgePrompts`：**只讀草稿 `speech`**（編號、不標作者） | `{"scores": [n, ...], "best": index}` | 全盲評分；LLM 失敗或全 0 分 → 隨機 fallback（不阻塞） |
+| judge 選言（`JUDGE`） | `buildJudgePrompts`：讀草稿 `speech`（編號、不標作者）＋自評（`importance`／`urgency`／`impact`，有才顯示）＋按會議類型套評分標準 | `{"scores": [n, ...], "best": index}` | 全盲評分；白天版多 9 條標準（獨立成立、言行一致、結構詞、新東西、可核對、實際動作、時序、格式vs遊戲、自評核對）；LLM 失敗或全 0 分 → 隨機 fallback（不阻塞）；同分時由 LLM 自行決定 |
 
 - **沒有**「每輪最多發言 2 次」「一句話」「≤50 字」這類舊限制：現行 controller 不用字數上限控制發言，改用 **P12 排版規範**（>50 字換行、≤3 段，見 §13.5）。`ai-player.ts` 的舊 prompt 裡仍留有 `≤50字` / `≤150字` 字串，但該檔不是現行 runtime 路徑（§13.7）。
 - 每則 WS 訊息 200 字上限仍在（`MAX_MESSAGE_LEN`）：真人 `WOLF_CHAT`／`MASON_CHAT` 與引擎的 `handleWolfChat` / `publishMasonSpeech` 會擋。`sendDayMessage` 目前**不擋**長度（公頻 expanded 長度不受此上限約束）。
@@ -725,8 +725,8 @@ DAY_DISCUSSION 開始（引擎 broadcast PHASE_CHANGED）
 |---|---|---|
 | DAY_STRATEGY | `generateDayStrategies` → `buildStrategyPrompt`，**`Promise.all` 全併發**（不是 14 個 sequential）；依角色分支（占卜師／共有者／狼／其他）；輸出 `{"strategy": "…"}`；**不掛 `dayContext`** | 成功才寫 memory；失敗不阻塞討論 |
 | 白天草稿 | `generateDayDrafts` → `buildDayDraftPrompts`：對**所有未 ready** 的 AI **一輪 `Promise.all` 全併發**；輸出含 `strategy_update` | **無字數上限**（不是「一句話 ≤50 字」）；草稿是決策筆記，非發言稿 |
-| judge | `judgePickDayDraft` → `judgeScoreIndex`，**只讀草稿 `speech`**、編號不標作者 | 只有一篇草稿時免 judge 直接用 |
-| EXPAND | `expandSpeech(..., 'day')`：3 次重試（間隔 2s），全失敗 → fallback 草稿原文 | 私頻那套「2-4 句／給隊友提醒」**不套用到白天**；白天版是「判斷/結論→動作/表態」＋禁「沒人發言」字眼；排版沿用 P12（>50 字換行、≤3 段） |
+| judge | `judgePickDayDraft` → `judgeScoreIndex`，讀草稿 `speech`（編號不標作者）＋自評＋白天評分標準 | 只有一篇草稿時免 judge 直接用 |
+| EXPAND | `expandSpeech(..., 'day')`：吃白板全文（時序推理）→ 3 次重試（間隔 2s），全失敗 → fallback 草稿原文 → OpenCC `cn→tw` 強轉後發布 | 私頻那套「2-4 句／給隊友提醒」**不套用到白天**；白天版是「判斷/結論→動作/表態」＋禁在發言裡說「沒人發言」＋用語規則（日常話、受詞明確、刪裝飾詞）；排版沿用 P12（>50 字換行、≤3 段、段間空一行） |
 | expanded broadcast | `game.sendDayMessage(clientId, expanded)` → 既有 `MESSAGE`（公頻），`dayMessages` 保留最近 50 則 | **公頻沒有新增 WS 事件**（§12.8） |
 | 其他 AI 回應 | `dayRespond`（`Promise.all`）：`ready` / `speak` / `wait` | 讀的是**同一段 expanded**（不是草稿原文） |
 | 收斂 | 全 AI `dayReady` ON → `reconcileDayReady()` 觸發 `DAY_VOTING`；AI commit 使用 idempotent `setDayReady()`，不重播 toggle | 對應 `DAY_READY_STATUS` 事件 |
