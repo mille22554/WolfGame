@@ -693,7 +693,7 @@ AI 狼依 §12.3 的 loop 驅動（非 SpeechScheduler 管線，是持續對話�
 >
 > 這是白天 **V-Day** 概念規格：草稿是**行動筆記**（判斷誰／依據／要表態什麼），完整發言由 EXPAND 產生（§12.4）。
 
-**進入時的狀態重建（resume 有限）**：從 `game.getDayState()` 取回 `dayMessages` 補進本地 dayBoard、取回 `dayReady` 補進 `dayReadyMap`；**只讓未 ready 的 AI 參與**。全部已 ready → 直接結束（不重跑策略與發言）。但 save state **不保存尚未 publish 的 pending drafts／策略完成狀態**，resume 會重跑 `DAY_STRATEGY` 與全部未 ready AI 的 `DAY_SPEECH`；所以 5 分鐘 SIGINT 分段不能保證跨段前進到 judge／EXPAND。
+**進入時的狀態重建（v2 envelope）**：外部 harness 使用單一 `{ schemaVersion: 2, savedAt, stopAt, game, ai, events, aiLog }` envelope。resume 順序固定為：`ai.setPhaseStartEnabled(false)` barrier → `game.restoreState(env.game)` → `ai.restoreLog(env.aiLog)` → `ai.importDayCheckpoint(env.ai)` → `ai.resumeDayDiscussion()`。`AiController` checkpoint 保存 strategy／draft／judge／expand／publish／response continuation、memory／knowledge／boards；已完成的階段不重做，未完成項按 pending 補做。all-ready 時由 continuation 呼叫 `game.reconcileDayReady()` 推進 `DAY_VOTING`。只支援 `DAY_DISCUSSION` restore；舊三檔格式與 `NIGHT_RESULT` phase 明確拒絕。
 
 **流程：**
 
@@ -707,7 +707,7 @@ DAY_DISCUSSION 開始（引擎 broadcast PHASE_CHANGED）
     ② judge 盲選一篇（只讀草稿、不標作者；失敗 → 隨機 fallback）
     ③ EXPAND：把選中草稿展開成角色語氣的完整發言（3 次重試 + fallback 草稿原文）
     ④ expanded 經既有 MESSAGE 廣播到公頻（game.sendDayMessage）
-       └─ 發言者 toggle ready（dayReadyMap 同步）
+       └─ 以 `setDayReady()` commit 發言者 ready（idempotent；不重播 toggle）
     ⑤ 其他 AI 讀同一段 expanded → 回應（Promise.all）
          ├─ ready → toggle ready
          ├─ speak → 出新草稿（進下一輪 ①；若原本已 ready 則撤回 ready）
@@ -729,7 +729,7 @@ DAY_DISCUSSION 開始（引擎 broadcast PHASE_CHANGED）
 | EXPAND | `expandSpeech(..., 'day')`：3 次重試（間隔 2s），全失敗 → fallback 草稿原文 | 私頻那套「2-4 句／給隊友提醒」**不套用到白天**；白天版是「判斷/結論→動作/表態」＋禁「沒人發言」字眼；排版沿用 P12（>50 字換行、≤3 段） |
 | expanded broadcast | `game.sendDayMessage(clientId, expanded)` → 既有 `MESSAGE`（公頻），`dayMessages` 保留最近 50 則 | **公頻沒有新增 WS 事件**（§12.8） |
 | 其他 AI 回應 | `dayRespond`（`Promise.all`）：`ready` / `speak` / `wait` | 讀的是**同一段 expanded**（不是草稿原文） |
-| 收斂 | 全 AI `dayReady` ON → `handleToggleVoteReady` 觸發 `DAY_VOTING`；loop 結束也會補齊未 ready 的 | 對應 `DAY_READY_STATUS` 事件 |
+| 收斂 | 全 AI `dayReady` ON → `reconcileDayReady()` 觸發 `DAY_VOTING`；AI commit 使用 idempotent `setDayReady()`，不重播 toggle | 對應 `DAY_READY_STATUS` 事件 |
 | 安全 guard | `guard > 50` 中止 loop，結束後確保全 toggle ON | 不會無限 loop |
 
 **`dayContext`（全角色共用）**：白天草稿、**白天回應**、**白天 EXPAND** 都掛 `dayContext`（唯一可用證據是公開發言、禁質疑未發言者、禁假設他人立場、禁只談討論方法）；**`buildStrategyPrompt` 不掛 `dayContext`**（策略階段只要角色情報與昨晚私頻白板）。
@@ -740,17 +740,17 @@ DAY_DISCUSSION 開始（引擎 broadcast PHASE_CHANGED）
 
 - 15 人全 AI 局：`new AiController(defs, { messageCap: 100 })` + `new GameEngine('STAGE2', ...)`，兩個方向的 callback 互接
 - 階段 timeout：**NIGHT / DAY 都是 `0`（不限時）**；每 10 分鐘印一次進度；狼會議 abort 時停止
-- 操作者可用 `timeout --signal=INT --kill-after=30s 5m ...` 在外部做 5 分鐘分段；SIGINT 會讓 harness 寫報告與 checkpoint，**不改腳本內部正式 timeout**
 - `--stop-at NIGHT_RESULT | DAY_RESULT | GAME_OVER`（預設 `DAY_RESULT`）
-- `--save-state <path>`：寫 `game.saveState()` ＋ `.events.json` ＋ `.log.json`
-- `--resume <path>`：`game.restoreState()` 直接進 `DAY_DISCUSSION`（跳過 ROLE_REVEAL/NIGHT），`ai.restoreLog()` 把前段 LLM log 縫回報告
-- 報告（md）：會議流程、白板、夜間結算、投票軌跡、收斂、LLM 失敗／重試、事件時間軸
-- **沒有** 5 分鐘 timeout、**沒有**「從未 ready 的 AI 中隨機選一個」（judge 從**所有**未 ready 的草稿中選）
+- `--save-state <path>`：原子寫入單一 v2 envelope（`schemaVersion=2`，含 `game`／`ai`／`events`／`aiLog`）
+- `--resume <path>`：載入 v2 envelope，依 barrier → game restore → AI import → `resumeDayDiscussion()` 順序續跑；只支援 `DAY_DISCUSSION`
+- `--stop-after-first-message`：無值 flag，只在 resume 時計算 baseline+1 的公頻 `MESSAGE`；publish commit 後結束，不進 day responses／下一輪 draft
+- 報告（md）：會議流程、白板、夜間結算、投票軌跡、收斂、LLM 失敗／重試、事件時間軸；本機固定取回名稱為 `ai-trace-stage2-night.md`／`ai-trace-stage2-day.md`
+- **沒有** 5 分鐘 timeout；操作者仍可用外部 `timeout --signal=INT --kill-after=30s` 做分段觀察
 
 **仍待做【目標／待實作】：**
 
-- **白天 V-Day 行為驗證（兩段 5 分鐘，受 checkpoint 粒度限制）**：segment 1 完成 14 策略＋13/14 草稿；segment 2 resume 後重跑 14 策略＋14/14 草稿，並在 08:09:46 啟動 judge，但回應尚未完成就中斷。兩段 state 都仍 `ready=0`／`dayMessages=0`；segment 1 的 28/28、segment 2 的 29/29 實際 request 均帶 `reasoning_effort=medium`，但尚未驗證公頻 EXPAND；需單次連續跑到首則 `MESSAGE`，或先實作 pending day drafts 持久化
-- **公頻策略洩漏觀察**：尚無 expanded 公頻稿可驗證；目前**沒有**「白天不得公開夜間私密資訊」的硬規則，等單次跑到首則 `MESSAGE` 後再裁示
+- **首則公頻稿品質盲評**：2026-09-29 已用 `medium` 從 v2 night envelope resume，順利產生第一則公頻 `MESSAGE`（selected=良子、`messageId=day-1-1`、`messageSeq=1`），並在 publish commit 後停止；完整回應／投票尚未跑。等待使用者看過本機兩份報告後，由全新 Oracle session 盲評 expanded 稿與 draft/judge 脈絡。
+- **公頻策略洩漏觀察**：目前仍**沒有**「白天不得公開夜間私密資訊」的硬規則；需依首則 expanded 稿的 Oracle 結果再裁示，不因單一樣本直接下結論。
 
 ### 13.7 模組
 

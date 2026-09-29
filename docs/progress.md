@@ -1,11 +1,11 @@
 # 進度追蹤（ubuntu 分支）
 
-> 更新：2026-09-24
+> 更新：2026-09-29
 > 用途：新 session 接手時讀此文件即可無縫繼續。
 
 ## 目前狀態
 
-**目前暫停點：** Phase 1 GameEngine checkpoint 已完成並 push；Phase 2 AI checkpoint state machine WIP 已以 `cfc4659` push（build／50 tests 通過），但 Oracle Gate 2 依使用者要求暫停。Phase 3 external harness envelope 尚未開始，因此正式 5 分鐘 resume 仍不能跨段延續 pending day drafts；**不要重跑下一個 5 分鐘 segment，也不要開始正式 server 測試。**
+**目前暫停點：** Phase 1/2/3 checkpoint 程式已 push（`e2e3770`、`cfc4659`、`d36f032`、`a0e8fe5`）。2026-09-29 已用 `medium` 重跑 night，產生可 resume 的 v2 envelope，並從該存檔成功只跑到第一則公頻 `MESSAGE`；沒有進 day responses、投票或完整白天。Oracle 尚未啟動，目前等你先看兩份 md；正式 service 未重啟。
 
 - ✅ **共有者 prompt V8 落地**（2026-09-24，oracle 雙共有者第 1 夜流程驗證後落地）：三函數（`masonContext`／`buildMasonDraftPrompts`／`buildMasonResponsePrompts`）全面對齊狼版編排，只有身分差異；草稿定位改為「行動筆記非發言稿」
 - ✅ **私頻稱呼修正**（2026-09-24，stage 1 實測發現＋oracle 驗證後落地）：2 人私頻用「你／名字＋你」，禁「他／她」與「你們」
@@ -15,29 +15,26 @@
 - ✅ **`docs/ubuntu-spec.md` source／harness 現況對齊**（2026-09-24）：全文改用【已上線】／【source 現況】／【production 未接線】／【目標／待實作】標記；同步 V-Day、實際 loops、WS 事件狀態、部署與 systemd 缺口；明確區分外部 harness 可跑與 production 尚未接 `AiController`
 - ✅ **Qwen `medium` variant 第一段 server 測試**（2026-09-24，5 分鐘）：新增 `LLM_REASONING_EFFORT` per-request 映射；28/28 個 SGLang request 都帶 `reasoning_effort=medium`；完成 14 個策略與 13 個白天草稿，1 個草稿在 SIGINT 時中止，尚未進入 judge／EXPAND
 - ✅ **Checkpoint Phase 1：GameEngine day restore**（2026-09-24，Oracle Gate 1 attempt 2 GO）：保留 dayReady／dayMessages、day/seq/id、copy-based getter、idempotent `setDayReady`／`reconcileDayReady`、wolfTargetId round-trip；focused build + 43/43 tests 通過。AI private snapshot／harness envelope 尚待 Phase 2/3
-- ⏳ **Checkpoint Phase 2：AI day snapshot/state machine（WIP，已 push）**（2026-09-24，commit `cfc4659`）：已加入 `exportDayCheckpoint`／`importDayCheckpoint`／`resumeDayDiscussion`／`setPhaseStartEnabled`，涵蓋 strategy／draft／judge／expand／publish／response continuation；本機 build + 50/50 focused tests 通過，但 Gate 2 尚未審查，Phase 3 尚未接 harness
+- ✅ **Checkpoint Phase 2/3 + 首句 bounded 控制（已 push）**（2026-09-29，commits `cfc4659`／`d36f032`／`a0e8fe5`）：AI day snapshot、單一 v2 envelope、restore barrier、SIGINT settle、atomic save、`--stop-after-first-message`；本機 harness 17/17＋lobby focused 50/50 通過
+- ✅ **本輪 medium server 實測**（2026-09-29）：night 重跑完成並產生 `/tmp/night-v2-medium.json`（schemaVersion=2、`game.phase=DAY_DISCUSSION`、`ai.stage=strategies`）；再 resume 到第一則公頻 `MESSAGE` 後停止，沒有 day responses／第二輪 draft
+- ⏳ **首則 expanded 公頻稿待 Oracle 盲評**（2026-09-29）：本機報告已保存為 `C:\Users\user\Desktop\FrankTests\Temp\ai-trace-stage2-night.md` 與 `...\ai-trace-stage2-day.md`；等你看過後才開新 Oracle session
 
-## 本 session 暫停交接（2026-09-24）
+## 本 session 交接（2026-09-29）
 
-- **已推送基線**：`e2e3770`（Phase 1 GameEngine day restore；包含新增 checkpoint test 的 dist 產物）、`cfc4659`（Phase 2 AI day continuation WIP；source/test/dist）。`main` 未動。
-- **目前工作樹狀態**：Phase 2 WIP 已 commit/push，不再是未 commit；只剩 `dist/lobby-server/llm.d.ts` 的既有 line-ending 狀態，**不要暫存**。
-- **Phase 2 WIP 內容**：
-  - `src/lobby-server/ai-controller.ts`：AI checkpoint state machine 與 continuation APIs
-  - `src/lobby-server/game.ts`：`getNightState().day` 小型觀察欄位
-  - `src/lobby-server/ai-checkpoint.test.ts` 與其 4 個 `dist/lobby-server/ai-checkpoint.test.*` 產物
-  - `dist/lobby-server/ai-controller.*`、`dist/lobby-server/game.*` build 產物
-- **Phase 2 已驗證**：`npm run build` 通過；`node --test dist/lobby-server/ai-checkpoint.test.js dist/lobby-server/game-checkpoint.test.js dist/lobby-server/game-wolf.test.js dist/lobby-server/server.test.js dist/lobby-server/room-manager.test.js` 為 **50/50 pass**。
-- **已修正的實際 bug**：合法 `selectedClientId: null` 曾被 roster validation 錯誤拒絕，造成 checkpoint safe-no-op 後重跑策略；目前已改為只在非 null 時檢查 roster。
-- **Gate 2 狀態**：Oracle Gate 2 與 explorer 結構掃描在 2026-09-24 依使用者要求取消，**沒有 GO/NO-GO 結果**；不可把 50/50 tests 當作 Gate 2 通過。
-- **Phase 2 範圍界線**：只支援 external harness 的 `DAY_DISCUSSION`；不宣稱 NIGHT／DAY_VOTING／DAY_RESULT restore。`importDayCheckpoint()` 只 hydrate、不自動啟動；Phase 3 必須在 restore game → import AI → `resumeDayDiscussion()` 後，於 all-ready 時呼叫 `game.reconcileDayReady()`。
-- **Phase 3 尚未做**：`scripts/external-test-stage2.mjs` 仍未保存單一 `{schemaVersion, game, ai}` envelope，仍未使用 `setPhaseStartEnabled(false)` restore barrier，也沒有 atomic temp/rename 或 SIGINT quiesce；因此現有 5 分鐘 checkpoint 仍不能實際續跑。
+- **已推送程式基線**：`e2e3770`（Phase 1 GameEngine restore）、`cfc4659`（Phase 2 AI day snapshot）、`d36f032`（v2 envelope／resume harness）、`a0e8fe5`（`--stop-after-first-message`）。`main` 未動。
+- **本輪 server 實測**：server 正式 service 未重啟；測試 process 使用 `LLM_REASONING_EFFORT=medium`。night 重跑完成，產生 `/tmp/night-v2-medium.json`；結構驗證為 `schemaVersion=2`、`game.phase=DAY_DISCUSSION`、`ai.schemaVersion=1`、`ai.stage=strategies`。
+- **首句 bounded resume**：從 night v2 envelope resume，使用 `--stop-after-first-message`；結果只產生 1 則公頻 `MESSAGE`，published checkpoint 已 committed（`messageId=day-1-1`、`messageSeq=1`），14 個 response slot 保持 pending，沒有進 day responses／第二輪 draft。server 存檔：`/tmp/day-v2-medium-first.json`。
+- **本機報告（固定檔名）**：
+  - `C:\Users\user\Desktop\FrankTests\Temp\ai-trace-stage2-night.md`
+  - `C:\Users\user\Desktop\FrankTests\Temp\ai-trace-stage2-day.md`
+- **本機驗證**：`npm run build` 通過；`node --test scripts/external-test-stage2.test.mjs` 為 17/17；lobby focused 測試為 50/50。
+- **Gate 2 狀態**：獨立的 Oracle Gate 2 尚未做；本輪 server 行為證據不等於 Oracle review 通過。
+- **目前工作樹**：只剩 `dist/lobby-server/llm.d.ts` 的既有 line-ending 狀態，**不要暫存**。
 - **下一 agent 的恢復順序**：
-  1. 先 pull／讀取最新 `cfc4659` 與本節，確認接手的是已 push 的 Phase 2 WIP；不要重做 Phase 1，也不要把 WIP 當成 Gate 2 已通過。
-  2. 重新跑 `npm run build` + 上述 5 個 focused test，確認接手時工作樹仍可編譯。
-  3. 開新的 Oracle Gate 2 session，審查 AI snapshot continuation 的 stale-run fencing、partial completion、publish/ready replay、phaseStart barrier；Gate 2 通過前不要改 harness。
-  4. Gate 2 若要求修正，另開修正 commit；目前 `cfc4659` 只是跨機交接 WIP，不是 Gate 2 acceptance。Gate 2 通過後才實作 Phase 3 harness envelope、quiesce、atomic save。
-  5. Phase 3 本機測試通過後，才做 `medium` 5 分鐘 segment 2；第一個 `JUDGE → EXPAND → MESSAGE` 出現後，另開全新 Oracle session 盲評草稿與 expanded 公頻稿。
-  6. 最後同步本 `docs/progress.md`／`docs/ubuntu-spec.md`；不要在 Gate 2/3 前部署或重啟正式服務。
+  1. 不要重跑完整白天；先讓使用者閱讀 `ai-trace-stage2-night.md` 與 `ai-trace-stage2-day.md`。
+  2. 使用者確認後才開新 Oracle session，盲評第一則 expanded 公頻稿與其 draft/judge 脈絡。
+  3. Oracle 結果回填 progress/spec；不要在未檢視報告前修改 prompt。
+  4. 之後若要繼續，才從 `/tmp/day-v2-medium-first.json` 續跑 day responses；不要重跑 night。
 
 - ✅ 夜流程（NIGHT_RESULT）已通過多次驗證
 - ✅ 狼會議收斂邏輯修好（不再 premature VOTING）
@@ -196,32 +193,29 @@
 - 併發實測補充（14 路全過）：5 併發 967 tokens 全 200；14 併發 ~9.2K tokens 全 200、~49s 完成（SGLang `--max-running-requests 1` 依 priority 排隊）。先前 5 併發測試因 PowerShell 管道把中文打成 `?`（prompt=65 是亂碼），改用 base64 上傳後為正常 prompt（~79 tokens）
 
 **下一步（依序）：**
-1. 保持暫停；先讓下一 agent 讀「本 session 暫停交接」與 `.slim/deepwork/checkpoint-persistence.md`，不要重做 Phase 1。
-2. 接手後先檢查 Phase 2 WIP diff，重跑 `npm run build` 與 5 個 focused tests；不要把既有 `dist/lobby-server/llm.d.ts` line-ending 雜訊暫存。
-3. 開新的 Oracle Gate 2 審查 AI continuation；Gate 2 通過前不要修改 harness、不要部署。
-4. Gate 2 通過後才把 Phase 2 source/test/dist 獨立 commit；接著做 Phase 3：單一 `{schemaVersion, game, ai}` envelope、restore barrier、SIGINT quiesce、atomic save。
-5. Phase 3 本機測試通過後，才重新跑 `medium` 5 分鐘 segment 2；確認不再重做已完成策略／草稿，直到首則 `JUDGE → EXPAND → MESSAGE`。
-6. 首則公頻稿出現後，用全新 Oracle session 盲評草稿與 expanded 稿，再驗收簡體字、策略洩漏、EXPAND fallback 與收斂速度。
-7. 全部行為結果通過後才同步 `docs/ubuntu-spec.md`／`docs/progress.md`；正式 service 不重啟，金鑰不輪換，保留 `api.morowin.win` tunnel。
+1. 先讓使用者閱讀本輪兩份固定檔名報告：`ai-trace-stage2-night.md`、`ai-trace-stage2-day.md`；不要重跑 night 或完整白天。
+2. 使用者確認報告內容後，開新的 Oracle session 盲評第一則 expanded 公頻稿、對應 draft 與 judge 脈絡；先診斷，不直接改 prompt。
+3. Oracle 結果回填本文件與 `docs/ubuntu-spec.md`；若發現 prompt 問題，另開修改範圍。
+4. 若要繼續白天，從 server `/tmp/day-v2-medium-first.json` resume，不重做 night；正式 service 仍不重啟，金鑰不輪換。
+5. 之後才處理 production `AiController` 接線與完整多日遊戲；前端維持待做。
 
 **Server 上跑測試的正確方式（金鑰不得放進 argv）：**
 ```bash
-# 先 kill 舊 process；[e] 避免 pgrep/pkill 匹配到自己的 shell
-ssh ssh.morowin.win "pkill -f '[e]xternal-test-stage2' || true"
-
 # 只 pull 測試程式碼，不重啟正式服務
-ssh ssh.morowin.win "cd /opt/wolfgame && git pull"
+ssh ssh.morowin.win "cd /opt/wolfgame && git pull --ff-only"
 
-# 跑夜晚 + 存檔；runner 會從 root 600 env 載入金鑰，再降權成 morowin
-ssh ssh.morowin.win "sudo sh /opt/wolfgame/scripts/run-external-test-safe.sh --stop-at NIGHT_RESULT --save-state /tmp/night1.json"
+# 重跑夜晚，產生 v2 envelope；medium 只作用於此測試 process
+ssh ssh.morowin.win "sudo timeout --signal=INT --kill-after=30s 20m env LLM_REASONING_EFFORT=medium sh /opt/wolfgame/scripts/run-external-test-safe.sh --stop-at NIGHT_RESULT --save-state /tmp/night-v2-medium.json --report /tmp/ai-trace-stage2-night-v2-medium.md"
 
-# 從 5 分鐘 checkpoint 續跑；medium 只作用於此測試 process，5 分鐘後 SIGINT 存檔
-ssh ssh.morowin.win "sudo timeout --signal=INT --kill-after=30s 5m env LLM_REASONING_EFFORT=medium sh /opt/wolfgame/scripts/run-external-test-safe.sh --resume /tmp/day-medium-5m.json --stop-at DAY_RESULT --save-state /tmp/day-medium-segment2.json --report /tmp/ai-trace-stage2-day.md"
-# 下一段改 resume /tmp/day-medium-segment2.json，並換新的 save-state 路徑
+# 從 v2 night envelope resume，只跑到第一則公頻 MESSAGE
+ssh ssh.morowin.win "sudo timeout --signal=INT --kill-after=30s 15m env LLM_REASONING_EFFORT=medium sh /opt/wolfgame/scripts/run-external-test-safe.sh --resume /tmp/night-v2-medium.json --stop-after-first-message --save-state /tmp/day-v2-medium-first.json --report /tmp/ai-trace-stage2-day-v2-medium-first.md"
 
-# 取回報告
-scp ssh.morowin.win:/tmp/ai-trace-stage2-day.md "C:\Users\user\Desktop\FrankTests\Temp\ai-trace-stage2-day.md"
+# 取回報告，覆蓋本機固定檔名
+scp ssh.morowin.win:/tmp/ai-trace-stage2-night-v2-medium.md "C:\Users\user\Desktop\FrankTests\Temp\ai-trace-stage2-night.md"
+scp ssh.morowin.win:/tmp/ai-trace-stage2-day-v2-medium-first.md "C:\Users\user\Desktop\FrankTests\Temp\ai-trace-stage2-day.md"
 ```
+
+舊的 `/tmp/night1.json` 是 legacy 三檔格式，不能餵給目前 v2 harness；勿刪除，作为歷史 night 記錄。
 
 ## 已完成
 
@@ -256,24 +250,23 @@ scp ssh.morowin.win:/tmp/ai-trace-stage2-day.md "C:\Users\user\Desktop\FrankTest
 
 ## 待做
 
-1. **[HIGH] Checkpoint Phase 2 Gate 2（目前暫停）** → AI snapshot WIP 已在本機通過 50/50 tests，但 Oracle Gate 2 尚未取得結果；先不要改 harness／部署
-2. **[HIGH] Checkpoint Phase 3** → `external-test-stage2.mjs` 保存單一 `{schemaVersion, game, ai}` envelope，加入 restore barrier、SIGINT quiesce、atomic temp/rename
-3. **[HIGH] medium segment 2 端到端驗證** → Phase 3 完成後才重跑 5 分鐘續段，確認不重做已完成策略／草稿並產出首則公頻 `MESSAGE`
-4. **[MED] 首則公頻稿品質盲評** → 全新 Oracle session 評估 expanded 稿、簡體字、策略／私密資訊洩漏與收斂
-5. **[MED] Step 5：AI 接 production server** → `server.ts` 實例化 `AiController`（本 checkpoint 工作完成後才做）
-6. **[LOW] 前端（ubuntu-web/）** → 等外部測試跑通完整一局再開
+1. **[HIGH] 使用者檢視本輪兩份 md** → `ai-trace-stage2-night.md`、`ai-trace-stage2-day.md` 已生成於本機
+2. **[HIGH] 首則公頻稿品質盲評** → 使用者確認報告後，開全新 Oracle session 評估 expanded 稿、draft、judge 與私密資訊洩漏
+3. **[MED] 完整白天續跑** → 若需要，從 `/tmp/day-v2-medium-first.json` 繼續 day responses；不重跑 night
+4. **[MED] Step 5：AI 接 production server** → `server.ts` 實例化 `AiController`（本輪行為驗證與品質裁示後才做）
+5. **[LOW] 前端（ubuntu-web/）** → 等外部測試跑通完整一局再開
 
 ## 測試腳本用法
 
 ```bash
-# 跑夜晚 + 存檔（~3 min）
-node scripts/external-test-stage2.mjs --stop-at NIGHT_RESULT --save-state /tmp/night1.json
+# 重跑夜晚，產生可 resume 的 v2 envelope
+node scripts/external-test-stage2.mjs --stop-at NIGHT_RESULT --save-state /tmp/night-v2-medium.json
 
-# 從存檔接白天（5 分鐘一段）
-node scripts/external-test-stage2.mjs --resume /tmp/night1.json --stop-at DAY_RESULT --save-state /tmp/day1.json
+# 從 v2 night envelope 只跑到第一則公頻 MESSAGE
+node scripts/external-test-stage2.mjs --resume /tmp/night-v2-medium.json --stop-after-first-message --save-state /tmp/day-v2-medium-first.json --report /tmp/ai-trace-stage2-day-v2-medium-first.md
 
-# 接續下一段（報告自動合併前段 events）
-node scripts/external-test-stage2.mjs --resume /tmp/day1.json --stop-at DAY_RESULT --save-state /tmp/day2.json
+# 之後才從 day checkpoint 繼續完整白天
+node scripts/external-test-stage2.mjs --resume /tmp/day-v2-medium-first.json --stop-at DAY_RESULT --save-state /tmp/day-v2-medium-full.json
 
 # 跑完整局（多天）
 node scripts/external-test-stage2.mjs --stop-at GAME_OVER
