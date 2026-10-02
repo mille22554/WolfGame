@@ -1,11 +1,11 @@
 # 進度追蹤（ubuntu 分支）
 
-> 更新：2026-10-01
+> 更新：2026-10-02
 > 用途：新 session 接手時讀此文件即可無縫繼續。
 
 ## 目前狀態
 
-**目前暫停點：** 白天第二輪直呼已全數作廢（白板清空）。轉入**夜晚共有者會議精修**（raw SGLang 直呼，mason m1→m19＋策略步 s1→s5）：mason prompt 按 RP 手冊重寫（390–790 字）；共有者戰術手冊 v1（`Temp/opencode/mason-manual-v1.md`）；策略步改四輸入自由體（現行 prompt 見 `Temp/mason-strat-prompt.md`，393 字）。臨時規則持續驗證中，未落地 source。正式 service 未重啟。直呼 server 參數現況：effort=medium、temp=1.0（均為預設，未覆蓋）。
+**目前暫停點：** 夜晚共有者會議精修（raw SGLang 直呼）已推進到**策略步（mason-strat）定稿階段**。策略 prompt 現版見 `Temp/mason-strat-prompt.md`（千尋）＋ `Temp/mason-strat-prompt-yuko.md`（裕子），結構：身分／行事風格（只描述說話調性，不指導策略）／遊戲規則（補齊職業說明＋勝負＋關鍵規則）／進度／任務（自由體，無 JSON 契約）／戰術提點（6 條事實提醒，不指導）／回覆內容要求（800 字內、明日目標／分工／狼兩反應、狀態列 ready/speak/wait）。已驗證：加「戰術提點」拔除「話多＝狼」幽靈；加「回覆內容要求」壓字數不掉品質；靈能「身分→陣營」修正後無誤導。mason-strat-judge 已建（策略版判詞，含規則＋進度＋6 條標準），已跑 s10/s11：拔掉 buildJudgePrompts sharedCriteria 裡的結構詞舊標準後，千尋 8／裕子 9。直呼 server 參數：effort=medium、temp=1.0。臨時規則持續驗證中，未落地 source；正式 service 未重啟。
 
 - ✅ **共有者 prompt V8 落地**（2026-09-24，oracle 雙共有者第 1 夜流程驗證後落地）：三函數（`masonContext`／`buildMasonDraftPrompts`／`buildMasonResponsePrompts`）全面對齊狼版編排，只有身分差異；草稿定位改為「行動筆記非發言稿」
 - ✅ **私頻稱呼修正**（2026-09-24，stage 1 實測發現＋oracle 驗證後落地）：2 人私頻用「你／名字＋你」，禁「他／她」與「你們」
@@ -39,7 +39,8 @@
   - 手冊對齊：`docs/ai-rp-prompt-research.md`（identity→rules→state→phase→output；800 字內；禁令換合法清單＋正反範例；人設瘦身）。
   - 已驗證有效：遊戲機制陽光知識（選查理由絕跡）；【0 身分錨定】＋知識還原（harness 曾漏灌 knowledge致全員失憶，已修）；OpenCC 隻→只白名單；格式外移 validator（`Temp/opencode/validate-mason.mjs`：他／簡體(OpenCC比對)／黑話／假機制題／口量詞，report-only）。
   - 已證實無效：urgency 封頂（prompt 壓不住，落地需程式硬夾）；effort xhigh（字數漲品質不漲）；temp 0.7（無差異，已回 1.0）；thinking steering／prefill（零引用）。
-  - 待決：mason 第一句未定稿；策略步 s5 自由體（分支存活但新幻覺：夜間投票／私訊監控／編號制）；source 落地時機（V-Day 白天＋mason 夜晚＋character 人設瘦身）。
+  - 待決：mason 第一句未定稿；source 落地時機（V-Day 白天＋mason 夜晚＋character 人設瘦身＋judge sharedCriteria 結構詞舊標準已移除待 commit）。
+  - 2026-10-02 更新：策略步定稿路徑重寫——身分＋行事風格（改用 agents.md「性格與說話方式」，無策略指導）＋遊戲規則（補齊 7 職說明＋勝負＋關鍵規則）＋進度＋任務自由體＋戰術提點（6 條事實提醒，不指導）＋回覆內容要求（800 字內、明日目標／分工／狼兩反應、末行 ready/speak/wait）。已驗證：戰術提點拔掉「話多＝狼」；回覆內容要求壓 1832→940 字且品質不掉；靈能身分→陣營修正；平票＝無人出局＝靈能無資料提醒後矛盾句消失。mason-strat-judge（策略版 6 條判詞＋規則/進度）已建，拔掉 buildJudgePrompts sharedCriteria 結構詞舊標準後首跑 千尋 8／裕子 9（`ai-controller.ts` line 930 已移除，build 通過，未 commit）。
 - ⏳ **第二輪直呼臨時規則（已作廢，白板清空；僅留紀錄）**（2026-09-29，美咲開局）：
   - Judge＋草稿：不要重複白板論點；宣告不算內容；純程序扣分；質疑認同觀察同等評分；重要性自評過濾；要求本身不合理扣分；預設身份扣分；不腦補局勢；白話描述候選。
   - Expand：白板時序推理；口語原則＋例示（持續擴充）；受詞明確；逐點對應＋忠實三條（不改時態、不加規範、不斷尾）；開門見山＋鋪陳已搬回草稿層；空威脅刪除；段落空行。
