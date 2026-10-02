@@ -572,7 +572,9 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | EXPAND（三個會議共用） | `buildExpandPrompts`：被選中的草稿筆記＋該會議的 context＋白板全文（`boardText`，供時序推理） | `{"speech": "完整發言"}` | 3 次重試；全失敗 → fallback 草稿原文；不得新增筆記外的行動、對象或結論；發布邊界 OpenCC `cn→tw` 強轉繁體（含 fallback） |
 | 狼刀（`WOLF_KILL`） | `buildWolfKillPrompts`：狼隊同夥＋狂人＋可刀目標＋最近訊息 | `{"target": "<displayName>"}` | 不可選自己／狂人 |
 | 占い（`SEER_CHECK`）／守衛（`GUARD_PROTECT`） | `buildTargetPrompts`：角色＋存活玩家＋`privateInfo` | `{"target": "<displayName>"}` | 不可選自己；守衛 Day1 不行動（引擎擋） |
-| judge 選言（`JUDGE`） | `buildJudgePrompts`：讀草稿 `speech`（編號、不標作者）＋自評（`importance`／`urgency`／`impact`，有才顯示）＋按會議類型套評分標準 | `{"scores": [n, ...], "best": index}` | 全盲評分；白天版多 9 條標準（獨立成立、言行一致、結構詞、新東西、可核對、實際動作、時序、格式vs遊戲、自評核對）；LLM 失敗或全 0 分 → 隨機 fallback（不阻塞）；同分時由 LLM 自行決定 |
+| judge 選言（`JUDGE`） | `buildJudgePrompts`：讀草稿 `speech`（編號、不標作者）＋自評（`importance`／`urgency`／`impact`，有才顯示）＋按會議類型套評分標準 | `{"scores": [n, ...], "best": index}` | 全盲評分；白天版多 9 條標準（獨立成立、言行一致、新東西、可核對、實際動作、時序、格式vs遊戲、自評核對）；LLM 失敗或全 0 分 → 隨機 fallback（不阻塞）；同分時由 LLM 自行決定 |
+
+> 2026-10-02 更新：`buildJudgePrompts` sharedCriteria 裡的「結構詞扣分」舊標準已移除（原 line 930）——它把「輪次／第幾段／整段」誤判成扣分，拖累策略版 judge。新增 `docs/strategy-prompt-variables.md` 追蹤策略 prompt 的人與職業變數（`{{nickname}}`／`{{partner}}`／`{{faction}}`／`{{role}}`／`{{style}}`／`{{dayNo}}`／`{{alive}}`／`{{mbt}}`／`{{memory}}`／`{{partnerLabel}}`／`{{opponent}}`）；mason-strat 策略 prompt 現版結構：身分／行事風格／遊戲規則／進度／任務（自由體）／戰術提點／回覆內容要求。
 
 - **沒有**「每輪最多發言 2 次」「一句話」「≤50 字」這類舊限制：現行 controller 不用字數上限控制發言，改用 **P12 排版規範**（>50 字換行、≤3 段，見 §13.5）。`ai-player.ts` 的舊 prompt 裡仍留有 `≤50字` / `≤150字` 字串，但該檔不是現行 runtime 路徑（§13.7）。
 - 每則 WS 訊息 200 字上限仍在（`MAX_MESSAGE_LEN`）：真人 `WOLF_CHAT`／`MASON_CHAT` 與引擎的 `handleWolfChat` / `publishMasonSpeech` 會擋。`sendDayMessage` 目前**不擋**長度（公頻 expanded 長度不受此上限約束）。
