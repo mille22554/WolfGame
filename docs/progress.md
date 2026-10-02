@@ -1,11 +1,11 @@
 # 進度追蹤（ubuntu 分支）
 
-> 更新：2026-09-29
+> 更新：2026-10-01
 > 用途：新 session 接手時讀此文件即可無縫繼續。
 
 ## 目前狀態
 
-**目前暫停點：** 白天 prompt 第一批修正已落地 source 並 push（`2ff4e66` 五項修正、`fdcfb66` OpenCC＋狼共有同步、`d550a1d` spec 對齊）。第二輪直呼測試（重置後）進行中：白板 3 句（美咲 → 蓮 → 太助），0 人準備投票。臨時規則持續驗證中，未落地。正式 service 未重啟。
+**目前暫停點：** 白天第二輪直呼已全數作廢（白板清空）。轉入**夜晚共有者會議精修**（raw SGLang 直呼，mason m1→m19＋策略步 s1→s5）：mason prompt 按 RP 手冊重寫（390–790 字）；共有者戰術手冊 v1（`Temp/opencode/mason-manual-v1.md`）；策略步改四輸入自由體（現行 prompt 見 `Temp/mason-strat-prompt.md`，393 字）。臨時規則持續驗證中，未落地 source。正式 service 未重啟。直呼 server 參數現況：effort=medium、temp=1.0（均為預設，未覆蓋）。
 
 - ✅ **共有者 prompt V8 落地**（2026-09-24，oracle 雙共有者第 1 夜流程驗證後落地）：三函數（`masonContext`／`buildMasonDraftPrompts`／`buildMasonResponsePrompts`）全面對齊狼版編排，只有身分差異；草稿定位改為「行動筆記非發言稿」
 - ✅ **私頻稱呼修正**（2026-09-24，stage 1 實測發現＋oracle 驗證後落地）：2 人私頻用「你／名字＋你」，禁「他／她」與「你們」
@@ -35,12 +35,17 @@
   - `notePrivacyRules()` 同步注入狼 draft／response、共有者 draft／response 四個 prompt。
   - 使用者決策：段落數驗證＝不管；同分選擇＝維持現狀（LLM 決定）。
   - 驗證：`npm run build` 通過；`npm test` 186 pass／0 fail；lobby＋checkpoint 44／44。
-- ⏳ **第二輪直呼測試中新規則（臨時驗證，未落地 source）**（2026-09-29，白板已重置，美咲開局）：
+- ⏳ **夜晚共有者精修（臨時驗證，未落地 source）**（2026-10-01，白板清空後轉向）：mason draft→judge→expand 跑 m1–m4；後改單段直出（mason-full，省一次 SGLang）；策略步獨立（mason-strat s1–s5，只想策略不跑 judge）。
+  - 手冊對齊：`docs/ai-rp-prompt-research.md`（identity→rules→state→phase→output；800 字內；禁令換合法清單＋正反範例；人設瘦身）。
+  - 已驗證有效：遊戲機制陽光知識（選查理由絕跡）；【0 身分錨定】＋知識還原（harness 曾漏灌 knowledge致全員失憶，已修）；OpenCC 隻→只白名單；格式外移 validator（`Temp/opencode/validate-mason.mjs`：他／簡體(OpenCC比對)／黑話／假機制題／口量詞，report-only）。
+  - 已證實無效：urgency 封頂（prompt 壓不住，落地需程式硬夾）；effort xhigh（字數漲品質不漲）；temp 0.7（無差異，已回 1.0）；thinking steering／prefill（零引用）。
+  - 待決：mason 第一句未定稿；策略步 s5 自由體（分支存活但新幻覺：夜間投票／私訊監控／編號制）；source 落地時機（V-Day 白天＋mason 夜晚＋character 人設瘦身）。
+- ⏳ **第二輪直呼臨時規則（已作廢，白板清空；僅留紀錄）**（2026-09-29，美咲開局）：
   - Judge＋草稿：不要重複白板論點；宣告不算內容；純程序扣分；質疑認同觀察同等評分；重要性自評過濾；要求本身不合理扣分；預設身份扣分；不腦補局勢；白話描述候選。
   - Expand：白板時序推理；口語原則＋例示（持續擴充）；受詞明確；逐點對應＋忠實三條（不改時態、不加規範、不斷尾）；開門見山＋鋪陳已搬回草稿層；空威脅刪除；段落空行。
   - 草稿：開門見山＋鋪陳全刪；觀察帶結論；白話（學術／策略／引擎詞禁令）；引用核對出處；條件句禁令；不合理要求禁令；身份預設禁令。
-  - 已驗證有效：白板重複過濾（真一 8→2）、腦補消除、自評過濾（葵／佐雪低分）。
-  - 待決策：本輪全部臨時規則的 source 落地時機。
+  - 已驗證有效（當時）：白板重複過濾（真一 8→2）、腦補消除、自評過濾（葵／佐雪低分）。
+  - 已作廢（2026-10-01）：白板清空，轉夜晚共有者精修；source 落地待新一輪驗收後統一決策。
 
 ## 本 session 交接（2026-09-29）
 
