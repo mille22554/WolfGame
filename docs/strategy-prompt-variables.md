@@ -8,6 +8,7 @@
 | 變數 | 說明 | 來源 |
 |---|---|---|
 | `{{nickname}}` | 該 AI 的角色名 | `game.getPlayers()` → `p.nickname` |
+| `{{prefecture}}` | 出身地（分散，允許重複） | `PREFECTURE[cid]` |
 | `{{partner}}` | 夥伴（共有者／狼用） | `ai.entries.get(cid).knowledge.partners` |
 | `{{faction}}` | 陣營（村人／人狼） | `p.faction` |
 | `{{role}}` | 職業（村民／占卜／靈能／守衛／共有者／人狼／狂人） | `p.role` |
@@ -23,7 +24,7 @@
 
 ```
 ## 身分
-你是「{{nickname}}」（日本長野縣人），{{faction}}陣營{{role}}。夥伴：{{partner}}。
+你是「{{nickname}}」（日本{{prefecture}}人），{{faction}}陣營{{role}}。夥伴：{{partner}}。
 出身地只用於說話口吻，與人際關係無關
 
 ## 行事風格
