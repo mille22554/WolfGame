@@ -5,7 +5,7 @@
 
 ## 目前狀態
 
-**目前暫停點：** 全會議統一 loop 落地並 push：狼／共有者／白天全部改策略稿＋發言（judge→記憶合併→發言→發布→發言者 auto-ready＋其餘撤銷 ready；有 speak 回 loop；僅 wait 重發附不可 wait；全 ready 收斂）。現版三套模板見 `docs/strategy-prompt-variables.md`。正式 service 未重啟。
+**目前暫停點：** 追蹤檔同步現行發言模板（任務重寫＋流暢簡短＋主詞規則，刪不要編造）＋策略觸發式提點。現版三套模板見 `docs/strategy-prompt-variables.md`。正式 service 未重啟。
 
 - ✅ **共有者 prompt V8 落地**（2026-09-24，oracle 雙共有者第 1 夜流程驗證後落地）：三函數（`masonContext`／`buildMasonDraftPrompts`／`buildMasonResponsePrompts`）全面對齊狼版編排，只有身分差異；草稿定位改為「行動筆記非發言稿」
 - ✅ **私頻稱呼修正**（2026-09-24，stage 1 實測發現＋oracle 驗證後落地）：2 人私頻用「你／名字＋你」，禁「他／她」與「你們」
