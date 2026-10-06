@@ -353,7 +353,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 
 **流程（loop，直到收斂）：**
 - **初始**：兩個共有者各自獨立出草稿（互不可見）
-- **② Judge 盲選 → 發布**：從草稿中盲選一篇 → **展開**（EXPAND，見下）→ 將展開後的完整發言發布到共有者白板（`MASON_MESSAGE`）
+- **② Judge 盲選 → 發布**：從草稿中盲選一篇 → **記憶合併**（該角色專區舊文＋新策略 → LLM 整合版寫回，見 §13.4 Memory）→ **展開**（EXPAND，見下）→ 將展開後的完整發言發布到共有者白板（`MASON_MESSAGE`）
 - **②' 展開（EXPAND）**：將選中的草稿（行動筆記）用該角色語氣重述成完整發言；LLM 失敗重試 3 次後，以草稿原文發布（不阻塞會議）。展開不得新增草稿外的行動、對象或結論
 - **③ 另一方讀白板 → 回應**：「準備好了」（ready）／「我要講」（出新草稿）／「資訊不足」（不出草稿）
 - **④ 收斂判斷**：有出新草稿 → 回 ②；都沒新草稿且雙方都 ready → **收斂** → 雙方 toggle ON
@@ -597,7 +597,9 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | 白天討論 | `dayContext`（全角色共用：只用公開發言為證據、禁質疑未發言者、禁只談討論方法） | **白天草稿、白天回應、白天 EXPAND**；**不掛** `buildStrategyPrompt` |
 | 夜間目標選擇（狼刀／占い／守衛）、白天投票 | 不掛 context（只帶角色＋存活玩家＋情報） | — |
 
-**Memory**：`appendMemory()` 追加到 `profile.memory`（跨階段不重置、**4000 字上限**超出砍最舊；`character/<id>/memory.md` 初始化）。寫入點：`DAY_STRATEGY`（`[Day{N} 策略] …`）、白天草稿與白天回應的 `strategy_update`（`[Day{N}] …`）。
+**Memory**：`appendMemory()` 追加到 `profile.memory`（跨階段不重置、**4000 字上限**超出砍最舊；`character/<id>/memory.md` 初始化）。寫入點：`DAY_STRATEGY`（`[Day{N} 策略] …`）、白天草稿與白天回應的 `strategy_update`（`[Day{N}] …`）、共有者會議 judge 選出後（`[共有者夜間策略] …`，見下）。
+
+**共有者記憶合併**（judge 選出 → EXPAND 發布前）：以該角色記憶專區舊文＋新選中策略調一次 LLM 產生整合版（保留仍成立的、更新被推翻的、衝突只留一個並捨棄另一個），原地取代專區，不動記憶其他部分，不無限追加。落選草稿不寫入。只有 `speak` 產出的策略會走到這步（`wait`／`ready` 無策略文可合併）。
 
 **JSON 契約**（現行欄位）：
 

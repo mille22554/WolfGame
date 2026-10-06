@@ -5,7 +5,7 @@
 
 ## 目前狀態
 
-**目前暫停點：** 夜晚共有者會議精修（raw SGLang 直呼，策略 medium／發言 xhigh）已全 prompt 落地並 push。現版三套 prompt 見 `docs/strategy-prompt-variables.md`（策略／發言／judge 模板＋11 變數）：策略＝身分（出身地僅管口吻）／行事風格／遊戲規則／進度（對話紀錄）／任務（自由體＋CO 利弊＋ready/speak/wait 紀律：只有 speak 出策略文）／戰術提點（專業對手總綱＋20 條事實提醒，不指導）／回覆內容要求；發言＝同頭段＋`## 策略`＋私頻一句（約 100 字口語＋不暴露同盟＋新舊分流＋人稱分清）；judge＝規則＋進度＋六條策略評分＋只回 JSON。`ai-controller.ts` sharedCriteria 結構詞舊標準已移除（build 通過，`npm test` 186 pass＋lobby-server 27 pass）。直呼現況：白板 6 句（千尋→裕子交替），策略 s71＋s72，待千尋回應裕子輪次 6。正式 service 未重啟。
+**目前暫停點：** 夜晚共有者會議精修第二輪落地並 push。新增記憶合併流程（spec §13.4 Memory＋共有者流程②）：judge 選出 → 舊專區＋新策略 LLM 整合（保留／更新／衝突留一）→ 原地取代 → EXPAND＋發言；只有 speak 走合併。直呼驗證：merge（舊空＋s76→整合版）可行；記憶改獨立 `## 記憶` 大項全文呈現後，s79 千尋直接 `ready`（101 字，判斷已對齊無需再講），白板停 2 句。現版三套模板見 `docs/strategy-prompt-variables.md`。正式 service 未重啟。
 
 - ✅ **共有者 prompt V8 落地**（2026-09-24，oracle 雙共有者第 1 夜流程驗證後落地）：三函數（`masonContext`／`buildMasonDraftPrompts`／`buildMasonResponsePrompts`）全面對齊狼版編排，只有身分差異；草稿定位改為「行動筆記非發言稿」
 - ✅ **私頻稱呼修正**（2026-09-24，stage 1 實測發現＋oracle 驗證後落地）：2 人私頻用「你／名字＋你」，禁「他／她」與「你們」
