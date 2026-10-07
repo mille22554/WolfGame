@@ -632,11 +632,9 @@ AI 狼與 AI 共有者都依 §12.3「統一夜間會議 loop」驅動（非 Spe
 - 房間回收時 `game.destroy()` 清所有 phase timer；harness 結束時 `ai.destroy()` → 取消進行中的重試排程（進行中的 fetch 無法中斷，結果會被丟棄）
 - **【production 未接線】** `server.ts` 尚未建立 `AiController`，因此正式 server 目前沒有這套排程／清理路徑
 
-#### 13.6a 白天討論（`AiController.runDayDiscussion`，現行流程）
+#### 13.6a 白天討論
 
-> **【source 現況】** 外部 harness `scripts/external-test-stage2.mjs` 會 `new AiController(...)`，並把 engine callback 接到 `onNightStepActive` / `onWolfSubphaseChange` / `handleBroadcast` / `handlePrivate`，因此以下流程在 harness 可完整觀察。**【production 未接線】** 正式 server 尚未建立 controller（§13.7）。
->
-> 這是白天 **V-Day** 概念規格：草稿是**行動筆記**（判斷誰／依據／要表態什麼），完整發言由 EXPAND 產生（§12.4）。
+> 白天討論 AI 與夜間 loop 同構，走「策略 → judge → 記憶合併 → 發言」（見 §12.4）。
 
 **進入時的狀態重建（v2 envelope）**：外部 harness 使用單一 `{ schemaVersion: 2, savedAt, stopAt, game, ai, events, aiLog }` envelope。resume 順序固定為：`ai.setPhaseStartEnabled(false)` barrier → `game.restoreState(env.game)` → `ai.restoreLog(env.aiLog)` → `ai.importDayCheckpoint(env.ai)` → `ai.resumeDayDiscussion()`。`AiController` checkpoint 保存 strategy／draft／judge／expand／publish／response continuation、memory／knowledge／boards；已完成的階段不重做，未完成項按 pending 補做。all-ready 時由 continuation 呼叫 `game.reconcileDayReady()` 推進 `DAY_VOTING`。只支援 `DAY_DISCUSSION` restore；舊三檔格式與 `NIGHT_RESULT` phase 明確拒絕。
 
