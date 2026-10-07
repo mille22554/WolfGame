@@ -5,7 +5,7 @@
 
 ## 目前狀態
 
-**目前暫停點：** 夜間會議落地第 1 步完成——`docs/ubuntu-spec.md` §12.3／§13.2／§13.4／§13.5／§13.6 已改寫為「統一夜間會議 loop」（status-first 策略→validator→judge（1-based）→記憶合併→發言；狼收斂後沿用 `runWolfVoting`；白天不動；舊 JSON 夜間流程待替換）。下一步依序：`strategy-prompt-variables.md` 補狼模板→source 落地。正式 service 未重啟。
+**目前暫停點：** 夜間會議落地第 1 步完成——`docs/ubuntu-spec.md` §12.3／§13.2／§13.4／§13.5／§13.6 已改寫為「統一夜間會議 loop」（status-first 策略→validator→judge（1-based）→記憶合併→發言；狼收斂後沿用 `runWolfVoting`；白天不動；舊 JSON 夜間流程待替換）。第 2 步完成：`docs/strategy-prompt-variables.md` 重寫為共有者＋狼統一模板（策略／發言／judge／記憶合併逐字全文＋變數表＋validator）。下一步：source 落地。正式 service 未重啟。
 
 - ✅ **夜間會議規格改寫**（2026-10-07，只改 spec）：直呼測試定案（共有者＋狼第 1 夜跑到收斂）。決策：範圍只做夜間；狼刀保留現有投票；舊 JSON 草稿／回應／夜間 EXPAND 直接替換。wait 處理：無人 speak 但有 wait → 附「本輪不可 wait」重出一次，仍無 speak 即收斂。
 
