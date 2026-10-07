@@ -254,7 +254,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 
 ### 12.3 夜間行動（NIGHT phase）
 
-> **【規格＋source 現況／外部 harness；production 未接線】** 本節描述遊戲規則與狼／共有者夜間會議 loop。**夜間會議 loop 以本節「統一夜間會議 loop」為準（status-first 策略制）；`AiController` 現行的 JSON 草稿／回應／EXPAND 實作為舊版，待落地替換**。目前正式多房 server 尚未建立 `AiController`，線上不會自行驅動 AI 私頻會議（§13.7）。
+> **【契約】** 本節描述遊戲規則與狼／共有者夜間會議 loop。狼會議 loop 以本節「統一夜間會議 loop」為準（status-first 策略制）。目前正式多房 server 尚未建立 `AiController`，線上不會自行驅動 AI 私頻會議（§13.7）。
 
 各角色可提交的行動：
 
@@ -351,13 +351,14 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 - 复用 lobby 的 `SEND_MESSAGE` / `MESSAGE`（公頻）【已上線】
 - **無私頻**：WOLF_CHAT / MASON_CHAT 僅 NIGHT 可用，白天只有公頻
 - 結束方式：所有存活玩家 toggle「準備投票」ON → 進入投票（同狼會議模式，可隨時 toggle 開/關）【已上線】；房主另可送 `END_DISCUSSION` 提前結束（已實作）
-- **AI 驅動（V-Day；source 現況／外部 harness）**：AI 玩家走「策略先行 + 逐輪發言 + 全員回應」loop，完整流程見 §13.6a。核心順序：
-  1. 所有**未 ready** 的 AI 各出「行動筆記」草稿（`Promise.all`，互不可見）
-  2. judge 盲選一篇（只讀草稿、不標作者）
-  3. 選中草稿走 **EXPAND** 展開成角色語氣的完整發言（3 次重試；全失敗 → 以草稿原文 fallback，不阻塞）
-  4. expanded 經**既有** `MESSAGE` 事件廣播到公頻（引擎 `sendDayMessage`）→ **公頻沒有新增 WS 事件**
-  5. 發言者 toggle ready；其他 AI 讀**同一段 expanded** 回應（`Promise.all`：ready／speak 出新草稿／wait）
-  6. 全 AI ready → 收斂，進 `DAY_VOTING`；若無人出新稿但還有未 ready → 強制那些 AI 出稿
+- **AI 驅動**：AI 玩家走「策略 → judge → 記憶合併 → 發言」loop，與夜間 loop 同構（見 §12.3），完整流程見 §13.6a。核心順序：
+  1. 所有**未 ready** 的 AI 各出一份 status-first 策略（`Promise.all`，互不可見）
+  2. judge 盲選一篇（只讀策略、不標作者）
+  3. 入選者記憶合併（該 AI 記憶專區舊文＋新策略 → 整合版寫回）
+  4. 入選策略轉成角色語氣的完整發言（3 次重試；全失敗 → 以策略原文 fallback，不阻塞）
+  5. 發言經**既有** `MESSAGE` 事件廣播到公頻（引擎 `sendDayMessage`）→ **公頻沒有新增 WS 事件**
+  6. 發言者 toggle ready；其他 AI 讀**同一段發言**回應（`Promise.all`：重新評估，只回傳 readiness/speak/wait）
+  7. 全 AI ready → 收斂，進 `DAY_VOTING`；若無人出新稿但還有未 ready → 強制那些 AI 出稿
 - **【production 未接線】** 正式 server 開局只建立 `GameEngine`，不建立 `AiController` → 線上真人局目前沒有 AI 發言（§13.7）
 - **【目標／待實作】已死亡玩家不能發言**：`SEND_MESSAGE` 目前只檢查「在房內」＋200 字上限（`room-manager.sendMessage`），**不檢查 alive／phase** → 死者（與觀戰者）目前仍能在公頻打字。前端灰化屬 M6。
 - **【目標／待實作】** 公頻可見範圍的 server 端區分（觀戰者 vs 參戰 vs 死者）尚未實作；目前一律 broadcast 全房。
