@@ -5,7 +5,7 @@
 
 ## 目前狀態
 
-**目前暫停點：** 二葉人設去樣板（刪引號台詞）。現版三套模板見 `docs/strategy-prompt-variables.md`。正式 service 未重啟。
+**目前暫停點：** 健太人設修正（去樣板＋結構白話化）。現版三套模板見 `docs/strategy-prompt-variables.md`。正式 service 未重啟。
 
 - ✅ **共有者 prompt V8 落地**（2026-09-24，oracle 雙共有者第 1 夜流程驗證後落地）：三函數（`masonContext`／`buildMasonDraftPrompts`／`buildMasonResponsePrompts`）全面對齊狼版編排，只有身分差異；草稿定位改為「行動筆記非發言稿」
 - ✅ **私頻稱呼修正**（2026-09-24，stage 1 實測發現＋oracle 驗證後落地）：2 人私頻用「你／名字＋你」，禁「他／她」與「你們」
