@@ -1,11 +1,13 @@
 # 進度追蹤（ubuntu 分支）
 
-> 更新：2026-10-02
+> 更新：2026-10-07
 > 用途：新 session 接手時讀此文件即可無縫繼續。
 
 ## 目前狀態
 
-**目前暫停點：** 寫完≠ready 只加直呼測試（未落地）。現版三套模板見 `docs/strategy-prompt-variables.md`。正式 service 未重啟。
+**目前暫停點：** 夜間會議落地第 1 步完成——`docs/ubuntu-spec.md` §12.3／§13.2／§13.4／§13.5／§13.6 已改寫為「統一夜間會議 loop」（status-first 策略→validator→judge（1-based）→記憶合併→發言；狼收斂後沿用 `runWolfVoting`；白天不動；舊 JSON 夜間流程待替換）。下一步依序：`strategy-prompt-variables.md` 補狼模板→source 落地。正式 service 未重啟。
+
+- ✅ **夜間會議規格改寫**（2026-10-07，只改 spec）：直呼測試定案（共有者＋狼第 1 夜跑到收斂）。決策：範圍只做夜間；狼刀保留現有投票；舊 JSON 草稿／回應／夜間 EXPAND 直接替換。wait 處理：無人 speak 但有 wait → 附「本輪不可 wait」重出一次，仍無 speak 即收斂。
 
 - ✅ **共有者 prompt V8 落地**（2026-09-24，oracle 雙共有者第 1 夜流程驗證後落地）：三函數（`masonContext`／`buildMasonDraftPrompts`／`buildMasonResponsePrompts`）全面對齊狼版編排，只有身分差異；草稿定位改為「行動筆記非發言稿」
 - ✅ **私頻稱呼修正**（2026-09-24，stage 1 實測發現＋oracle 驗證後落地）：2 人私頻用「你／名字＋你」，禁「他／她」與「你們」
