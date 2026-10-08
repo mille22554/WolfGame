@@ -262,7 +262,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 |---|---|---|
 | 守衛 | `GUARD_PROTECT { targetId }` | Day1 不可；不可自護（自護→隨機護他人）；可連續護同一人 |
 | 共有者 | `MASON_END_TURN`（toggle） | 雙人都 ON 才解鎖狼的環節；可隨時 toggle 開/關 |
-| 人狼 | 狼會議 → `WOLF_KILL { targetId }` | 全部狼 toggle「準備投票」ON → 投目標；平票（1:1, 1:1:1）→ 回討論重來；不可選自己/狂人 |
+| 人狼 | 狼會議 → `WOLF_KILL { targetId }` | 全部狼 toggle「準備投票」ON → 投目標；平票（1:1, 1:1:1）→ 回討論重來；不可選自己／狼隊／狂人 |
 | 占い師 | `SEER_CHECK { targetId }` | 不可選自己；每夜一次 |
 | 霊能者 | 無（被動） | 黎明自動收到昨日票死者陣營 |
 | 村民/狂人 | 無 | — |
@@ -435,7 +435,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 |---|---|
 | Phase 指示器 | 頂欄顯示當前 phase（夜/昼）+ 天數 + 等待狀態（「等待 N 人行動…」） |
 | 角色揭示畫面 | ROLE_REVEAL phase 全螢幕顯示自己的角色（10 秒後自動消失） |
-| 夜間操作面板 | 依角色顯示不同 UI：人狼→選目標（排除自己/狂人）；占い師→選目標；守衛→選目標（Day1 灰化） |
+| 夜間操作面板 | 依角色顯示不同 UI：人狼→選目標（排除自己／狼隊／狂人）；占い師→選目標；守衛→選目標（Day1 灰化） |
 | 人狼私頻 | 僅人狼可見的聊天區（可折疊） |
 | 投票面板 | DAY_VOTING 時顯示所有存活玩家按鈕 + 棄票按鈕 |
 | 死亡公告 | NIGHT_RESULT / DAY_RESULT 時全螢幕 toast（3 秒） |
@@ -529,7 +529,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | 狼／共有者夜間策略（`WOLF_STRATEGY` / `MASON_STRATEGY`） | §12.3 策略 prompt（system＝身分＋行事風格；user＝規則／進度／記憶／任務／提點／回覆要求） | 自由體文字，第一行 `status: speak｜wait｜ready`＋理由；只有 speak 接策略主文 | 非 JSON；server 端 validator（§12.3 ②），3 次不合格視為 wait |
 | 夜間記憶合併（`MEMORY_MERGE`） | 舊夜間策略專區＋新入選策略 | 整合版策略全文（純文字） | 原地取代專區；只有入選 speak 策略會合併 |
 | 夜間發言（`WOLF_SPEECH` / `MASON_SPEECH`） | §12.3 發言 prompt（含 `## 你剛剛讀完最新發言後想的策略`） | 一句口語發言（純文字） | 3 次重試；失敗 → 以策略主文發布；OpenCC 強轉繁體 |
-| 狼刀（`WOLF_KILL`） | `buildWolfKillPrompts`：狼隊同夥＋狂人＋可刀目標＋最近訊息 | `{"target": "<displayName>"}` | 不可選自己／狂人 |
+| 狼刀（`WOLF_KILL`） | `buildWolfKillPrompts`：狼隊同夥＋狂人＋可刀目標＋最近訊息 | `{"target": "<displayName>"}` | 不可選自己／狼隊／狂人 |
 | 占い（`SEER_CHECK`）／守衛（`GUARD_PROTECT`） | `buildTargetPrompts`：角色＋存活玩家＋`privateInfo` | `{"target": "<displayName>"}` | 不可選自己；守衛 Day1 不行動（引擎擋） |
 | judge 選言（`JUDGE`；夜間版見 §12.3） | judge prompt：讀策略（編號、不標作者）＋按會議類型套評分標準 | `{"scores": [n, ...], "best": index}`，**`best` 一律 1-based** | 全盲評分；白天版另套標準（獨立成立、言行一致、新東西、可核對、實際動作、時序、格式vs遊戲）；LLM 失敗或全 0 分 → 隨機 fallback（不阻塞）；同分時由 LLM 自行決定 |
 
@@ -551,8 +551,8 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 
 | 會議 | context | 掛在哪裡 |
 |---|---|---|
-| 狼會議 | `wolfContext`（刀人優先序、假跳／對跳結構、投票鎖定、戰術字典） | 狼策略、狼回應、狼發言 |
-| 共有者會議 | `masonContext`（與 `wolfContext` 同構，只換身分差異：CO 決策／反假跳／第一天／互信分工／雙 CO 期） | 共有者策略、共有者回應、共有者發言 |
+| 狼會議 | `wolfContext`（刀人優先序、假跳／對跳結構、投票鎖定、戰術字典） | 狼策略、狼發言 |
+| 共有者會議 | `masonContext`（與 `wolfContext` 同構，只換身分差異：CO 決策／反假跳／第一天／互信分工／雙 CO 期） | 共有者策略、共有者發言 |
 | 白天討論 | `dayContext`（全角色共用：只用公開發言為證據、禁質疑未發言者、禁只談討論方法） | 白天策略、白天回應、白天發言 |
 | 夜間目標選擇（狼刀／占い／守衛）、白天投票 | 不掛 context（只帶角色＋存活玩家＋情報） | — |
 
@@ -688,7 +688,7 @@ DAY_DISCUSSION 開始（引擎 broadcast PHASE_CHANGED）
 
 | 檔案 | 說明 | 現行地位 |
 |---|---|---|
-| `src/lobby-server/llm.ts` | LLM client：`chat(messages, { temperature, priority })` → `fetch(localhost:9090/v1/chat/completions)`（Bearer auth、`x-override-priority`）；失敗回 `null`；不設 timeout | 【source 現況】實際被呼叫的一層，`AiController` 的所有 LLM 呼叫都走這裡 |
+| `src/lobby-server/llm.ts` | LLM client：`chat(messages, { temperature, reasoningEffort, priority })` → `fetch(localhost:9090/v1/chat/completions)`（Bearer auth、`x-override-priority`、逐次 `reasoning_effort`）；失敗回 `null`；不設 timeout | 【source 現況】實際被呼叫的一層，`AiController` 的所有 LLM 呼叫都走這裡 |
 | `src/lobby-server/ai-controller.ts` | **實際的 AI loop**：`AiController`（狼會議／共有者會議／白天討論：策略→validator→judge→記憶合併→發言；目標選擇、LLM log、memory 4000 字），import `llm.ts` ＋ `ai-player.ts` 的 persona/memory loader | 由 `scripts/external-test-stage2.mjs` 建立；**`server.ts` 尚未 import**（production 未接線） |
 | `src/lobby-server/ai-player.ts` | `loadCharacterProfile()`（讀 `character/<id>/agents.md` ＋ `memory.md`）、`parseJsonResponse()`，以及**舊的** SpeechScheduler pipeline（`buildPreSpeechPrompt` / `buildExpandPrompt` / `runWolfMeetingPipeline`） | 部分現行（persona/memory loader 與 parser 被 controller 引用）；**pipeline 部分是舊路徑、未接 runtime**（其中的 `≤50字` / `≤150字` 等字串不再是現行規格，見 §13.4） |
 

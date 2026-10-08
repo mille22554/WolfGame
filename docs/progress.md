@@ -5,7 +5,7 @@
 
 ## 目前狀態
 
-**目前暫停點：** spec 統一「策略+發言」架構完成六輪 review——§12.3／§12.4／§13.4／§13.5／§13.6a 皆已改為真相口徑（夜間＋白天同構；舊 JSON 草稿／回應／EXPAND、JUDGE best 一律 1-based；簡體字已清；通道區分；`docs/history/` 已建立）。下一步：source 落地（先修 `ai-controller.ts` 3 個 TS 錯）。正式 service 未重啟。
+**目前暫停點：** spec 統一「策略+發言」架構完成九輪 review——§12.3／§12.4／§13.4／§13.5／§13.6a 皆已改為真相口徑（夜間＋白天同構；舊 JSON 草稿／回應／EXPAND、JUDGE best 一律 1-based；簡體字已清；通道區分；霊能者只知陣營；夜間無回應；`llm.ts` 逐次 effort；狼不可刀狼隊；`docs/history/` 已建立）。下一步：source 落地（先修 `ai-controller.ts` 3 個 TS 錯）。正式 service 未重啟。
 
 ## 歷史索引（明細見各檔）
 
@@ -17,7 +17,7 @@
 | `docs/history/2026-09-29.md` | Phase 2/3、medium 實測、attempt-01、raw 白天模擬、五項修正、OpenCC、盲評、session 交接 |
 | `docs/history/2026-10-01.md` | 夜晚共有者精修、第二輪直呼作廢紀錄 |
 | `docs/history/2026-10-07.md` | 夜間會議規格改寫（統一 loop＋模板重寫） |
-| `docs/history/2026-10-08.md` | spec 統一全檢＋二～八次確認（七次無改動）、通道釐清、霊能者「身分」→「陣營」、history 建立 |
+| `docs/history/2026-10-08.md` | spec 統一全檢＋二～九次確認（七次無改動）、通道釐清、霊能者「身分」→「陣營」、夜間回應殘留清理、`llm.ts` 簽名補 effort、狼不可刀狼隊、history 建立 |
 
 ## 已完成
 
