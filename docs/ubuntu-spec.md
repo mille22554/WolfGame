@@ -356,11 +356,12 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 - **無私頻**：WOLF_CHAT / MASON_CHAT 僅 NIGHT 可用，白天只有公頻
 - 結束方式：所有存活玩家 toggle「準備投票」ON → 進入投票（同狼會議模式，可隨時 toggle 開/關）【已上線】；房主另可送 `END_DISCUSSION` 提前結束（已實作）
 - **AI 驅動**：AI 玩家走與夜間同一套 loop（見 §12.3），完整流程見 §13.6a。核心順序：
-  1. 出策略：本輪參與者＝存活 AI 中排除上一句發言人（首輪全員），各出一份 status-first 策略（`Promise.all`，互不可見）＋ validator；每人重出策略即重評，先前 `ready` 者讀到新發言可改 `speak`／`wait`（＝撤回）
-  2. 選稿：0 人 `speak` → 跳到 ⑥；1 人 `speak` 直接入選；≥ 2 人 `speak` → judge 盲選一篇（只讀策略、不標作者）
-  3. 記憶合併：入選者記憶專區舊文＋新策略 → 整合版寫回
-  4. 發言：入選策略轉成一句口語發言（3 次重試；全失敗 → 以策略主文去掉 status 行發布，不阻塞）；經**既有** `MESSAGE` 廣播到公頻（`sendDayMessage`）→ **公頻沒有新增 WS 事件**；發言者視為 ready，發布後回到 ①
-  5. 收斂判斷（本輪無人 `speak` 時）：全為 `ready` → 收斂，進 `DAY_VOTING`；有人 `wait` → 對 `wait` 者附「本輪不可 wait」重發一次，再走一次 ①–④，仍無人 `speak` → 收斂
+  1. 出策略：本輪參與者＝存活 AI 中排除上一句發言人（首輪全員），各出一份 status-first 策略（`Promise.all`，互不可見）；每人重出策略即重評，先前 `ready` 者讀到新發言可改 `speak`／`wait`（＝撤回）
+  2. validator（server 端）：同 §12.3 ②（第一行 status＋正文檢查；不合格重生最多 3 次，仍不合格視為 `wait`）
+  3. 選稿：0 人 `speak` → 跳到 ⑥；1 人 `speak` 直接入選；≥ 2 人 `speak` → judge 盲選一篇（只讀策略、不標作者）
+  4. 記憶合併：入選者記憶專區舊文＋新策略 → 整合版寫回
+  5. 發言：入選策略轉成一句口語發言（3 次重試；全失敗 → 以策略主文去掉 status 行發布，不阻塞）；經**既有** `MESSAGE` 廣播到公頻（`sendDayMessage`）→ **公頻沒有新增 WS 事件**；發言者視為 ready，發布後回到 ①
+  6. 收斂判斷（本輪無人 `speak` 時）：全為 `ready` → 收斂，進 `DAY_VOTING`；有人 `wait` → 對 `wait` 者附「本輪不可 wait」重發一次，再走一次 ①–⑤，仍無人 `speak` → 收斂
 - **【production 未接線】** 正式 server 開局只建立 `GameEngine`，不建立 `AiController` → 線上真人局目前沒有 AI 發言（§13.7）
 - **【目標／待實作】已死亡玩家不能發言**：`SEND_MESSAGE` 目前只檢查「在房內」＋200 字上限（`room-manager.sendMessage`），**不檢查 alive／phase** → 死者（與觀戰者）目前仍能在公頻打字。前端灰化屬 M6。
 - **【目標／待實作】** 公頻可見範圍的 server 端區分（觀戰者 vs 參戰 vs 死者）尚未實作；目前一律 broadcast 全房。
@@ -532,7 +533,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | 夜間發言（`WOLF_SPEECH` / `MASON_SPEECH`） | §12.3 發言 prompt（含 `## 你剛剛讀完最新發言後想的策略`） | 一句口語發言（純文字） | 3 次重試；失敗 → 以策略主文去掉 status 行發布；OpenCC 強轉繁體 |
 | 狼刀（`WOLF_KILL`） | `buildWolfKillPrompts`：狼隊同夥＋狂人＋可刀目標＋最近訊息 | `{"target": "<displayName>"}` | 不可選自己／狼隊／狂人 |
 | 占い（`SEER_CHECK`）／守衛（`GUARD_PROTECT`） | `buildTargetPrompts`：角色＋存活玩家＋`privateInfo` | `{"target": "<displayName>"}` | 不可選自己；守衛 Day1 不行動（引擎擋） |
-| judge 選言（`JUDGE`；夜間版見 §12.3） | judge prompt：讀策略（編號、不標作者）＋按會議類型套評分標準 | `{"scores": [n, ...], "best": index}`，**`best` 一律 1-based** | 全盲評分；白天版另套標準（獨立成立、言行一致、新東西、可核對、實際動作、時序、格式vs遊戲）；LLM 失敗或全 0 分 → 隨機 fallback（不阻塞）；同分時由 LLM 自行決定 |
+| judge 選言（`JUDGE`；見 §12.3） | judge prompt：讀策略（編號、不標作者）＋套同一評分標準（見模板 judge 六條） | `{"scores": [n, ...], "best": index}`，**`best` 一律 1-based** | 全盲評分；夜間白天同一標準；LLM 失敗或全 0 分 → 隨機 fallback（不阻塞）；同分時由 LLM 自行決定 |
 
 > 策略／發言／judge／記憶合併四套 prompt 模板逐字全文以 `docs/strategy-prompt-variables.md` 為準。
 
@@ -640,11 +641,12 @@ AI 狼與 AI 共有者都依 §12.3「統一夜間會議 loop」驅動（非 Spe
 ```
 DAY_DISCUSSION 開始（引擎 broadcast PHASE_CHANGED）
   每輪：
-    ① 出策略：本輪參與者＝存活 AI 中排除上一句發言人（首輪全員），各出一份 status-first 策略（Promise.all，互不可見）＋ validator；每人重出策略即重評，先前 ready 者讀到新發言可改 speak／wait（＝撤回）
-    ② 選稿：0 人 speak → 跳到 ⑤；1 人 speak 直接入選；≥ 2 人 speak → judge 盲選一篇（只讀策略、不標作者；失敗 → 隨機 fallback）
-    ③ 記憶合併：入選者記憶專區舊文＋新策略 → LLM 整合版寫回（只合併入選 speak 策略）
-    ④ 發言：選中策略轉成一句口語發言（3 次重試；全失敗 → 以策略主文去掉 status 行發布）；經既有 MESSAGE 廣播到公頻（game.sendDayMessage），dayMessages 保留最近 50 則；公頻沒有新增 WS 事件；發言者視為 ready，發布後回到 ①
-    ⑤ 收斂判斷（本輪無人 speak 時）：全員 ready → break（此時引擎已進 DAY_VOTING）；有人 wait → 對 wait 者附「本輪不可 wait」重發一次，再走一次 ①–④；仍無人 speak → 收斂
+    ① 出策略：本輪參與者＝存活 AI 中排除上一句發言人（首輪全員），各出一份 status-first 策略（Promise.all，互不可見）；每人重出策略即重評，先前 ready 者讀到新發言可改 speak／wait（＝撤回）
+    ② validator（server 端）：同 §12.3 ②（第一行 status＋正文檢查；不合格重生最多 3 次，仍不合格視為 wait）
+    ③ 選稿：0 人 speak → 跳到 ⑥；1 人 speak 直接入選；≥ 2 人 speak → judge 盲選一篇（只讀策略、不標作者；失敗 → 隨機 fallback）
+    ④ 記憶合併：入選者記憶專區舊文＋新策略 → LLM 整合版寫回（只合併入選 speak 策略）
+    ⑤ 發言：選中策略轉成一句口語發言（3 次重試；全失敗 → 以策略主文去掉 status 行發布）；經既有 MESSAGE 廣播到公頻（game.sendDayMessage），dayMessages 保留最近 50 則；公頻沒有新增 WS 事件；發言者視為 ready，發布後回到 ①
+    ⑥ 收斂判斷（本輪無人 speak 時）：全員 ready → break（此時引擎已進 DAY_VOTING）；有人 wait → 對 wait 者附「本輪不可 wait」重發一次，再走一次 ①–⑤；仍無人 speak → 收斂
   結束：確保所有 AI 都 toggle ready ON
 ```
 
@@ -652,14 +654,15 @@ DAY_DISCUSSION 開始（引擎 broadcast PHASE_CHANGED）
 
 | 步驟 | 契約 |
 |---|---|
-| 出策略 | 本輪參與者＝存活 AI 中排除上一句發言人（首輪全員），**一輪 `Promise.all` 全併發**各出一份 status-first 策略；互不可見；validator（第一行 status＋正文檢查，不合格重生最多 3 次，仍不合格視為 wait）；每人重出策略即重評，先前 `ready` 者讀到新發言可改 `speak`／`wait`（＝撤回） |
+| 出策略 | 本輪參與者＝存活 AI 中排除上一句發言人（首輪全員），**一輪 `Promise.all` 全併發**各出一份 status-first 策略；互不可見；每人重出策略即重評，先前 `ready` 者讀到新發言可改 `speak`／`wait`（＝撤回） |
+| validator | 同 §12.3 ②（第一行 status＋正文檢查；不合格重生最多 3 次，仍不合格視為 wait） |
 | judge | 0 人 speak → 收斂判斷；1 人 speak 直接入選；≥ 2 人 speak 以編號呈現、不標作者，盲選一篇；失敗 → 隨機 fallback（不阻塞） |
 | 記憶合併 | 入選者記憶專區舊文＋新策略 → 整合版寫回（只合併入選 speak 策略） |
 | 發言 | 入選策略轉成一句口語發言；3 次重試，全失敗 → 以策略主文去掉 status 行發布；經既有 `MESSAGE` 廣播到公頻（`game.sendDayMessage`），`dayMessages` 保留最近 50 則；**公頻沒有新增 WS 事件**；發言者視為 ready |
 | 收斂 | 全 AI ready ON → `reconcileDayReady()` 觸發 `DAY_VOTING`；有人 wait → 對 wait 者附「本輪不可 wait」重發一次，再走一次出策略–發言；仍無人 speak → 收斂；對應 `DAY_READY_STATUS` 事件 |
 | 安全上限 | 與夜間同一條：對話紀錄累計 100 句仍未收斂 → 停止並報告（見 §12.3） |
 
-**`dayContext`（全角色共用）**：白天策略、發言 prompt 都掛 `dayContext`（唯一可用證據是公開發言、禁質疑未發言者、禁假設他人立場、禁只談討論方法）。白天策略 prompt 模板（system／user 段落、status-first 格式、validator）與夜間同構，見 §12.3，差異只有議題與白板來源。
+**`dayContext`（全角色共用）**：白天策略、發言 prompt 都掛 `dayContext`（唯一可用證據是公開發言、禁質疑未發言者、禁假設他人立場、禁只談討論方法）。白天策略 prompt 模板（system／user 段落、status-first 格式、validator）與夜間同構，見 §12.3，差異只有議題與對話紀錄來源。
 
 **策略定位**：白天的「策略」同樣是**行動筆記**（判斷誰／依據是對方實際講過什麼／要表態什麼），不是發言稿，不寫逐字台詞；一句口語由發言 prompt 依角色語氣生成。Memory（4000 字上限、跨階段不重置）與 P12 排版規則見 §13.5。
 

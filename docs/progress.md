@@ -5,7 +5,7 @@
 
 ## 目前狀態
 
-**目前暫停點：** spec 白天完整對齊夜間改寫完成（同一套 loop：參與者排除上一句發言人＋重評撤回；「回應」概念整份清除；安全上限單一「對話紀錄 100 句」；白天 effort 與夜間同值；SSH 雙裝置＋L194 分號化）。下一步：source 落地（先修 `ai-controller.ts` 3 個 TS 錯，再照新 spec 重寫白天 loop）。正式 service 未重啟。
+**目前暫停點：** spec 白天與夜間逐項同形完成（①出策略②validator③選稿④合併⑤發言⑥收斂；judge 同一標準；安全單一對話紀錄 100 句；SSH 雙裝置）。下一步：source 落地（先修 `ai-controller.ts` 3 個 TS 錯，再照新 spec 重寫白天 loop）。正式 service 未重啟。
 
 ## 歷史索引（明細見各檔）
 
@@ -17,7 +17,7 @@
 | `docs/history/2026-09-29.md` | Phase 2/3、medium 實測、attempt-01、raw 白天模擬、五項修正、OpenCC、盲評、session 交接 |
 | `docs/history/2026-10-01.md` | 夜晚共有者精修、第二輪直呼作廢紀錄 |
 | `docs/history/2026-10-07.md` | 夜間會議規格改寫（統一 loop＋模板重寫） |
-| `docs/history/2026-10-08.md` | spec 統一全檢＋二～九次確認、白天完整對齊夜間（排除式參與者＋清除回應＋對話紀錄100句＋effort同值）、SSH 雙裝置、history 建立 |
+| `docs/history/2026-10-08.md` | spec 統一全檢＋二～十一次確認、白天與夜間逐項同形（validator 獨立、judge 同一標準、對話紀錄100句）、SSH 雙裝置、history 建立 |
 
 ## 已完成
 
