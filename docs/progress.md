@@ -5,7 +5,7 @@
 
 ## 目前狀態
 
-**目前暫停點：** spec 用詞拾遺＋對話保留不限上限完成（白板全清 11 處；昼／陣營／狂人／同一套／排除式 loop／排程表補全；公頻＋夜間對話完整保留為目標，source 50 則截斷待拆）。下一步：source 落地（先修 `ai-controller.ts` 3 個 TS 錯，再照新 spec 重寫白天 loop＋拆 50 則截斷）。正式 service 未重啟。
+**目前暫停點：** spec 精度收尾完成（事件表 fallback 全補「去掉 status 行」；白板全清；夜白逐項同形；judge 同一標準；對話保留不限上限為目標）。下一步：source 落地（先修 `ai-controller.ts` 3 個 TS 錯，再照新 spec 重寫白天 loop＋拆 50 則截斷）。正式 service 未重啟。
 
 ## 歷史索引（明細見各檔）
 
@@ -17,7 +17,7 @@
 | `docs/history/2026-09-29.md` | Phase 2/3、medium 實測、attempt-01、raw 白天模擬、五項修正、OpenCC、盲評、session 交接 |
 | `docs/history/2026-10-01.md` | 夜晚共有者精修、第二輪直呼作廢紀錄 |
 | `docs/history/2026-10-07.md` | 夜間會議規格改寫（統一 loop＋模板重寫） |
-| `docs/history/2026-10-08.md` | spec 統一全檢＋二～十二次確認、白天與夜間逐項同形、用詞拾遺全清（白板11處＋6小刺）、對話保留不限上限、SSH 雙裝置、history 建立 |
+| `docs/history/2026-10-08.md` | spec 統一全檢＋二～十三次確認、夜白逐項同形、fallback 精度統一、用詞拾遺全清、對話保留不限上限、SSH 雙裝置、history 建立 |
 
 ## 已完成
 

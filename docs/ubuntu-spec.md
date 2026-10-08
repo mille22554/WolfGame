@@ -413,8 +413,8 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | S→C | `MASON_READY` | `{ clientId, ready }` | 個別共有者 toggle 結果（**已實作**；`handleToggleMasonEndTurn` 每次 toggle 都 broadcast；雙方全 ON → 自動解鎖下一步） |
 | S→C | `WOLF_READY` | `{ clientId, ready }` | 個別狼的 ready 狀態（**已實作**；只 broadcast 存活狼；全狼 ON → 引擎切到狼會議 `VOTING` 子階段） |
 | S→C | `WOLF_VOTE_SPLIT` | `{ votes: Record<number, number> }` | 狼投票平票→回討論（僅發給狼）（**已實作**：ready 全重置、votes 清空、`wolfMeetingRound`+1） |
-| S→C | `WOLF_SPEECH_SELECTED` | `{ round, from, text }` | judge 選出的代表發言（**已實作**；`text` 為發言 prompt 產出的一句口語，失敗時為策略主文；僅發給狼，其他狼讀完表態） |
-| S→C | `MASON_SPEECH_SELECTED` | `{ round, from, text }` | 共有者 judge 選出的代表發言（**已實作**；`text` 同樣是發言 prompt 產出的一句口語或 fallback 策略主文；僅發給共有者雙方） |
+| S→C | `WOLF_SPEECH_SELECTED` | `{ round, from, text }` | judge 選出的代表發言（**已實作**；`text` 為發言 prompt 產出的一句口語，失敗時為策略主文（去掉 status 行）；僅發給狼，其他狼讀完表態） |
+| S→C | `MASON_SPEECH_SELECTED` | `{ round, from, text }` | 共有者 judge 選出的代表發言（**已實作**；`text` 同樣是發言 prompt 產出的一句口語或 fallback 策略主文（去掉 status 行）；僅發給共有者雙方） |
 | S→C | `WOLF_MEETING_ABORTED` | `{ count, reason }` | 狼會議安全上限觸發：對話紀錄累計 100 句未收斂 → 停止並通知（**已實作**；僅測試用 `wolfMessageCap > 0` 時啟用；觸發後不再受理 `WOLF_CHAT`／`TOGGLE_WOLF_READY`，不自動收斂、不強制決選） |
 | S→C | `DAY_READY_STATUS` | `{ ready: [{ id, nickname }], total: number }` | 哪些玩家已準備投票（**已實作**；進入 `DAY_DISCUSSION` 時先 broadcast 一次全 false，每次 `TOGGLE_VOTE_READY` 再 broadcast；對象為全房，含觀戰者） |
 | S→C | `ROLE_REVEALED` | `{ role, displayName, description, partners? }` | 私發各玩家自己的角色 |
@@ -425,8 +425,8 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | S→C | `VOTE_RESULT` | `{ votes: Record<number, number>, eliminatedId: number\|null, tie: bool }` | 投票結果（broadcast） |
 | S→C | `PLAYER_ELIMINATED` | `{ id, nickname, cause: 'wolf_kill'\|'vote' }` | 有人出局（broadcast） |
 | S→C | `GAME_OVER` | `{ winner: 'village'\|'werewolf', players: [{ id, nickname, role, alive }] }` | 終局（broadcast，公布全部角色） |
-| S→C | `WOLF_MESSAGE` | `{ from, text, ts }` | 人狼私頻（僅存活人狼）。`text` 為發言 prompt 產出的一句口語；失敗時為策略主文 |
-| S→C | `MASON_MESSAGE` | `{ from, text, ts }` | 共有者私頻（僅雙方）。`text` 為發言 prompt 產出的一句口語；失敗時為策略主文 |
+| S→C | `WOLF_MESSAGE` | `{ from, text, ts }` | 人狼私頻（僅存活人狼）。`text` 為發言 prompt 產出的一句口語；失敗時為策略主文（去掉 status 行） |
+| S→C | `MASON_MESSAGE` | `{ from, text, ts }` | 共有者私頻（僅雙方）。`text` 為發言 prompt 產出的一句口語；失敗時為策略主文（去掉 status 行） |
 
 > **AI 白天發言不新增事件**：AI 白天發言 prompt 產出的發言直接走既有 `MESSAGE`（公頻），與真人 `SEND_MESSAGE` → `MESSAGE` 同一路徑（§12.4、§13.6a）。
 >
