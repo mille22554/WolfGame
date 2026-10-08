@@ -233,7 +233,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | `ROLE_REVEAL` | 各玩家看到自己的角色（私發）；人狼互見、共有者互見 | 10 秒（固定） |
 | `NIGHT` | 收集夜間行動：人狼刀人、占い師查人、守衛護人 | 所有有行動的玩家皆已提交 |
 | `NIGHT_RESULT` | 公布昨晚結果（死者/平安夜）；霊能者收到黎明資訊 | 10 秒（固定） |
-| `DAY_DISCUSSION` | 全存活玩家自由發言（復用 lobby chat） | 所有存活玩家 toggle「準備投票」ON（不限時，同狼會議模式）；或房主送 `END_DISCUSSION` 提前結束（已實作） |
+| `DAY_DISCUSSION` | 全存活玩家自由發言（走遊戲內公頻 `MESSAGE`，與 lobby 聊天室不同通道） | 所有存活玩家 toggle「準備投票」ON（不限時，同狼會議模式）；或房主送 `END_DISCUSSION` 提前結束（已實作） |
 | `DAY_VOTING` | 全存活玩家投票（含棄票） | 所有存活玩家皆已投票 |
 | `DAY_RESULT` | 公布投票結果（死者身分不公開）；霊能者得知票死者身分 | 10 秒（固定） |
 | `GAME_OVER` | 公布所有角色、勝負結果 | 永久（直到房間解散/重開） |
