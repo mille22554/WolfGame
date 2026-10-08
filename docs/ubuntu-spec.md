@@ -355,7 +355,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
   1. 所有**未 ready** 的 AI 各出一份 status-first 策略（`Promise.all`，互不可見）。白天是公頻全員可見，參與者取未 ready 者（夜間私頻則排除上一句發言人，見 §12.3——差異是刻意的：公頻發言人已在全員面前講完，不需禁言；私頻是輪流口頭討論）
   2. judge 盲選一篇（只讀策略、不標作者）
   3. 入選者記憶合併（該 AI 記憶專區舊文＋新策略 → 整合版寫回）
-  4. 入選策略轉成角色語氣的完整發言（3 次重試；全失敗 → 以策略原文 fallback，不阻塞）
+  4. 入選策略轉成一句口語發言（3 次重試；全失敗 → 以策略原文 fallback，不阻塞）
   5. 發言經**既有** `MESSAGE` 事件廣播到公頻（引擎 `sendDayMessage`）→ **公頻沒有新增 WS 事件**
   6. 發言者 toggle ready；其他 AI 讀**同一段發言**回應（`Promise.all`：重新評估，只回傳 readiness/speak/wait）。已 ready 者讀到新發言後可撤回 ready 改出新策略（ready 不黏著，每輪重評，與夜間一致）
   7. 全 AI ready → 收斂，進 `DAY_VOTING`；若無人出新稿但還有未 ready → 強制那些 AI 出稿
@@ -522,7 +522,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | 節點 | Prompt 輸入 | 期望輸出 | 限制 |
 |---|---|---|---|
 | 白天策略 | 白天策略 prompt（與 §12.3 夜間策略 prompt 同構：system＝身分＋行事風格；user＝規則／進度／記憶／任務／提點／回覆要求；另掛 `dayContext`，見 §13.5） | 自由體文字，第一行 `status: speak｜wait｜ready`＋理由；只有 speak 接策略主文 | 非 JSON；server 端 validator（§12.3 ②），3 次不合格視為 wait |
-| 白天回應 | 白天回應 prompt（`dayContext`＋公頻白板＋剛發表的發言） | `ready`／`speak`／`wait`（只有 `speak` 出新策略稿） | 讀的是同一段發言，不是策略原文 |
+| 白天回應 | 白天回應 prompt（`dayContext`＋公頻白板＋剛發表的發言） | `ready`／`speak`／`wait`（只有 `speak` 出新策略） | 讀的是同一段發言，不是策略原文 |
 | 白天記憶合併 | 該 AI 記憶專區舊文＋新入選策略 | 整合版策略全文（純文字） | 原地取代專區；只有入選 speak 策略會合併 |
 | 白天發言 | 白天發言 prompt（入選策略全文＋`## 任務`＋回覆內容要求） | 一句口語發言（純文字） | 3 次重試；失敗 → 以策略主文發布；OpenCC 強轉繁體 |
 | 白天投票（`DAY_VOTE`） | `buildDayVotePrompts`：存活玩家（排除自己）＋`privateInfo`＋當天公頻白板 | `{"target": "<displayName>"}` 或 `{"target": null}`（棄票） | 不可投自己；名字對不到存活玩家 → 觸發重試 |
@@ -638,20 +638,18 @@ AI 狼與 AI 共有者都依 §12.3「統一夜間會議 loop」驅動（非 Spe
 
 ```
 DAY_DISCUSSION 開始（引擎 broadcast PHASE_CHANGED）
-  └─ DAY_STRATEGY：每個存活 AI 一次策略生成（Promise.all）
-       └─ 成功才 appendMemory('[Day{N} 策略] …')
   loop（安全 guard 50 輪）：
-    ① 所有未 ready 的 AI 各出策略稿（Promise.all，互不可見）
-    ② judge 盲選一篇（只讀策略、不標作者；失敗 → 隨機 fallback）→ **記憶合併**（該 AI 記憶專區舊文＋新策略 → LLM 整合版寫回）→ **發言**（將選中策略轉成角色語氣的完整發言；3 次重試＋fallback 策略原文）
-    ③ 發言經既有 MESSAGE 廣播到公頻（game.sendDayMessage）→ 發言者程式面自動設為 ready；發言者以外的 AI 撤銷 ready
+    ① 所有未 ready 的 AI 各出一份 status-first 策略（Promise.all，互不可見）＋ validator
+    ② judge 盲選一篇（只讀策略、不標作者；失敗 → 隨機 fallback）→ **記憶合併**（該 AI 記憶專區舊文＋新策略 → LLM 整合版寫回）→ **發言**（將選中策略轉成一句口語發言；3 次重試＋fallback 策略原文）
+    ③ 發言經既有 MESSAGE 廣播到公頻（game.sendDayMessage）→ 發言者視為 ready
     ④ 其他 AI 讀同一段發言 → 回應（Promise.all）
          ├─ ready → toggle ready
-         ├─ speak → 出新策略稿（進下一輪 ①；若原本已 ready 則撤回 ready）
+         ├─ speak → 出新策略（進下一輪 ①；若原本已 ready 則撤回）
          └─ wait  → 不動作，維持等待
-       └─ 無人出新策略稿但還有人 wait → 對 wait 的 AI 重發策略 prompt 並附上不可 wait → 回 ①
+       └─ 無人出新策略但還有人 wait → 對 wait 的 AI 重發策略 prompt 並附上不可 wait → 回 ①
     ⑤ 收斂判斷：全 AI ready → break（此時引擎已進 DAY_VOTING）
-    ⑥ 有 speak → 新策略稿進下一輪 ①
-    ⑦ 無 speak 但還有未 ready → 強制那些 AI 出策略稿（回 ①）
+    ⑥ 有 speak → 新策略進下一輪 ①
+    ⑦ 無 speak 但還有未 ready → 強制那些 AI 出策略（回 ①）
   結束：確保所有 AI 都 toggle ready ON
 ```
 
@@ -662,14 +660,14 @@ DAY_DISCUSSION 開始（引擎 broadcast PHASE_CHANGED）
 | 出策略 | 所有**未 ready** 的 AI **一輪 `Promise.all` 全併發**，各出一份 status-first 策略；互不可見；validator（第一行 status＋正文檢查，不合格重生最多 3 次，仍不合格視為 wait） |
 | judge | 策略以編號呈現、不標作者，盲選一篇；只有一篇 speak 策略時免 judge 直接用；失敗 → 隨機 fallback（不阻塞） |
 | 記憶合併 | 入選者記憶專區舊文＋新策略 → 整合版寫回（只合併入選 speak 策略） |
-| 發言 | 入選策略轉成角色語氣的完整發言；3 次重試，全失敗 → fallback 策略原文；經既有 `MESSAGE` 廣播到公頻（`game.sendDayMessage`），`dayMessages` 保留最近 50 則；**公頻沒有新增 WS 事件** |
-| 其他 AI 回應 | 讀**同一段發言**（不是策略原文），`Promise.all`：`ready`（toggle ready）／`speak`（出新策略稿，進下一輪；若原本已 ready 則撤回）／`wait`（不動作） |
+| 發言 | 入選策略轉成一句口語發言；3 次重試，全失敗 → fallback 策略原文；經既有 `MESSAGE` 廣播到公頻（`game.sendDayMessage`），`dayMessages` 保留最近 50 則；**公頻沒有新增 WS 事件** |
+| 其他 AI 回應 | 讀**同一段發言**（不是策略原文），`Promise.all`：`ready`（toggle ready）／`speak`（出新策略，進下一輪；若原本已 ready 則撤回）／`wait`（不動作） |
 | 收斂 | 全 AI ready ON → `reconcileDayReady()` 觸發 `DAY_VOTING`；無人出新稿但還有人 wait → 對 wait 者附「本輪不可 wait」重發一次；仍無 speak → 收斂；對應 `DAY_READY_STATUS` 事件 |
 | 安全 guard | `guard > 50` 中止 loop，結束後確保全 toggle ON；不會無限 loop |
 
 **`dayContext`（全角色共用）**：白天策略、回應、發言 prompt 都掛 `dayContext`（唯一可用證據是公開發言、禁質疑未發言者、禁假設他人立場、禁只談討論方法）。白天策略 prompt 模板（system／user 段落、status-first 格式、validator）與夜間同構，見 §12.3，差異只有議題與白板來源。
 
-**策略定位**：白天的「策略」同樣是**行動筆記**（判斷誰／依據是對方實際講過什麼／要表態什麼），不是發言稿，不寫逐字台詞；完整口語由發言 prompt 依角色語氣生成。Memory（4000 字上限、跨階段不重置）與 P12 排版規則見 §13.5。
+**策略定位**：白天的「策略」同樣是**行動筆記**（判斷誰／依據是對方實際講過什麼／要表態什麼），不是發言稿，不寫逐字台詞；一句口語由發言 prompt 依角色語氣生成。Memory（4000 字上限、跨階段不重置）與 P12 排版規則見 §13.5。
 
 **外部 harness 執行方式（`scripts/external-test-stage2.mjs`）：**
 
