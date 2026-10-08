@@ -316,7 +316,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 
 **狼投票（收斂後）**：沿用現行機制——各狼依會議內容各自提交 `WOLF_KILL { targetId }`（`buildWolfKillPrompts` 帶狼對話紀錄全文）；最高票者為刀人目標；平票 → round+1 回到 ① 重新討論。不要求會議中三狼講好同一人。
 
-**安全上限（測試用）**：對話紀錄累計 100 句仍未收斂 → 停止並報告（不自動收斂、不強制決選）。夜間與白天同一條。
+**安全上限（測試用）**：對話紀錄累計 100 句仍未收斂 → 立即停止進程並輸出熔斷報告（不自動收斂、不強制決選）。夜間與白天同一條。
 
 **與白天會議的差異**：狼會議平票 → 回討論（重來）；白天會議平票 → 無人出局（不重來，見 §12.5）。
 
@@ -415,7 +415,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | S→C | `WOLF_VOTE_SPLIT` | `{ votes: Record<number, number> }` | 狼投票平票→回討論（僅發給狼）（**已實作**：ready 全重置、votes 清空、`wolfMeetingRound`+1） |
 | S→C | `WOLF_SPEECH_SELECTED` | `{ round, from, text }` | judge 選出的代表發言（**已實作**；`text` 為發言 prompt 產出的一句口語，失敗時為策略主文（去掉 status 行）；僅發給狼，其他狼讀完表態） |
 | S→C | `MASON_SPEECH_SELECTED` | `{ round, from, text }` | 共有者 judge 選出的代表發言（**已實作**；`text` 同樣是發言 prompt 產出的一句口語或 fallback 策略主文（去掉 status 行）；僅發給共有者雙方） |
-| S→C | `WOLF_MEETING_ABORTED` | `{ count, reason }` | 狼會議安全上限觸發：對話紀錄累計 100 句未收斂 → 停止並通知（**已實作**；僅測試用 `wolfMessageCap > 0` 時啟用；觸發後不再受理 `WOLF_CHAT`／`TOGGLE_WOLF_READY`，不自動收斂、不強制決選） |
+| S→C | `WOLF_MEETING_ABORTED` | `{ count, reason }` | 狼會議安全上限觸發：對話紀錄累計 100 句未收斂 → broadcast 通知後隨進程停止（**已實作**；僅測試用 `wolfMessageCap > 0` 時啟用；觸發後不再受理 `WOLF_CHAT`／`TOGGLE_WOLF_READY`，不自動收斂、不強制決選；隨後見熔斷報告） |
 | S→C | `DAY_READY_STATUS` | `{ ready: [{ id, nickname }], total: number }` | 哪些玩家已準備投票（**已實作**；進入 `DAY_DISCUSSION` 時先 broadcast 一次全 false，每次 `TOGGLE_VOTE_READY` 再 broadcast；對象為全房，含觀戰者） |
 | S→C | `ROLE_REVEALED` | `{ role, displayName, description, partners? }` | 私發各玩家自己的角色 |
 | S→C | `NIGHT_RESULT` | `{ peacefulNight: bool, deaths: [{ id, nickname }] }` | 夜間結果（broadcast） |
@@ -615,7 +615,7 @@ AI 狼與 AI 共有者都依 §12.3「統一夜間會議 loop」驅動（非 Spe
 | **收斂** | 無人 speak 且全員 ready → 狼：逐狼 `handleToggleWolfReady` → 引擎切 `VOTING` → `runWolfVoting`；共有者：雙方 `handleToggleMasonEndTurn` |
 
 - **wait 處理**：無人 speak 但有人 wait → 對 wait 者附「本輪不可 wait」重出一次；仍無人 speak → 收斂
-- **安全上限**：見 §12.3 統一條（對話紀錄 100 句）；觸發後狼：引擎 broadcast `WOLF_MEETING_ABORTED` 並停止受理；共有者：controller `messageCap` 停止並把未 ready 者 toggle ON
+- **安全上限**：見 §12.3 統一條（對話紀錄 100 句→熔斷）；觸發後狼：引擎 broadcast `WOLF_MEETING_ABORTED` 並停止受理，隨進程停止；共有者：controller 停止 loop、不再受理、不 toggle，隨進程停止
 - **LLM 失敗**：最多 3 次、間隔 2s（§13.2）；策略最終失敗 → 視為 wait；全員失敗 → 共有者全員 toggle ON 不卡夜，狼由安全上限兜底
 - **併發**：`x-override-priority: 100+i` 錯開請求（SGLang `--max-running-requests 2` 自動排隊）
 
@@ -660,7 +660,7 @@ DAY_DISCUSSION 開始（引擎 broadcast PHASE_CHANGED）
 | 記憶合併 | 入選者記憶專區舊文＋新策略 → 整合版寫回（只合併入選 speak 策略） |
 | 發言 | 入選策略轉成一句口語發言；3 次重試，全失敗 → 以策略主文去掉 status 行發布；經既有 `MESSAGE` 廣播到公頻（`game.sendDayMessage`；對話紀錄不限上限、完整保留【目標／待實作：source 現況只保留最近 50 則】）；**公頻沒有新增 WS 事件**；發言者視為 ready |
 | 收斂 | 全 AI ready ON → `reconcileDayReady()` 觸發 `DAY_VOTING`；有人 wait → 對 wait 者附「本輪不可 wait」重發一次，再走一次出策略–發言；仍無人 speak → 收斂；對應 `DAY_READY_STATUS` 事件 |
-| 安全上限 | 與夜間同一條：對話紀錄累計 100 句仍未收斂 → 停止並報告（見 §12.3） |
+| 安全上限 | 與夜間同一條：對話紀錄累計 100 句→熔斷（立即停止進程＋輸出熔斷報告，見 §12.3） |
 
 **`dayContext`（全角色共用）**：白天策略、發言 prompt 都掛 `dayContext`（唯一可用證據是公開發言、禁質疑未發言者、禁假設他人立場、禁只談討論方法）。白天策略 prompt 模板（system／user 段落、status-first 格式、validator）與夜間同一套，見 §12.3，差異只有議題與對話紀錄來源。
 
@@ -669,12 +669,13 @@ DAY_DISCUSSION 開始（引擎 broadcast PHASE_CHANGED）
 **外部 harness 執行方式（`scripts/external-test-stage2.mjs`）：**
 
 - 15 人全 AI 局：`new AiController(defs, { messageCap: 100 })` + `new GameEngine('STAGE2', ...)`，兩個方向的 callback 互接
-- 階段 timeout：**NIGHT / DAY 都是 `0`（不限時）**；每 10 分鐘印一次進度；狼會議 abort 時停止
+- 階段 timeout：**NIGHT / DAY 都是 `0`（不限時）**；每 10 分鐘印一次進度；熔斷時立即停止並出熔斷報告
 - `--stop-at NIGHT_RESULT | DAY_RESULT | GAME_OVER`（預設 `DAY_RESULT`）
 - `--save-state <path>`：原子寫入單一 v2 envelope（`schemaVersion=2`，含 `game`／`ai`／`events`／`aiLog`）
 - `--resume <path>`：載入 v2 envelope，依 barrier → game restore → AI import → `resumeDayDiscussion()` 順序續跑；只支援 `DAY_DISCUSSION`
 - `--stop-after-first-message`：無值 flag，只在 resume 時計算 baseline+1 的公頻 `MESSAGE`；publish commit 後結束，不進下一輪策略
 - 報告（md）：會議流程、對話紀錄、夜間結算、投票軌跡、收斂、LLM 失敗／重試、事件時間軸；本機固定取回名稱為 `ai-trace-stage2-night.md`／`ai-trace-stage2-day.md`
+- 熔斷報告：安全上限觸發時立即停進程並另出一份熔斷報告（觸發會議別／輪次／100 句全文／收斂狀態／各 AI pending／LLM 失敗統計），與該段 md 報告同目錄；進程以非零 exit code 退出（source 待定）
 - **沒有** 5 分鐘 timeout；操作者仍可用外部 `timeout --signal=INT --kill-after=30s` 做分段觀察
 
 **未決事項**：
