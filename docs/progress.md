@@ -5,7 +5,7 @@
 
 ## 目前狀態
 
-**目前暫停點：** spec 白天與夜間逐項同形完成（①出策略②validator③選稿④合併⑤發言⑥收斂；judge 同一標準；安全單一對話紀錄 100 句；SSH 雙裝置）。下一步：source 落地（先修 `ai-controller.ts` 3 個 TS 錯，再照新 spec 重寫白天 loop）。正式 service 未重啟。
+**目前暫停點：** spec 用詞拾遺＋對話保留不限上限完成（白板全清 11 處；昼／陣營／狂人／同一套／排除式 loop／排程表補全；公頻＋夜間對話完整保留為目標，source 50 則截斷待拆）。下一步：source 落地（先修 `ai-controller.ts` 3 個 TS 錯，再照新 spec 重寫白天 loop＋拆 50 則截斷）。正式 service 未重啟。
 
 ## 歷史索引（明細見各檔）
 
@@ -17,7 +17,7 @@
 | `docs/history/2026-09-29.md` | Phase 2/3、medium 實測、attempt-01、raw 白天模擬、五項修正、OpenCC、盲評、session 交接 |
 | `docs/history/2026-10-01.md` | 夜晚共有者精修、第二輪直呼作廢紀錄 |
 | `docs/history/2026-10-07.md` | 夜間會議規格改寫（統一 loop＋模板重寫） |
-| `docs/history/2026-10-08.md` | spec 統一全檢＋二～十一次確認、白天與夜間逐項同形（validator 獨立、judge 同一標準、對話紀錄100句）、SSH 雙裝置、history 建立 |
+| `docs/history/2026-10-08.md` | spec 統一全檢＋二～十二次確認、白天與夜間逐項同形、用詞拾遺全清（白板11處＋6小刺）、對話保留不限上限、SSH 雙裝置、history 建立 |
 
 ## 已完成
 
@@ -52,7 +52,7 @@
 
 ## 待做
 
-1. **[HIGH] source 落地** → 先修 `ai-controller.ts` 3 個 TS 錯（`wolfReadyMap`／`masonReadyMap` 殘留引用、被刪的 `judgeScoreIndex`），再收尾夜間 loop 替換＋落地測試
+1. **[HIGH] source 落地** → 先修 `ai-controller.ts` 3 個 TS 錯（`wolfReadyMap`／`masonReadyMap` 殘留引用、被刪的 `judgeScoreIndex`），再收尾夜間 loop 替換＋落地測試＋拆 `sendDayMessage` 50 則截斷（對話不限上限；夜間 board 一併驗證無截斷）
 2. **[HIGH] 夜間落地測試** → mock LLM 覆蓋 judge／單人免 judge／validator 重試／wait 重問／收斂接投票／記憶寫入
 3. **[MED] @oracle 審查夜間流程** → 落地後再 commit＋push
 4. **[MED] 白天 prompt 直呼驗證** → 模板待補；白天四步 reasoning effort 逐次指定一併定
