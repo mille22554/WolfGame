@@ -122,7 +122,7 @@
 | S→C | `SPECTATOR_JOINED` | `{ code, isHost, players[], started, maxPlayers, randomCount }` | 以觀戰身份進入 |
 | S→C | `ROOM_FULL` | — | 房間滿員（非觀戰） |
 | C→S | `SEND_MESSAGE` | `{ text }` | 發言 |
-| S→C | `MESSAGE` | `{ from, text, ts }` | broadcast 發言。**AI 白天 EXPAND 後的完整發言也走這個事件**（`sendDayMessage`），不另開新事件 |
+| S→C | `MESSAGE` | `{ from, text, ts }` | broadcast 發言。**AI 白天發言 prompt 產出的發言也走這個事件**（`sendDayMessage`），不另開新事件 |
 | S→C | `PLAYER_JOINED` | `{ nickname }` | 有人加入（broadcast 給其他成員） |
 | S→C | `PLAYER_LEFT` | `{ nickname }` | 有人離開 |
 | C→S | `SET_MODE` | `{ mode: 'play' \| 'spectate' }` | 切換參戰/觀戰 |
@@ -164,7 +164,7 @@
 | M4 | 遊戲設定面板（房主調人數等）+ START_GAME 事件 | 房主可設參數、觸發開始 | ✅ |
 | M5 | 遊戲核心：角色分配 + 夜間行動 + 白天投票 + 勝利判定（server-side） | 完整一局可跑完（6 人局）；夜間行動等待制正常；投票平票處理正確 | ✅ |
 | M6 | 前端遊戲 UI：角色揭示 + 夜間操作面板 + 投票面板 + phase 指示 + 死亡公告 + 結算畫面 | 真人可完整操作一局；各角色看到正確資訊 | ⬜ |
-| M7 | AI 補位：LLM client + AI 控制器（狼／共有者／白天 loop，含 judge 盲選＋EXPAND） | 1 真人 + 5 AI 可跑完整局；AI 發言自然、投票有邏輯、夜間行動合法；LLM 失敗以重試處理，server 掛 → 開新局。**現況：source／外部 harness 已可跑 15 人全 AI 局（§13.6a）；production server 尚未接線、oracle／server 行為驗證未完成** | ⬜ |
+| M7 | AI 補位：LLM client + AI 控制器（狼／共有者／白天 loop，含 judge 盲選＋記憶合併＋發言） | 1 真人 + 5 AI 可跑完整局；AI 發言自然、投票有邏輯、夜間行動合法；LLM 失敗以重試處理，server 掛 → 開新局。**現況：source／外部 harness 已可跑 15 人全 AI 局（§13.6a）；production server 尚未接線、oracle／server 行為驗證未完成** | ⬜ |
 
 ## 10. 部署現狀
 
@@ -233,7 +233,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | `ROLE_REVEAL` | 各玩家看到自己的角色（私發）；人狼互見、共有者互見 | 10 秒（固定） |
 | `NIGHT` | 收集夜間行動：人狼刀人、占い師查人、守衛護人 | 所有有行動的玩家皆已提交 |
 | `NIGHT_RESULT` | 公布昨晚結果（死者/平安夜）；霊能者收到黎明資訊 | 10 秒（固定） |
-| `DAY_DISCUSSION` | 全存活玩家自由發言（复用 lobby chat） | 所有存活玩家 toggle「準備投票」ON（不限時，同狼會議模式）；或房主送 `END_DISCUSSION` 提前結束（已實作） |
+| `DAY_DISCUSSION` | 全存活玩家自由發言（復用 lobby chat） | 所有存活玩家 toggle「準備投票」ON（不限時，同狼會議模式）；或房主送 `END_DISCUSSION` 提前結束（已實作） |
 | `DAY_VOTING` | 全存活玩家投票（含棄票） | 所有存活玩家皆已投票 |
 | `DAY_RESULT` | 公布投票結果（死者身分不公開）；霊能者得知票死者身分 | 10 秒（固定） |
 | `GAME_OVER` | 公布所有角色、勝負結果 | 永久（直到房間解散/重開） |
@@ -274,7 +274,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 4. 占い師查 → 結果僅發給占い師
 5. 黎明：霊能者收到「昨天被票死者」身分（Day1 無）
 
-**統一夜間會議 loop**（狼會議＝step 3、共有者會議＝step 2 的內部流程）【規格；source 待落地】
+**統一夜間會議 loop**（狼會議＝step 3、共有者會議＝step 2 的內部流程）
 
 狼會議與共有者會議走**同一套 loop**，只有參與者、議題、白板與收斂後動作不同。每輪的核心是「想講的人先出策略 → 選一篇 → 講成一句話」，沒有獨立的「回應」步驟：非發言者在下一輪重新出策略時，就是在回應最新發言。
 
@@ -322,7 +322,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 - 人狼刀：狼會議收斂後各狼投票決出刀人目標；平票→回討論重來
 - 若某角色已全數死亡（如占い師已死）→ 該角色不需提交，不阻塞 phase 結束
 
-**夜間會議 prompt 結構**【規格；source 待落地】（逐字全文以 `docs/strategy-prompt-variables.md` 為準）：
+**夜間會議 prompt 結構**（逐字全文以 `docs/strategy-prompt-variables.md` 為準）：
 
 一律繁體中文。訊息分兩段：system＝身分＋行事風格；user＝其餘段落。
 
@@ -348,16 +348,16 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 
 ### 12.4 白天討論（DAY_DISCUSSION）
 
-- 复用 lobby 的 `SEND_MESSAGE` / `MESSAGE`（公頻）【已上線】
+- 復用 lobby 的 `SEND_MESSAGE` / `MESSAGE`（公頻）【已上線】
 - **無私頻**：WOLF_CHAT / MASON_CHAT 僅 NIGHT 可用，白天只有公頻
 - 結束方式：所有存活玩家 toggle「準備投票」ON → 進入投票（同狼會議模式，可隨時 toggle 開/關）【已上線】；房主另可送 `END_DISCUSSION` 提前結束（已實作）
 - **AI 驅動**：AI 玩家走「策略 → judge → 記憶合併 → 發言」loop，與夜間 loop 同構（見 §12.3），完整流程見 §13.6a。核心順序：
-  1. 所有**未 ready** 的 AI 各出一份 status-first 策略（`Promise.all`，互不可見）
+  1. 所有**未 ready** 的 AI 各出一份 status-first 策略（`Promise.all`，互不可見）。白天是公頻全員可見，參與者取未 ready 者（夜間私頻則排除上一句發言人，見 §12.3——差異是刻意的：公頻發言人已在全員面前講完，不需禁言；私頻是輪流口頭討論）
   2. judge 盲選一篇（只讀策略、不標作者）
   3. 入選者記憶合併（該 AI 記憶專區舊文＋新策略 → 整合版寫回）
   4. 入選策略轉成角色語氣的完整發言（3 次重試；全失敗 → 以策略原文 fallback，不阻塞）
   5. 發言經**既有** `MESSAGE` 事件廣播到公頻（引擎 `sendDayMessage`）→ **公頻沒有新增 WS 事件**
-  6. 發言者 toggle ready；其他 AI 讀**同一段發言**回應（`Promise.all`：重新評估，只回傳 readiness/speak/wait）
+  6. 發言者 toggle ready；其他 AI 讀**同一段發言**回應（`Promise.all`：重新評估，只回傳 readiness/speak/wait）。已 ready 者讀到新發言後可撤回 ready 改出新策略（ready 不黏著，每輪重評，與夜間一致）
   7. 全 AI ready → 收斂，進 `DAY_VOTING`；若無人出新稿但還有未 ready → 強制那些 AI 出稿
 - **【production 未接線】** 正式 server 開局只建立 `GameEngine`，不建立 `AiController` → 線上真人局目前沒有 AI 發言（§13.7）
 - **【目標／待實作】已死亡玩家不能發言**：`SEND_MESSAGE` 目前只檢查「在房內」＋200 字上限（`room-manager.sendMessage`），**不檢查 alive／phase** → 死者（與觀戰者）目前仍能在公頻打字。前端灰化屬 M6。
@@ -410,8 +410,8 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | S→C | `MASON_READY` | `{ clientId, ready }` | 個別共有者 toggle 結果（**已實作**；`handleToggleMasonEndTurn` 每次 toggle 都 broadcast；雙方全 ON → 自動解鎖下一步） |
 | S→C | `WOLF_READY` | `{ clientId, ready }` | 個別狼的 ready 狀態（**已實作**；只 broadcast 存活狼；全狼 ON → 引擎切到狼會議 `VOTING` 子階段） |
 | S→C | `WOLF_VOTE_SPLIT` | `{ votes: Record<number, number> }` | 狼投票平票→回討論（僅發給狼）（**已實作**：ready 全重置、votes 清空、`wolfMeetingRound`+1） |
-| S→C | `WOLF_SPEECH_SELECTED` | `{ round, from, text }` | judge 選出的代表發言（**已實作**；`text` 為 EXPAND 後的完整發言，展開失敗則為草稿原文；僅發給狼，其他狼讀完表態） |
-| S→C | `MASON_SPEECH_SELECTED` | `{ round, from, text }` | 共有者 judge 選出的代表發言（**已實作**；`text` 同樣是 EXPAND 後的完整發言或 fallback 草稿原文；僅發給共有者雙方） |
+| S→C | `WOLF_SPEECH_SELECTED` | `{ round, from, text }` | judge 選出的代表發言（**已實作**；`text` 為發言 prompt 產出的一句口語，失敗時為策略主文；僅發給狼，其他狼讀完表態） |
+| S→C | `MASON_SPEECH_SELECTED` | `{ round, from, text }` | 共有者 judge 選出的代表發言（**已實作**；`text` 同樣是發言 prompt 產出的一句口語或 fallback 策略主文；僅發給共有者雙方） |
 | S→C | `WOLF_MEETING_ABORTED` | `{ count, reason }` | 狼會議安全上限觸發：白板累計 100 則 `WOLF_MESSAGE` 未收斂 → 停止並通知（**已實作**；僅測試用 `wolfMessageCap > 0` 時啟用；觸發後不再受理 `WOLF_CHAT`／`TOGGLE_WOLF_READY`，不自動收斂、不強制決選） |
 | S→C | `DAY_READY_STATUS` | `{ ready: [{ id, nickname }], total: number }` | 哪些玩家已準備投票（**已實作**；進入 `DAY_DISCUSSION` 時先 broadcast 一次全 false，每次 `TOGGLE_VOTE_READY` 再 broadcast；對象為全房，含觀戰者） |
 | S→C | `ROLE_REVEALED` | `{ role, displayName, description, partners? }` | 私發各玩家自己的角色 |
@@ -422,10 +422,10 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | S→C | `VOTE_RESULT` | `{ votes: Record<number, number>, eliminatedId: number\|null, tie: bool }` | 投票結果（broadcast） |
 | S→C | `PLAYER_ELIMINATED` | `{ id, nickname, cause: 'wolf_kill'\|'vote' }` | 有人出局（broadcast） |
 | S→C | `GAME_OVER` | `{ winner: 'village'\|'werewolf', players: [{ id, nickname, role, alive }] }` | 終局（broadcast，公布全部角色） |
-| S→C | `WOLF_MESSAGE` | `{ from, text, ts }` | 人狼私頻（僅存活人狼）。`text` 為 EXPAND 展開後的完整發言；展開失敗時為草稿原文 |
-| S→C | `MASON_MESSAGE` | `{ from, text, ts }` | 共有者私頻（僅雙方）。`text` 為 EXPAND 展開後的完整發言；展開失敗時為草稿原文 |
+| S→C | `WOLF_MESSAGE` | `{ from, text, ts }` | 人狼私頻（僅存活人狼）。`text` 為發言 prompt 產出的一句口語；失敗時為策略主文 |
+| S→C | `MASON_MESSAGE` | `{ from, text, ts }` | 共有者私頻（僅雙方）。`text` 為發言 prompt 產出的一句口語；失敗時為策略主文 |
 
-> **AI 白天發言不新增事件**：AI 白天 EXPAND 後的發言直接走既有 `MESSAGE`（公頻），與真人 `SEND_MESSAGE` → `MESSAGE` 同一路徑（§12.4、§13.6a）。
+> **AI 白天發言不新增事件**：AI 白天發言 prompt 產出的發言直接走既有 `MESSAGE`（公頻），與真人 `SEND_MESSAGE` → `MESSAGE` 同一路徑（§12.4、§13.6a）。
 >
 > **【source 現況】** 上表「已實作」＝`src/lobby-server` 真的會送這個事件；「待實作」＝規格已定但程式碼沒有對應事件。`MASON_READY` / `WOLF_READY` / `DAY_READY_STATUS` / `WOLF_VOTE_SPLIT` / `WOLF_SPEECH_SELECTED` / `MASON_SPEECH_SELECTED` / `WOLF_MEETING_ABORTED` 目前主要由引擎回呼觸發、並被外部 harness 觀察；**正式 server 尚未接 AI 控制器**（§13.7），所以線上不會有 AI 觸發的那些事件。
 
@@ -446,8 +446,8 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 ### 12.10 與 main 分支共用
 
 - `ROLE_CONFIG`、`Role`、`Team`、`ROLE_TEAM`、`seerSeesAs()` 等常數/函式 → 直接 import 或 copy
-- `assignRoles()`、`checkWinCondition()` 邏輯 → 可复用（需確認 import path）
-- `night.ts` 的結算邏輯 → 可复用（需改為 async 等待模式）
+- `assignRoles()`、`checkWinCondition()` 邏輯 → 可復用（需確認 import path）
+- `night.ts` 的結算邏輯 → 可復用（需改為 async 等待模式）
 - **不共用**：`engine.ts`（事件佇列太複雜）
 - **參考（非 runtime）**：`ai-scheduler.ts` 的 SpeechScheduler 管線邏輯（PRE_SPEECH→JUDGE→SELECT→EXPAND→BROADCAST）只在 §13.6 保留作 main 分支參考；ubuntu 版實際用 `ai-controller.ts` 自有 loops
 - `character-session.ts` 的 prompt 結構可參考；ubuntu 版的 persona／memory 載入走 `ai-player.ts` 的 `loadCharacterProfile()`
@@ -461,8 +461,8 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | 共有者交談（`MASON_CHAT`） | `NIGHT`（限 `nightStep === 'MASON'`） | 僅共有者雙方 | 確認彼此身分、交換情報 |
 
 **兩種驅動方式共存：**
-- **真人 = raw chat【已上線】**：玩家送 `WOLF_CHAT` / `MASON_CHAT` → server 原樣收進該白板並 broadcast（`handleWolfChat` / `handleMasonChat`），**不經過 judge、不經過 EXPAND**，也沒有結構化收斂。
-- **AI = 結構化 loop【source 現況】**：AI 狼／共有者由 `AiController` 驅動（出稿 → judge 盲選 → EXPAND → 其他成員回應 → 收斂），見 §12.3、§13.6。**目前只有外部 harness 會建立 `AiController`；正式 server 未接線**，所以線上房間裡 AI 不會發言。
+- **真人 = raw chat【已上線】**：玩家送 `WOLF_CHAT` / `MASON_CHAT` → server 原樣收進該白板並 broadcast（`handleWolfChat` / `handleMasonChat`），**不經過 judge、不經過 AI loop**，也沒有結構化收斂。
+- **AI = 結構化 loop**：AI 狼／共有者由 `AiController` 驅動（出策略 → validator → judge 盲選 → 記憶合併 → 發言 → 收斂），見 §12.3。**目前只有外部 harness 會建立 `AiController`；正式 server 未接線**，所以線上房間裡 AI 不會發言。
 - 兩者共用同一組白板事件（`WOLF_MESSAGE` / `MASON_MESSAGE`），payload 格式相同。
 
 **規則：**
@@ -501,7 +501,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | 環境變數 | `SGLANG_API_KEY`、`LLM_MODEL`（model name，預設 `qwen3.8-27b`）、`LLM_REASONING_EFFORT`（選填；Qwen3.8-27B 的 `xhigh`／`medium`／`low`） |
 | 併發排程 | `x-override-priority` header（併發呼叫時 100+i 錯開；SGLang 依 priority 排序處理） |
 | 併發限制 | `--max-running-requests 2`（多請求自動排隊，依 priority 順序處理） |
-| reasoning effort | 夜間會議逐次指定（策略／judge `medium`、記憶合併／發言 `xhigh`，見 §12.3）；未逐次指定的呼叫沿用 `LLM_REASONING_EFFORT`【規格；source 待落地】 |
+| reasoning effort | 夜間會議逐次指定（策略／judge `medium`、記憶合併／發言 `xhigh`，見 §12.3）；未逐次指定的呼叫沿用 `LLM_REASONING_EFFORT` |
 | 呼叫 timeout | 無（`llm.ts` 呼叫不設 timeout，等待回傳；reasoning model 長 prompt 可能 >60s） |
 | 失敗處理 | LLM 呼叫失敗（5xx / parse error）→ **重試**取得回覆（記錄重試次數）。若 SGLang server 本身掛掉，遊戲無法繼續（所有 AI 呼叫都會失敗）→ 開新局 |
 
@@ -515,33 +515,33 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 - 下限 0（全真人參戰）；上限 `maxPlayers`（純 AI 局，真人全部觀戰）
 - AI 玩家在 `ROLE_REVEAL` 前從角色設定檔載入（`character/` 目錄的 persona + memory），非隨機生成
 
-### 13.4 AI 行動生成（現行 `ai-controller.ts`）
+### 13.4 AI 行動生成
 
-> 本節描述 `src/lobby-server/ai-controller.ts`（`AiController`）實際送出的 prompt 與 JSON 契約。舊的 `ai-player.ts` prompt 仍在 repo 裡（見 §13.7），**不是**現行 runtime 路徑。
+> 本節描述 `AiController` 送出的 prompt 與輸出契約。舊的 `ai-player.ts` prompt 仍在 repo 裡（見 §13.7），**不是** runtime 路徑。
 
-| 節點 | Prompt 輸入 | 期望輸出（JSON） | 限制 |
+| 節點 | Prompt 輸入 | 期望輸出 | 限制 |
 |---|---|---|---|
-| 白天策略（`DAY_STRATEGY`） | `buildStrategyPrompt`：角色分支（占卜師／共有者／狼／其他）＋存活玩家＋`privateInfo`＋昨晚私頻白板 | `{"strategy": "..."}` | **不掛 `dayContext`**；成功才寫入 memory |
-| 白天草稿（`DAY_SPEECH`） | `buildDayDraftPrompts`：`dayContext`＋存活玩家＋`privateInfo`＋當天公頻白板 | `{"strategy_update": "..." 或 null, "speech": "行動筆記", "stance": "準備好了｜資訊不足", "importance": 1-10, "urgency": 1-10, "impact": "..."}` | **無字數上限**；草稿是決策筆記，不是發言稿；自評欄位供 judge 過濾（灌水扣分） |
-| 白天回應（`DAY_STANCE`） | `buildDayResponsePrompts`：`dayContext`＋公頻白板＋剛發表的 expanded | `{"strategy_update": "..." 或 null, "action": "ready｜speak｜wait", "speech": "...", "stance": "...", "importance": 1-10, "urgency": 1-10, "impact": "..."}` | 只有 `speak` 才需要 `speech`＋`stance`（＋自評三欄位） |
+| 白天策略 | 白天策略 prompt（與 §12.3 夜間策略 prompt 同構：system＝身分＋行事風格；user＝規則／進度／記憶／任務／提點／回覆要求；另掛 `dayContext`，見 §13.5） | 自由體文字，第一行 `status: speak｜wait｜ready`＋理由；只有 speak 接策略主文 | 非 JSON；server 端 validator（§12.3 ②），3 次不合格視為 wait |
+| 白天回應 | 白天回應 prompt（`dayContext`＋公頻白板＋剛發表的發言） | `ready`／`speak`／`wait`（只有 `speak` 出新策略稿） | 讀的是同一段發言，不是策略原文 |
+| 白天記憶合併 | 該 AI 記憶專區舊文＋新入選策略 | 整合版策略全文（純文字） | 原地取代專區；只有入選 speak 策略會合併 |
+| 白天發言 | 白天發言 prompt（入選策略全文＋`## 任務`＋回覆內容要求） | 一句口語發言（純文字） | 3 次重試；失敗 → 以策略主文發布；OpenCC 強轉繁體 |
 | 白天投票（`DAY_VOTE`） | `buildDayVotePrompts`：存活玩家（排除自己）＋`privateInfo`＋當天公頻白板 | `{"target": "<displayName>"}` 或 `{"target": null}`（棄票） | 不可投自己；名字對不到存活玩家 → 觸發重試 |
-| 狼／共有者夜間策略（`WOLF_STRATEGY` / `MASON_STRATEGY`）【規格；待落地】 | §12.3 策略 prompt（system＝身分＋行事風格；user＝規則／進度／記憶／任務／提點／回覆要求） | 自由體文字，第一行 `status: speak｜wait｜ready`＋理由；只有 speak 接策略主文 | 非 JSON；server 端 validator（§12.3 ②），3 次不合格視為 wait |
-| 夜間記憶合併（`MEMORY_MERGE`）【規格；待落地】 | 舊夜間策略專區＋新入選策略 | 整合版策略全文（純文字） | 原地取代專區；只有入選 speak 策略會合併 |
-| 夜間發言（`WOLF_SPEECH` / `MASON_SPEECH`）【規格；待落地】 | §12.3 發言 prompt（含 `## 你剛剛讀完最新發言後想的策略`） | 一句口語發言（純文字） | 3 次重試；失敗 → 以策略主文發布；OpenCC 強轉繁體 |
-| EXPAND（三個會議共用） | `buildExpandPrompts`：被選中的草稿筆記＋該會議的 context＋白板全文（`boardText`，供時序推理） | `{"speech": "完整發言"}` | 3 次重試；全失敗 → fallback 草稿原文；不得新增筆記外的行動、對象或結論；發布邊界 OpenCC `cn→tw` 強轉繁體（含 fallback） |
+| 狼／共有者夜間策略（`WOLF_STRATEGY` / `MASON_STRATEGY`） | §12.3 策略 prompt（system＝身分＋行事風格；user＝規則／進度／記憶／任務／提點／回覆要求） | 自由體文字，第一行 `status: speak｜wait｜ready`＋理由；只有 speak 接策略主文 | 非 JSON；server 端 validator（§12.3 ②），3 次不合格視為 wait |
+| 夜間記憶合併（`MEMORY_MERGE`） | 舊夜間策略專區＋新入選策略 | 整合版策略全文（純文字） | 原地取代專區；只有入選 speak 策略會合併 |
+| 夜間發言（`WOLF_SPEECH` / `MASON_SPEECH`） | §12.3 發言 prompt（含 `## 你剛剛讀完最新發言後想的策略`） | 一句口語發言（純文字） | 3 次重試；失敗 → 以策略主文發布；OpenCC 強轉繁體 |
 | 狼刀（`WOLF_KILL`） | `buildWolfKillPrompts`：狼隊同夥＋狂人＋可刀目標＋最近訊息 | `{"target": "<displayName>"}` | 不可選自己／狂人 |
 | 占い（`SEER_CHECK`）／守衛（`GUARD_PROTECT`） | `buildTargetPrompts`：角色＋存活玩家＋`privateInfo` | `{"target": "<displayName>"}` | 不可選自己；守衛 Day1 不行動（引擎擋） |
-| judge 選言（`JUDGE`；夜間版見 §12.3，`best` 為 1-based） | `buildJudgePrompts`：讀草稿 `speech`（編號、不標作者）＋自評（`importance`／`urgency`／`impact`，有才顯示）＋按會議類型套評分標準 | `{"scores": [n, ...], "best": index}` | 全盲評分；白天版多 9 條標準（獨立成立、言行一致、新東西、可核對、實際動作、時序、格式vs遊戲、自評核對）；LLM 失敗或全 0 分 → 隨機 fallback（不阻塞）；同分時由 LLM 自行決定 |
+| judge 選言（`JUDGE`；夜間版見 §12.3） | judge prompt：讀策略（編號、不標作者）＋按會議類型套評分標準 | `{"scores": [n, ...], "best": index}`，**`best` 一律 1-based** | 全盲評分；白天版多 9 條標準（獨立成立、言行一致、新東西、可核對、實際動作、時序、格式vs遊戲、自評核對）；LLM 失敗或全 0 分 → 隨機 fallback（不阻塞）；同分時由 LLM 自行決定 |
 
-> 策略／發言／judge 三套 prompt 模板以 `docs/strategy-prompt-variables.md` 為準（含變數表 `{{nickname}}`／`{{partner}}`／`{{faction}}`／`{{role}}`／`{{style}}`／`{{dayNo}}`／`{{alive}}`／`{{mbt}}`／`{{memory}}`／`{{partnerLabel}}`／`{{opponent}}`）。mason-strat 現版結構：身分（含出身地僅管口吻）／行事風格（只描述說話調性）／遊戲規則／進度（對話紀錄）／任務（自由體＋CO 利弊＋ready/speak/wait 紀律）／戰術提點（專業對手總綱＋事實提醒，不指導）／回覆內容要求（800 字內＋只有 speak 出策略文）；mason-speech 現版：同頭段＋`## 策略`（前一輪策略全文）＋私頻一句任務（約 100 字口語＋不暴露同盟＋新舊分流）；mason-strat-judge 現版：規則＋進度＋六條策略評分＋只回 JSON。
+> 策略／發言／judge／記憶合併四套 prompt 模板逐字全文以 `docs/strategy-prompt-variables.md` 為準。
 
 - **沒有**「每輪最多發言 2 次」「一句話」「≤50 字」這類舊限制：現行 controller 不用字數上限控制發言，改用 **P12 排版規範**（>50 字換行、≤3 段，見 §13.5）。`ai-player.ts` 的舊 prompt 裡仍留有 `≤50字` / `≤150字` 字串，但該檔不是現行 runtime 路徑（§13.7）。
-- 每則 WS 訊息 200 字上限仍在（`MAX_MESSAGE_LEN`）：真人 `WOLF_CHAT`／`MASON_CHAT` 與引擎的 `handleWolfChat` / `publishMasonSpeech` 會擋。`sendDayMessage` 目前**不擋**長度（公頻 expanded 長度不受此上限約束）。
+- 每則 WS 訊息 200 字上限仍在（`MAX_MESSAGE_LEN`）：真人 `WOLF_CHAT`／`MASON_CHAT` 與引擎的 `handleWolfChat` / `publishMasonSpeech` 會擋。`sendDayMessage` 目前**不擋**長度（公頻發言長度不受此上限約束）。
 
-### 13.5 Prompt 結構（現行 `ai-controller.ts`）
+### 13.5 Prompt 結構
 
-**System 段**（`buildSystemPrompt`）：角色名 + `persona` 前 600 字 + `profile.memory`（非空才帶）＋共用硬規則：
-- 全繁體中文；只回 JSON，不要多餘文字
+**System 段**：身分（名字／出身地／陣營角色／夥伴）＋行事風格（取 `character/<id>/agents.md` 的「## 性格與說話方式」整段）＋共用硬規則：
+- 全繁體中文；策略為自由體文字、發言為一句口語、judge 只回 JSON，不要多餘文字
 - 禁「我先講…」前言、禁「不是…而是…」對立修正、禁「宣告你在回應對方」的開頭（「我接」「你說得對」等同族）
 - 說人話：完整通順口語、禁單詞質問、禁鋪陳場面話；動作要具體；禁日文漢字與簡體字混入
 - **P12 排版**：`超過 50 字換行分段，≤3 段`（注意：這是**換行規則**、不是字數上限）
@@ -551,22 +551,19 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 
 | 會議 | context | 掛在哪裡 |
 |---|---|---|
-| 狼會議 | `wolfContext`（刀人優先序、假跳／對跳結構、投票鎖定、戰術字典） | 狼草稿、狼回應、**狼 EXPAND** |
-| 共有者會議 | `masonContext`（與 `wolfContext` 同構，只換身分差異：CO 決策／反假跳／第一天／互信分工／雙 CO 期） | 共有者草稿、共有者回應、**共有者 EXPAND** |
-| 白天討論 | `dayContext`（全角色共用：只用公開發言為證據、禁質疑未發言者、禁只談討論方法） | **白天草稿、白天回應、白天 EXPAND**；**不掛** `buildStrategyPrompt` |
+| 狼會議 | `wolfContext`（刀人優先序、假跳／對跳結構、投票鎖定、戰術字典） | 狼策略、狼回應、狼發言 |
+| 共有者會議 | `masonContext`（與 `wolfContext` 同構，只換身分差異：CO 決策／反假跳／第一天／互信分工／雙 CO 期） | 共有者策略、共有者回應、共有者發言 |
+| 白天討論 | `dayContext`（全角色共用：只用公開發言為證據、禁質疑未發言者、禁只談討論方法） | 白天策略、白天回應、白天發言 |
 | 夜間目標選擇（狼刀／占い／守衛）、白天投票 | 不掛 context（只帶角色＋存活玩家＋情報） | — |
 
-**Memory**：`appendMemory()` 追加到 `profile.memory`（跨階段不重置、**4000 字上限**超出砍最舊；`character/<id>/memory.md` 初始化）。寫入點：`DAY_STRATEGY`（`[Day{N} 策略] …`）、白天草稿與白天回應的 `strategy_update`（`[Day{N}] …`）、共有者會議 judge 選出後（`[共有者夜間策略] …`，見下）。
+**Memory**：`profile.memory`（跨階段不重置、**4000 字上限**超出砍最舊；`character/<id>/memory.md` 初始化）。夜間／白天策略入選 → 記憶合併（該角色記憶專區舊文＋新策略 → 整合版原地取代專區，見 §12.3 ④）；落選策略、`wait`／`ready` 不寫入。
 
-**夜間記憶合併**（狼與共有者皆適用；入選 → 發言前，見 §12.3 ④）【規格；source 待落地，現行只有 `appendMemory` 追加】：以該角色記憶專區舊文＋新選中策略調一次 LLM 產生整合版（保留仍成立的、更新被推翻的、衝突只留一個並捨棄另一個），原地取代專區，不動記憶其他部分，不無限追加。落選草稿不寫入。只有 `speak` 產出的策略會走到這步（`wait`／`ready` 無策略文可合併）。
-
-**JSON 契約**（現行欄位）：
+**輸出契約**：
 
 ```
-白天草稿：{"strategy_update": "..." 或 null, "speech": "行動筆記要點", "stance": "準備好了" 或 "資訊不足"}
-白天回應：{"strategy_update": "..." 或 null, "action": "ready" | "speak" | "wait", "speech": "...", "stance": "..."}
-EXPAND：  {"speech": "完整發言"}
-judge：   {"scores": [n, ...], "best": index}
+夜間／白天策略：自由體文字，第一行 status: speak|wait|ready＋理由（只有 speak 接策略主文）
+judge：   {"scores": [n, ...], "best": index}（best 一律 1-based）
+發言：    一句口語（純文字）
 目標選擇：{"target": "<displayName>"}（白天投票可用 null＝棄票）
 ```
 
@@ -602,7 +599,7 @@ IDLE →（60s 無訊息 或 全真人跳過）→ PRE_SPEECH → JUDGE → SELE
 - **全真人跳過**：CD 歸零（立即觸發管線 + broadcast）
 - **⚠️ ubuntu 版沒有這條 pipeline 的 runtime**：沒有 120s 定時器、沒有 CD 計時器、也沒有 60s 靜默觸發。ubuntu 的白天 loop 是 §13.6a 的 toggle 制。
 
-#### 狼會議／共有者會議（統一夜間會議 loop，見 §12.3）【規格；source 待落地】
+#### 狼會議／共有者會議（統一夜間會議 loop，見 §12.3）
 
 AI 狼與 AI 共有者都依 §12.3「統一夜間會議 loop」驅動（非 SpeechScheduler 管線）：
 
@@ -616,10 +613,9 @@ AI 狼與 AI 共有者都依 §12.3「統一夜間會議 loop」驅動（非 Spe
 | **收斂** | 無人 speak 且全員 ready → 狼：逐狼 `handleToggleWolfReady` → 引擎切 `VOTING` → `runWolfVoting`；共有者：雙方 `handleToggleMasonEndTurn` |
 
 - **wait 處理**：無人 speak 但有人 wait → 對 wait 者附「本輪不可 wait」重出一次；仍無人 speak → 收斂
-- **安全上限**：白板累計 100 則未收斂 → 狼：引擎 broadcast `WOLF_MEETING_ABORTED` 並停止受理；共有者：controller `messageCap` 停止並把未 ready 者 toggle ON；controller 另有迭代 guard
+- **安全上限**：白板累計 100 則未收斂 → 狼：引擎 broadcast `WOLF_MEETING_ABORTED` 並停止受理；共有者：controller `messageCap` 停止並把未 ready 者 toggle ON
 - **LLM 失敗**：最多 3 次、間隔 2s（§13.2）；策略最終失敗 → 視為 wait；全員失敗 → 共有者全員 toggle ON 不卡夜，狼由安全上限兜底
 - **併發**：`x-override-priority: 100+i` 錯開請求（SGLang `--max-running-requests 2` 自動排隊）
-- **舊實作**：現行 `buildDraftPrompts`／`buildResponsePrompts`／`buildMasonDraftPrompts`／`buildMasonResponsePrompts`／夜間 EXPAND（JSON `speech`／`stance`／`action` 契約）待落地時移除；白天流程不受影響
 
 #### 夜間行動 / 投票（直接呼叫）【source 現況／外部 harness】
 
@@ -636,7 +632,7 @@ AI 狼與 AI 共有者都依 §12.3「統一夜間會議 loop」驅動（非 Spe
 
 > 白天討論 AI 與夜間 loop 同構，走「策略 → judge → 記憶合併 → 發言」（見 §12.4）。
 
-**進入時的狀態重建（v2 envelope）**：外部 harness 使用單一 `{ schemaVersion: 2, savedAt, stopAt, game, ai, events, aiLog }` envelope。resume 順序固定為：`ai.setPhaseStartEnabled(false)` barrier → `game.restoreState(env.game)` → `ai.restoreLog(env.aiLog)` → `ai.importDayCheckpoint(env.ai)` → `ai.resumeDayDiscussion()`。`AiController` checkpoint 保存 strategy／draft／judge／expand／publish／response continuation、memory／knowledge／boards；已完成的階段不重做，未完成項按 pending 補做。all-ready 時由 continuation 呼叫 `game.reconcileDayReady()` 推進 `DAY_VOTING`。只支援 `DAY_DISCUSSION` restore；舊三檔格式與 `NIGHT_RESULT` phase 明確拒絕。
+**進入時的狀態重建（v2 envelope）**：外部 harness 使用單一 `{ schemaVersion: 2, savedAt, stopAt, game, ai, events, aiLog }` envelope。resume 順序固定為：`ai.setPhaseStartEnabled(false)` barrier → `game.restoreState(env.game)` → `ai.restoreLog(env.aiLog)` → `ai.importDayCheckpoint(env.ai)` → `ai.resumeDayDiscussion()`。`AiController` checkpoint 保存 strategy／judge／memory-merge／publish continuation、memory／knowledge／boards；已完成的階段不重做，未完成項按 pending 補做。all-ready 時由 continuation 呼叫 `game.reconcileDayReady()` 推進 `DAY_VOTING`。只支援 `DAY_DISCUSSION` restore；舊三檔格式與 `NIGHT_RESULT` phase 明確拒絕。
 
 **流程：**
 
@@ -661,20 +657,19 @@ DAY_DISCUSSION 開始（引擎 broadcast PHASE_CHANGED）
 
 **各步驟細節：**
 
-| 步驟 | 現行實作 | 重點 |
-|---|---|---|
-| DAY_STRATEGY | `generateDayStrategies` → `buildStrategyPrompt`，**`Promise.all` 全併發**（不是 14 個 sequential）；依角色分支（占卜師／共有者／狼／其他）；輸出 `{"strategy": "…"}`；**不掛 `dayContext`** | 成功才寫 memory；失敗不阻塞討論 |
-| 白天草稿 | `generateDayDrafts` → `buildDayDraftPrompts`：對**所有未 ready** 的 AI **一輪 `Promise.all` 全併發**；輸出含 `strategy_update` | **無字數上限**（不是「一句話 ≤50 字」）；草稿是決策筆記，非發言稿 |
-| judge | `judgePickDayDraft` → `judgeScoreIndex`，讀草稿 `speech`（編號不標作者）＋自評＋白天評分標準 | 只有一篇草稿時免 judge 直接用 |
-| EXPAND | `expandSpeech(..., 'day')`：吃白板全文（時序推理）→ 3 次重試（間隔 2s），全失敗 → fallback 草稿原文 → OpenCC `cn→tw` 強轉後發布 | 私頻那套「2-4 句／給隊友提醒」**不套用到白天**；白天版是「判斷/結論→動作/表態」＋禁在發言裡說「沒人發言」＋用語規則（日常話、受詞明確、刪裝飾詞）；排版沿用 P12（>50 字換行、≤3 段、段間空一行） |
-| expanded broadcast | `game.sendDayMessage(clientId, expanded)` → 既有 `MESSAGE`（公頻），`dayMessages` 保留最近 50 則 | **公頻沒有新增 WS 事件**（§12.8） |
-| 其他 AI 回應 | `dayRespond`（`Promise.all`）：`ready` / `speak` / `wait` | 讀的是**同一段 expanded**（不是草稿原文） |
-| 收斂 | 全 AI `dayReady` ON → `reconcileDayReady()` 觸發 `DAY_VOTING`；AI commit 使用 idempotent `setDayReady()`，不重播 toggle | 對應 `DAY_READY_STATUS` 事件 |
-| 安全 guard | `guard > 50` 中止 loop，結束後確保全 toggle ON | 不會無限 loop |
+| 步驟 | 契約 |
+|---|---|
+| 出策略 | 所有**未 ready** 的 AI **一輪 `Promise.all` 全併發**，各出一份 status-first 策略；互不可見；validator（第一行 status＋正文檢查，不合格重生最多 3 次，仍不合格視為 wait） |
+| judge | 策略以編號呈現、不標作者，盲選一篇；只有一篇 speak 策略時免 judge 直接用；失敗 → 隨機 fallback（不阻塞） |
+| 記憶合併 | 入選者記憶專區舊文＋新策略 → 整合版寫回（只合併入選 speak 策略） |
+| 發言 | 入選策略轉成角色語氣的完整發言；3 次重試，全失敗 → fallback 策略原文；經既有 `MESSAGE` 廣播到公頻（`game.sendDayMessage`），`dayMessages` 保留最近 50 則；**公頻沒有新增 WS 事件** |
+| 其他 AI 回應 | 讀**同一段發言**（不是策略原文），`Promise.all`：`ready`（toggle ready）／`speak`（出新策略稿，進下一輪；若原本已 ready 則撤回）／`wait`（不動作） |
+| 收斂 | 全 AI ready ON → `reconcileDayReady()` 觸發 `DAY_VOTING`；無人出新稿但還有人 wait → 對 wait 者附「本輪不可 wait」重發一次；仍無 speak → 收斂；對應 `DAY_READY_STATUS` 事件 |
+| 安全 guard | `guard > 50` 中止 loop，結束後確保全 toggle ON；不會無限 loop |
 
-**`dayContext`（全角色共用）**：白天草稿、**白天回應**、**白天 EXPAND** 都掛 `dayContext`（唯一可用證據是公開發言、禁質疑未發言者、禁假設他人立場、禁只談討論方法）；**`buildStrategyPrompt` 不掛 `dayContext`**（策略階段只要角色情報與昨晚私頻白板）。
+**`dayContext`（全角色共用）**：白天策略、回應、發言 prompt 都掛 `dayContext`（唯一可用證據是公開發言、禁質疑未發言者、禁假設他人立場、禁只談討論方法）。白天策略 prompt 模板（system／user 段落、status-first 格式、validator）與夜間同構，見 §12.3，差異只有議題與白板來源。
 
-**草稿定位**：白天的「草稿」同樣是**行動筆記**（判斷誰／依據是對方實際講過什麼／要表態什麼），不是發言稿，不寫逐字台詞；完整口語由 EXPAND 依角色語氣生成。Memory（4000 字上限、跨階段不重置）與 P12 排版規則見 §13.5。
+**策略定位**：白天的「策略」同樣是**行動筆記**（判斷誰／依據是對方實際講過什麼／要表態什麼），不是發言稿，不寫逐字台詞；完整口語由發言 prompt 依角色語氣生成。Memory（4000 字上限、跨階段不重置）與 P12 排版規則見 §13.5。
 
 **外部 harness 執行方式（`scripts/external-test-stage2.mjs`）：**
 
@@ -683,21 +678,20 @@ DAY_DISCUSSION 開始（引擎 broadcast PHASE_CHANGED）
 - `--stop-at NIGHT_RESULT | DAY_RESULT | GAME_OVER`（預設 `DAY_RESULT`）
 - `--save-state <path>`：原子寫入單一 v2 envelope（`schemaVersion=2`，含 `game`／`ai`／`events`／`aiLog`）
 - `--resume <path>`：載入 v2 envelope，依 barrier → game restore → AI import → `resumeDayDiscussion()` 順序續跑；只支援 `DAY_DISCUSSION`
-- `--stop-after-first-message`：無值 flag，只在 resume 時計算 baseline+1 的公頻 `MESSAGE`；publish commit 後結束，不進 day responses／下一輪 draft
+- `--stop-after-first-message`：無值 flag，只在 resume 時計算 baseline+1 的公頻 `MESSAGE`；publish commit 後結束，不進其他 AI 回應／下一輪策略
 - 報告（md）：會議流程、白板、夜間結算、投票軌跡、收斂、LLM 失敗／重試、事件時間軸；本機固定取回名稱為 `ai-trace-stage2-night.md`／`ai-trace-stage2-day.md`
 - **沒有** 5 分鐘 timeout；操作者仍可用外部 `timeout --signal=INT --kill-after=30s` 做分段觀察
 
-**仍待做【目標／待實作】：**
+**未決事項**：
 
-- **首則公頻稿品質盲評**：2026-09-29 已用 `medium` 從 v2 night envelope resume，順利產生第一則公頻 `MESSAGE`（selected=良子、`messageId=day-1-1`、`messageSeq=1`），並在 publish commit 後停止；完整回應／投票尚未跑。等待使用者看過本機兩份報告後，由全新 Oracle session 盲評 expanded 稿與 draft/judge 脈絡。
-- **公頻策略洩漏觀察**：目前仍**沒有**「白天不得公開夜間私密資訊」的硬規則；需依首則 expanded 稿的 Oracle 結果再裁示，不因單一樣本直接下結論。
+- **公頻策略洩漏**：目前**沒有**「白天不得公開夜間私密資訊」的硬規則；待首則公頻發言的盲評結果再裁示。
 
 ### 13.7 模組
 
 | 檔案 | 說明 | 現行地位 |
 |---|---|---|
 | `src/lobby-server/llm.ts` | LLM client：`chat(messages, { temperature, priority })` → `fetch(localhost:9090/v1/chat/completions)`（Bearer auth、`x-override-priority`）；失敗回 `null`；不設 timeout | 【source 現況】實際被呼叫的一層，`AiController` 的所有 LLM 呼叫都走這裡 |
-| `src/lobby-server/ai-controller.ts` | **實際的 AI loop**：`AiController`（狼會議／共有者會議／白天討論、EXPAND、目標選擇、LLM log、memory 4000 字），import `llm.ts` ＋ `ai-player.ts` 的 persona/memory loader 與 JSON parser | 【source 現況／外部 harness】由 `scripts/external-test-stage2.mjs` 建立；**`server.ts` 尚未 import**（production 未接線） |
+| `src/lobby-server/ai-controller.ts` | **實際的 AI loop**：`AiController`（狼會議／共有者會議／白天討論：策略→validator→judge→記憶合併→發言；目標選擇、LLM log、memory 4000 字），import `llm.ts` ＋ `ai-player.ts` 的 persona/memory loader | 由 `scripts/external-test-stage2.mjs` 建立；**`server.ts` 尚未 import**（production 未接線） |
 | `src/lobby-server/ai-player.ts` | `loadCharacterProfile()`（讀 `character/<id>/agents.md` ＋ `memory.md`）、`parseJsonResponse()`，以及**舊的** SpeechScheduler pipeline（`buildPreSpeechPrompt` / `buildExpandPrompt` / `runWolfMeetingPipeline`） | 部分現行（persona/memory loader 與 parser 被 controller 引用）；**pipeline 部分是舊路徑、未接 runtime**（其中的 `≤50字` / `≤150字` 等字串不再是現行規格，見 §13.4） |
 
 ### 13.8 GameEngine 整合點
