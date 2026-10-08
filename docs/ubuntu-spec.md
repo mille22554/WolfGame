@@ -472,7 +472,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 - 觀戰者看不到任何私頻【已實作】（私頻 broadcast 只指定狼／共有者的 clientId 清單）
 - 訊息格式與公頻相同：`{ from, text, ts }`【已實作】
 - 每則訊息上限 200 字（與公頻相同）【已實作】（`MAX_MESSAGE_LEN`；引擎 `handleWolfChat` / `publishMasonSpeech` 也會擋）
-- 共有者一方死亡 → 該頻道停用（剩下一方無法對話）【部分實作】：server 端**沒有**停用判定——殘存方仍可自己發 `MASON_CHAT`，broadcast 對象只有自己（已死亡的夥伴若仍在線仍會收到）。AI 端另有限制：存活共有者 < 2 人時 `runMasonDiscussion` 直接 toggle ON、不開會。
+- 共有者一方死亡 → 該頻道停用（剩下一方無法對話）：server 端**沒有**停用判定——殘存方仍可自己發 `MASON_CHAT`，broadcast 對象只有自己（已死亡的夥伴若仍在線仍會收到）。AI 端另有限制：存活共有者 < 2 人時 `runMasonDiscussion` 直接 toggle ON、不開會。
 
 **與 main 分支的差異：**
 - main 分支的「狼隊會議」是 LLM 驅動的結構化對話（多輪 back-and-forth 後投票決選）
