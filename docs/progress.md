@@ -17,7 +17,7 @@
 | `docs/history/2026-09-29.md` | Phase 2/3、medium 實測、attempt-01、raw 白天模擬、五項修正、OpenCC、盲評、session 交接 |
 | `docs/history/2026-10-01.md` | 夜晚共有者精修、第二輪直呼作廢紀錄 |
 | `docs/history/2026-10-07.md` | 夜間會議規格改寫（統一 loop＋模板重寫） |
-| `docs/history/2026-10-08.md` | spec 統一全檢＋二～六次確認修正、通道釐清、history 建立 |
+| `docs/history/2026-10-08.md` | spec 統一全檢＋二～八次確認（七次無改動）、通道釐清、霊能者「身分」→「陣營」、history 建立 |
 
 ## 已完成
 

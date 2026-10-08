@@ -235,7 +235,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | `NIGHT_RESULT` | 公布昨晚結果（死者/平安夜）；霊能者收到黎明資訊 | 10 秒（固定） |
 | `DAY_DISCUSSION` | 全存活玩家自由發言（走遊戲內公頻 `MESSAGE`，與 lobby 聊天室不同通道） | 所有存活玩家 toggle「準備投票」ON（不限時，同狼會議模式）；或房主送 `END_DISCUSSION` 提前結束（已實作） |
 | `DAY_VOTING` | 全存活玩家投票（含棄票） | 所有存活玩家皆已投票 |
-| `DAY_RESULT` | 公布投票結果（死者身分不公開）；霊能者得知票死者身分 | 10 秒（固定） |
+| `DAY_RESULT` | 公布投票結果（死者身分不公開）；霊能者得知票死者陣營 | 10 秒（固定） |
 | `GAME_OVER` | 公布所有角色、勝負結果 | 永久（直到房間解散/重開） |
 
 > **不限時設計**：NIGHT / DAY_DISCUSSION / DAY_VOTING 皆等待所有玩家完成行動才推進。玩家可從容思考，不被倒數逼迫【已上線】。掉線處理見 §5：房間清空（無人）→ 立即回收；無活動超時（預設 30 分鐘）→ 自動清理。**沒有**「全部掉線 → 暫停 5 分鐘」機制。
@@ -264,7 +264,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 | 共有者 | `MASON_END_TURN`（toggle） | 雙人都 ON 才解鎖狼的環節；可隨時 toggle 開/關 |
 | 人狼 | 狼會議 → `WOLF_KILL { targetId }` | 全部狼 toggle「準備投票」ON → 投目標；平票（1:1, 1:1:1）→ 回討論重來；不可選自己/狂人 |
 | 占い師 | `SEER_CHECK { targetId }` | 不可選自己；每夜一次 |
-| 霊能者 | 無（被動） | 黎明自動收到昨日票死者身分 |
+| 霊能者 | 無（被動） | 黎明自動收到昨日票死者陣營 |
 | 村民/狂人 | 無 | — |
 
 **結算順序**（server-side，依序解鎖）：
@@ -272,7 +272,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 2. 共有者回合結束 → 雙人都 toggle ON 才解鎖下一步（toggle：按開＝我好了，再按＝關掉重來）
 3. 人狼刀 → 狼會議流程（見下方）；若目標 == guardedTargetId → 平安夜（kill blocked）；否則目標死亡
 4. 占い師查 → 結果僅發給占い師
-5. 黎明：霊能者收到「昨天被票死者」身分（Day1 無）
+5. 黎明：霊能者收到「昨天被票死者」的陣營（Day1 無）
 
 **統一夜間會議 loop**（狼會議＝step 3、共有者會議＝step 2 的內部流程）
 
@@ -348,7 +348,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 
 ### 12.4 白天討論（DAY_DISCUSSION）
 
-- 復用 lobby 的 `SEND_MESSAGE` / `MESSAGE`（公頻）【已上線】
+- 遊戲內公頻 `SEND_MESSAGE` / `MESSAGE`（WS 型別與 lobby 共用，但屬不同通道）【已上線】
 - **無私頻**：WOLF_CHAT / MASON_CHAT 僅 NIGHT 可用，白天只有公頻
 - 結束方式：所有存活玩家 toggle「準備投票」ON → 進入投票（同狼會議模式，可隨時 toggle 開/關）【已上線】；房主另可送 `END_DISCUSSION` 提前結束（已實作）
 - **AI 驅動**：AI 玩家走「策略 → judge → 記憶合併 → 發言」loop，與夜間 loop 同構（見 §12.3），完整流程見 §13.6a。核心順序：
@@ -370,7 +370,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 - 等待所有存活玩家皆已投票（含棄票）→ 立即結算
 - 結算：票最高者出局；**最高票不唯一（平票）→ 無人出局**：`tie=true`、`eliminatedClientId=null`（已實作，不隨機、不淘汰）
 - 棄票（`null`）不計入計票
-- 被票死者身分不公開（僅霊能者得知）
+- 被票死者身分不公開（僅霊能者得知其陣營）
 
 ### 12.6 勝利判定
 
@@ -384,7 +384,7 @@ LOBBY ──(START_GAME)──► ROLE_REVEAL ──(10s)──► NIGHT
 ### 12.7 死亡規則
 
 - 夜殺：身分完全不公開（任何人不知道，含霊能者）
-- 票死：身分不公開（僅霊能者得知）
+- 票死：身分不公開（僅霊能者得知其陣營）
 - 死者不投票、不提交夜間行動【已實作】（引擎 `handleVote` / `handleNightAction` 都檢查 `alive`）
 - 死者不發言（公頻）【目標／待實作】：`SEND_MESSAGE` 未檢查 alive／phase，見 §12.4
 - 死者不操作（前端灰化）＝ M6【目標／待實作】
