@@ -5,7 +5,7 @@
 
 ## 目前狀態
 
-**目前暫停點：** spec 精度收尾完成（事件表 fallback 全補「去掉 status 行」；白板全清；夜白逐項同形；judge 同一標準；對話保留不限上限為目標）。下一步：source 落地（先修 `ai-controller.ts` 3 個 TS 錯，再照新 spec 重寫白天 loop＋拆 50 則截斷）。正式 service 未重啟。
+**目前暫停點：** spec 精度收尾完成；@oracle 獨立 review 回來了，發現 7 條（含 3 高），已記入待做 6–12，現逐條分析中（第 1 條分析中）。source 落地等分析完再動。正式 service 未重啟。
 
 ## 歷史索引（明細見各檔）
 
@@ -57,6 +57,13 @@
 3. **[MED] @oracle 審查夜間流程** → 落地後再 commit＋push
 4. **[MED] 白天 prompt 直呼驗證** → 模板待補；白天四步 reasoning effort 逐次指定一併定
 5. **[LOW] 前端（ubuntu-web/）** → 等外部測試跑通完整一局再開
+6. **[HIGH] oracle-1 安全上限自打（分析中）** → L319「不自動收斂」vs L618 共有者強制 toggle ON（code 站 L618）；修法＝L319 拆三行（狼停／共有者強制解鎖／白天停）
+7. **[HIGH] oracle-2 System 段三方打架（未決）** → §13.5 system 含硬規則 vs §12.3／模板只有身分＋行事風格（code 測試站模板）；二選一：硬規則進模板，或標舊 builder 殘留待決
+8. **[MED] oracle-3 狼刀全文 vs 最近訊息（未決）** → L317 全文 vs L534／code（`recentMessages` 上限 30 則）；修法＝L317 改最近 30 則
+9. **[MED] oracle-4 B 裝置 SSH 續行（未決）** → `\` 在 PS 5.1 靜默失效（pull＋restart 沒跑還不報錯）；修法＝B 塊收單行，A 塊保留
+10. **[MED] oracle-5 白天掛 source 現況不實（未決）** → code 白天仍是舊 stage machine；二選一：白天各處補【目標／待實作】先誠實標記，或等 code 追平
+11. **[MED] oracle-6 judge 全 0 分邊界（未決）** → spec 有、模板無、code 認 best；定案三方對齊（code 歸 Phase 1）
+12. **[LOW] oracle 小項（未決）** → L334 陣營二字、L649 混合局括號、L723「只有」→摘錄、模板 L247 半句；code 漂移三處（勝利行狂人／合併標題／最佳篇號）＋verbatim 缺口歸 Phase 1
 
 ## 測試腳本用法
 
