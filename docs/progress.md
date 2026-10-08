@@ -56,6 +56,7 @@
 2. **[HIGH] 夜間落地測試** → mock LLM 覆蓋 judge／單人免 judge／validator 重試／wait 重問／收斂接投票／記憶寫入
 3. **[MED] @oracle 審查夜間流程** → 落地後再 commit＋push
 4. **[MED] 白天 prompt 直呼驗證** → 模板待補；白天四步 reasoning effort 逐次指定一併定；另加形狀對照實驗（原形 vs 全塞 system＋策略扮 assistant，看收斂品質說話，不直接搬）
+13. **[HIGH] 記憶日記體直呼驗證（進行中）** → 第一人稱＋禁機制詞七詞（speak／wait／ready／judge／入選／落選／validator）；T1 日記轉寫自然度＋不復活舊案；T2 prefill 對照；T3 白天投票雙軌（記憶＋紀錄）；過了才落 spec＋source
 5. **[LOW] 前端（ubuntu-web/）** → 等外部測試跑通完整一局再開
 6. **[HIGH] oracle-1 安全上限統一熔斷（已改）** → 定案：觸發即凍結受理＋輸出熔斷報告＋進程立即停止（不自動收斂；共有者強制 toggle 已刪）；source 熔斷退出路徑歸 Phase 1
 7. **[HIGH] oracle-2 System 段三方打架（已改）** → 定案：§13.5 改寫成直呼落地版（system＝兩段，約束散見模板），code／模板不動；另見 system/user 設計討論（下）
