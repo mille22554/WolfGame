@@ -9,7 +9,7 @@ const SGLANG_HOST = process.env.SGLANG_HOST ?? '127.0.0.1';
 const SGLANG_PORT = process.env.SGLANG_PORT ?? '9090';
 const SGLANG_API_KEY = process.env.SGLANG_API_KEY ?? '';
 const LLM_MODEL = process.env.LLM_MODEL ?? 'qwen3.8-27b';
-/** Qwen3.8 reasoning variant（xhigh / medium / low）；僅對目前 process 的請求生效 */
+/** Qwen3.8 reasoning variant（xhigh / medium / low）；per-call 未指定時的 fallback，僅對目前 process 的請求生效 */
 const LLM_REASONING_EFFORT = process.env.LLM_REASONING_EFFORT ?? '';
 
 export interface ChatMessage {
@@ -20,6 +20,8 @@ export interface ChatMessage {
 export interface ChatOptions {
   temperature?: number;
   priority?: number; // x-override-priority（SGLang 排程用；併發時錯開：100, 101, 102...）
+  /** 逐次指定 reasoning effort（§13.2）；未指定時沿用 env LLM_REASONING_EFFORT（未設則不送） */
+  reasoningEffort?: 'xhigh' | 'medium' | 'low';
 }
 
 /**
@@ -28,7 +30,7 @@ export interface ChatOptions {
  * 失敗回 null。
  */
 export async function chat(messages: ChatMessage[], options: ChatOptions = {}): Promise<string | null> {
-  const { temperature = 1.0, priority } = options;
+  const { temperature = 1.0, priority, reasoningEffort } = options;
 
   try {
     const body: Record<string, any> = {
@@ -36,7 +38,9 @@ export async function chat(messages: ChatMessage[], options: ChatOptions = {}): 
       messages,
       temperature,
     };
-    if (LLM_REASONING_EFFORT) body.reasoning_effort = LLM_REASONING_EFFORT;
+    // 逐次指定（reasoningEffort）優於 env LLM_REASONING_EFFORT；兩者皆無則不送
+    const effort = reasoningEffort || LLM_REASONING_EFFORT;
+    if (effort) body.reasoning_effort = effort;
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',

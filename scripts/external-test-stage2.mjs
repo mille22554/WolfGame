@@ -82,6 +82,12 @@ const DEFAULT_REPORT_BY_PHASE = {
   DAY_RESULT: 'ai-trace-stage2-day.md',
   GAME_OVER: 'ai-trace-stage2-full.md',
 };
+// 熔斷報告（安全上限 abort 時另寫一檔；與該階段 md 報告同目錄、檔名加熔斷標記，命名沿用 ai-trace-<stage> 風格）
+const FUSE_REPORT_BY_PHASE = {
+  NIGHT_RESULT: 'ai-trace-fuse-night.md',
+  DAY_RESULT: 'ai-trace-fuse-day.md',
+  GAME_OVER: 'ai-trace-fuse-full.md',
+};
 
 // --stop-at 白名單（啟動時驗證；未知值明確報錯並 exit 1，不啟動遊戲）
 export const STOP_AT_PHASES = ['NIGHT_RESULT', 'DAY_RESULT', 'GAME_OVER'];
@@ -360,6 +366,9 @@ async function runObservationLoop(game, stopAt, isStopped, options = {}) {
       converged = true;
       break;
     }
+    // TODO（共有者／白天熔斷）：engine 目前只有狼側 abort 訊號（wolfMeetingAborted／WOLF_MEETING_ABORTED）；
+    // 共有者白板上限在 controller 端只停討論、不改 engine 狀態，白天白板沒有上限訊號。
+    // 未來若兩側有正式 abort 訊號，再在此並列接進（不要自行發明新事件）。
     if (s.wolfMeetingAborted) {
       aborted = true;
       break;
@@ -444,7 +453,7 @@ export function stage2StatusLine({ stopAt = 'DAY_RESULT', converged = false, fir
   if (firstMessageStop) return `${FIRST_MESSAGE_STOP_LABEL}（${STOP_AFTER_FIRST_MESSAGE_FLAG}；已達成目標）`;
   if (converged) return `${stopAt} 達成`;
   if (signal) return `中斷（${signal}）`;
-  if (aborted) return '未收斂（100 則白板上限）';
+  if (aborted) return '熔斷停止（對話紀錄 100 句→熔斷，未收斂）';
   return '未收斂（階段 timeout）';
 }
 
@@ -487,6 +496,17 @@ async function main() {
       baseline: resumeHandle?.baseline ?? 0,
     },
   );
+  if (aborted) {
+    // 熔斷語意：對話紀錄 100 句→熔斷停止（abort）→凍結現況、另出一份熔斷報告（與階段報告同目錄）。
+    // 退出仍走既有 stage2ExitCode（aborted→1）；熔斷報告寫入失敗只警告，不阻塞退出流程。
+    const fusePath = join(dirname(reportPath), FUSE_REPORT_BY_PHASE[stopAt] || 'ai-trace-fuse.md');
+    try {
+      writeFileSync(fusePath, buildFuseReport(game, ai, events, stopAt), 'utf-8');
+      console.log(`[stage2] ⚠️ 熔斷觸發（對話紀錄 100 句→熔斷停止）；熔斷報告已寫入 ${fusePath}`);
+    } catch (err) {
+      console.error(`[stage2] ⚠️ 熔斷報告寫入失敗 ${fusePath}：${err.message}（不阻塞退出流程）`);
+    }
+  }
   if (firstMessageStop) {
     // 只等這一次 resume promise（publish commit 已完成）——不呼叫 settleInFlightWork，那會再推動 loop。
     await resumeHandle.resumePromise;
@@ -677,7 +697,7 @@ function wolfMeetingFlowSection(log, events, players) {
   // Abort
   const abort = log.find((e) => e.kind === 'WOLF_ABORT');
   if (abort) {
-    L.push(`⚠️ **狼會議停止：** 白板累計 ${abort.parsed?.count ?? '?'} 則未收斂（100 則上限）`);
+    L.push(`⚠️ **狼會議熔斷：** 對話紀錄 100 句→熔斷停止（白板累計 ${abort.parsed?.count ?? '?'} 句未收斂；不自動收斂、不強制決選）`);
     L.push('');
   }
   return L;
@@ -860,6 +880,94 @@ export function dayDiscussionSection(log, events, players) {
 }
 
 /**
+ * 熔斷報告：對話紀錄 100 句→熔斷停止（abort）時，另於階段 md 報告同目錄輸出
+ * （檔名 `ai-trace-fuse-<stage>.md`）。
+ * 內容：觸發會議別／輪次、對話全文（100 句）、收斂狀態、各 AI pending、LLM 失敗統計。
+ * 能拿到的盡量拿；拿不到的欄位標「無」，不得阻塞退出流程。
+ * TODO（共有者／白天熔斷）：目前只有狼側有 abort 訊號（wolfMeetingAborted／WOLF_MEETING_ABORTED）；
+ *   共有者／白天白板未來有 abort 訊號時，在「觸發會議」一節接進對應分支（不要自行發明新事件）。
+ */
+export function buildFuseReport(game, ai, events, stopAt) {
+  const state = game.getNightState();
+  const players = game.getPlayers();
+  const log = ai.getLog();
+  const abortEvent = events.find((e) => e.type === 'WOLF_MEETING_ABORTED');
+  const L = [];
+  L.push(`# Stage 2 熔斷報告：對話紀錄 100 句→熔斷停止（--stop-at ${stopAt}）`);
+  L.push('');
+  L.push(`- 產生時間：${new Date().toISOString()}`);
+  L.push('- 熔斷原因：對話紀錄 100 句→熔斷停止（安全上限 messageCap=100）；凍結現況＋熔斷報告＋進程立即停止（exit 1）');
+  L.push('- 觸發會議：狼會議（WOLF_MESSAGE 白板；目前僅狼側有 abort 訊號——共有者／白天待接進）');
+  L.push(`- 輪次：wolf meeting engine round=${state.wolfMeetingRound}（平票才 +1）；白板累計 ${abortEvent?.count ?? state.wolfMessageCount} 句`);
+  L.push(`- engine 訊號：${abortEvent ? `WOLF_MEETING_ABORTED reason=${abortEvent.reason}（count=${abortEvent.count}）` : '無（wolfMeetingAborted=true 但未收到 WOLF_MEETING_ABORTED 事件）'}`);
+  L.push(`- 最終 phase：${state.phase}${state.wolfSubphase ? `／${state.wolfSubphase}` : ''}（day=${state.day}）`);
+  L.push('');
+  L.push('## 對話全文（100 句）');
+  L.push('');
+  L.push('- 觸發白板為狼白板；共有者／白天白板一併列出（無則標「無」）');
+  L.push('');
+  L.push(...boardSection(events, 'WOLF_MESSAGE', '狼'));
+  L.push(...boardSection(events, 'MASON_MESSAGE', '共有者'));
+  L.push(...boardSection(events, 'MESSAGE', '白天'));
+  L.push('## 收斂狀態');
+  L.push('');
+  L.push('- 收斂狀態：未收斂→熔斷停止（不自動收斂、不強制決選）');
+  L.push(`- 白板累計：${state.wolfMessageCount} 句`);
+  L.push(`- wolf meeting engine round：${state.wolfMeetingRound}`);
+  L.push(`- 刀人目標：${state.wolfTargetId ? `${nicknameOf(players, state.wolfTargetId)}（${state.wolfTargetId}）` : '無'}`);
+  L.push('');
+  L.push('## 各 AI pending');
+  L.push('');
+  const checkpoint = ai.exportDayCheckpoint();
+  if (checkpoint && Array.isArray(checkpoint.responses)) {
+    const pending = checkpoint.responses.filter((r) => r && r.status === 'pending');
+    if (pending.length === 0) {
+      L.push('- 白天討論回應：無（沒有 pending 的回應）');
+    } else {
+      for (const r of pending) L.push(`- 白天討論回應 pending：${nicknameOf(players, r.clientId)}（turnId=${r.turnId ?? '無'}）`);
+    }
+  } else {
+    L.push('- 白天討論回應：無（phase 不在 DAY_DISCUSSION，AI checkpoint 無法匯出）');
+  }
+  const lastToggle = new Map();
+  for (const e of events) {
+    if (e.type === 'WOLF_READY' || e.type === 'MASON_READY') lastToggle.set(e.clientId, e);
+  }
+  if (lastToggle.size === 0) {
+    L.push('- 夜間 toggle 狀態：無（未收到 WOLF_READY／MASON_READY 事件）');
+  } else {
+    for (const e of lastToggle.values()) {
+      L.push(`- 夜間 toggle：${nicknameOf(players, e.clientId)}（${e.type === 'WOLF_READY' ? '狼' : '共有者'}）→ ${e.ready ? 'ON' : 'OFF'} [${fmtTs(e.ts)}]`);
+    }
+  }
+  L.push('');
+  L.push('## LLM 失敗統計');
+  L.push('');
+  // 與階段報告「LLM 失敗／重試」同口徑：MASON_TOGGLE／WOLF_ABORT／JUDGE 非 LLM 呼叫；attempt=0 為成功標記
+  const failures = log.filter((e) => !['MASON_TOGGLE', 'WOLF_ABORT', 'JUDGE'].includes(e.kind) && e.attempt > 0 && (e.response === null || e.parsed === null || e.attempt > 1));
+  if (failures.length === 0) {
+    L.push('- 失敗總數：無');
+  } else {
+    L.push(`- 失敗總數：${failures.length} 筆`);
+    const byAi = new Map();
+    for (const e of failures) {
+      const key = e.clientId || '(共用)';
+      byAi.set(key, (byAi.get(key) ?? 0) + 1);
+    }
+    for (const [key, n] of [...byAi.entries()].sort((a, b) => b[1] - a[1])) {
+      L.push(`  - ${key.startsWith('ai-') ? `${nicknameOf(players, key)}（${key}）` : key}：${n} 筆`);
+    }
+    const byKind = new Map();
+    for (const e of failures) byKind.set(e.kind, (byKind.get(e.kind) ?? 0) + 1);
+    for (const [kind, n] of [...byKind.entries()].sort((a, b) => b[1] - a[1])) {
+      L.push(`  - ${kind}：${n} 筆`);
+    }
+  }
+  L.push('');
+  return L.join('\n');
+}
+
+/**
  * 組 markdown 報告。
  * options.firstMessageStop=true 時以 `first public message stop` 標記為成功目標（不是未收斂）。
  */
@@ -875,7 +983,7 @@ export function buildReport(game, ai, events, defs, converged, aborted, stopAt, 
   L.push('');
   L.push(`- 產生時間：${new Date().toISOString()}`);
   L.push(`- 目標階段：${stopAt}${firstMessageStop ? `（${FIRST_MESSAGE_STOP_LABEL}）` : ''}`);
-  L.push(`- 結果：${firstMessageStop ? `✅ 達成（${FIRST_MESSAGE_STOP_LABEL}）` : converged ? '✅ 達成' : aborted ? '❌ 未收斂（100 則白板上限）' : '❌ 未收斂（階段 timeout）'}`);
+  L.push(`- 結果：${firstMessageStop ? `✅ 達成（${FIRST_MESSAGE_STOP_LABEL}）` : converged ? '✅ 達成' : aborted ? '❌ 熔斷停止（對話紀錄 100 句→熔斷，未收斂）' : '❌ 未收斂（階段 timeout）'}`);
   if (firstMessageStop) {
     L.push(`- 停止控制：${STOP_AFTER_FIRST_MESSAGE_FLAG}（baseline 公頻訊息 ${baseline} 則 → 停在 ${baseline + 1} 則；publish commit 完成後即結束，未進入 day responses／下一輪 draft）`);
   }
@@ -947,7 +1055,7 @@ export function buildReport(game, ai, events, defs, converged, aborted, stopAt, 
     L.push(`- 最終刀人目標：${nicknameOf(players, state.wolfTargetId)}（${state.wolfTargetId}）`);
     L.push('- 收斂原因：全狼 toggle ready → 投票明確多數（wolfVotes 計票後 leaders 唯一）');
   } else if (aborted) {
-    L.push(`- 未收斂：白板累計 ${state.wolfMessageCount} 則觸發 100 則安全上限（立即停止、不自動收斂、不強制決選）`);
+    L.push(`- 熔斷停止：對話紀錄 100 句→熔斷（白板累計 ${state.wolfMessageCount} 句未收斂；立即停止、不自動收斂、不強制決選）`);
   } else {
     L.push('- 未收斂：安全 timeout 內 wolfTargetId 未設定（可能 LLM 持續失敗或持續平票）');
   }

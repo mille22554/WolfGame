@@ -131,7 +131,7 @@ export declare class GameEngine {
     private state;
     private timers;
     private countdownInterval?;
-    /** 當日白天訊息序號；dayMessages 會因 50 則上限移出舊訊息。 */
+    /** 當日白天訊息序號（白天對話完整保留，無上限）。 */
     private dayMessageSeq;
     constructor(roomCode: string, players: {
         clientId: string;

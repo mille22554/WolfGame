@@ -21,7 +21,7 @@
  * - NIGHT 不限時：等待所有夜間步驟完成才結算（無 timeout 截斷）
  */
 import { Role, Team, SeerResult, ROLE_CONFIG, ROLE_TEAM, getDisplayName, getDescription, seerSeesAs } from '../types.js';
-import { MAX_MESSAGE_LEN, WOLF_MESSAGE_CAP } from './types.js';
+import { MAX_MESSAGE_LEN } from './types.js';
 
 export type GamePhase =
   | 'ROLE_REVEAL'
@@ -135,7 +135,7 @@ export class GameEngine {
   private state: GameState;
   private timers: NodeJS.Timeout[] = [];
   private countdownInterval?: NodeJS.Timeout;
-  /** 當日白天訊息序號；dayMessages 會因 50 則上限移出舊訊息。 */
+  /** 當日白天訊息序號（白天對話完整保留，無上限）。 */
   private dayMessageSeq = 0;
 
   constructor(
@@ -345,7 +345,6 @@ export class GameEngine {
       text,
       ...identity,
     });
-    if (this.state.dayMessages.length > 50) this.state.dayMessages.shift();
     this.callbacks.broadcast({ type: 'MESSAGE', from: player.nickname, text, ts: Date.now() });
   }
 
@@ -770,8 +769,8 @@ export class GameEngine {
         id,
       });
     }
-    // 與 sendDayMessage 的 50 則上限保持一致；舊 snapshot 若更大，只保留最新片段。
-    return messages.slice(-50);
+    // 白天對話不限上限，完整保留（與 sendDayMessage 一致）。
+    return messages;
   }
 
   private makeDayMessageId(day: number, seq: number): string {

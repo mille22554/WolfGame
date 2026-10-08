@@ -126,7 +126,7 @@ export interface AiLogEntry {
     clientId: string;
     characterId: string;
     role: string;
-    kind: 'WOLF_SPEECH' | 'JUDGE' | 'WOLF_STANCE' | 'WOLF_KILL' | 'SEER_CHECK' | 'GUARD_PROTECT' | 'MASON_TOGGLE' | 'MASON_SPEECH' | 'MASON_STANCE' | 'WOLF_ABORT' | 'DAY_STRATEGY' | 'DAY_SPEECH' | 'DAY_STANCE' | 'DAY_VOTE' | 'EXPAND';
+    kind: 'WOLF_SPEECH' | 'JUDGE' | 'WOLF_KILL' | 'SEER_CHECK' | 'GUARD_PROTECT' | 'MASON_TOGGLE' | 'MASON_SPEECH' | 'WOLF_ABORT' | 'DAY_STRATEGY' | 'DAY_SPEECH' | 'DAY_STANCE' | 'DAY_VOTE' | 'EXPAND' | 'WOLF_STRATEGY' | 'MASON_STRATEGY' | 'MEMORY_MERGE';
     round: number;
     /** 第幾次嘗試（重試時 >1） */
     attempt: number;
@@ -160,18 +160,10 @@ export declare class AiController {
     private boardCursor;
     /** judge 選言序號（WOLF_SPEECH_SELECTED.round；本夜遞增） */
     private selectionSeq;
-    /** wolf clientId -> 是否 toggle ready ON（由攔截的 WOLF_READY 訊息維護） */
-    private wolfReadyMap;
-    /** wolf clientId -> 當前 stance（"投XXX" / "資訊不足"） */
-    private wolfStanceMap;
     /** 共有者白板（本夜全部 MASON_MESSAGE；每夜重置） */
     private masonBoard;
     /** 共有者 judge 選言序號（MASON_SPEECH_SELECTED.round；本夜遞增） */
     private masonSelectionSeq;
-    /** mason clientId -> 是否 toggle ready ON（由攔截的 MASON_READY 訊息維護） */
-    private masonReadyMap;
-    /** mason clientId -> 當前 stance（"準備好了" / "資訊不足"） */
-    private masonStanceMap;
     /** 白天公頻訊息（本天；AI 知識用） */
     private dayBoard;
     /** AI clientId -> 是否準備投票 ON；每次 resume 以 GameEngine 狀態為準重建。 */
@@ -244,32 +236,20 @@ export declare class AiController {
     onWolfSubphaseChange(subphase: WolfSubphase, round: number): void;
     handlePrivate(clientId: string, msg: any): void;
     handleBroadcast(msg: any, targetClientIds?: string[]): void;
-    /** 狼會議 DISCUSSION：全狼獨立出草稿 → loop（judge 盲選發布 → 其他狼回應 → 收斂判斷） */
+    /** 組 ctx（送給 buildStrategyMessages 等） */
+    private nightCtx;
+    /** 跑一輪策略 prompt：回傳經 validator 驗證的 {status,...}；失敗次數用完視為 wait */
+    private runNightStrategy;
+    /** 策略 → judge → merge → speech 的完整 nightly 一轮（呼叫端給參與者）；回傳 publish 出去的發言 + 發言者/新 ready 集合 */
+    private runNightRound;
+    /** 統一的夜間會議 loop（狼 / 共有者） */
+    private runNightMeeting;
+    /** 夜間會議是否仍在對應階段 */
+    private isNightMeetingActive;
     private runWolfDiscussion;
-    /** 所有狼獨立出草稿（平行 LLM 呼叫；互不可見；失敗的狼跳過） */
-    private generateAllDrafts;
-    /** 組裝 judge 盲評 prompt：system「你是裁判，全盲評分以下發言，不考慮作者」；user 列出所有 speech（編號，不標作者），要求 JSON 回 {"scores":[...],"best":index} */
-    private buildJudgePrompts;
-    /** Judge 盲評（LLM）：給所有 speech 打分（1-10），回最高分的 index；LLM 失敗 → 隨機 fallback（不阻塞）。
-     *  LLM 呼叫本身由 llmWithRetry 記錄 log。 */
-    private judgeScoreIndex;
-    /** Judge 盲選一篇草稿（LLM 全盲評分，不告知作者）→ 回選中的 draft */
-    private judgePickDraft;
-    /** 發布稿 stance 正規化（對齊 spec §12.3：stance 只有「投XXX」或「資訊不足」二值）：
-     *  發布稿或草稿原文任一已明確點名刀人目標時，視為已承諾——補上「投<目標>」；沒有目標才維持原樣（資訊不足）。 */
-    private normalizePublishedStance;
-    /** 非發言者狼讀白板後回應：vote / speak / wait */
-    private wolfRespond;
-    /** 狼會議 VOTING：每隻 AI 狼 LLM 選刀人目標 → 提交 WOLF_KILL（全併發） */
+    private generateAllDraftsRemoved;
     private runWolfVoting;
-    /** 共有者會議：雙共有者獨立出草稿 → loop（judge 盲選發布 → 另一人回應 → 收斂判斷） */
     private runMasonDiscussion;
-    /** 所有共有者獨立出草稿（平行 LLM 呼叫；互不可見；失敗的跳過） */
-    private generateMasonDrafts;
-    /** Judge 盲選一篇共有者草稿（LLM 全盲評分，同 wolf judge）→ 回選中的 draft */
-    private judgePickMasonDraft;
-    /** 非發言者共有者讀白板後回應：vote / speak / wait */
-    private masonRespond;
     /** 展開 prompt：把選中的行動筆記（草稿要點）展開成該角色真正會說的話；輸出 {"speech":"完整發言"} */
     private buildExpandPrompts;
     /** 展開：LLM 把選中的草稿要點展開成完整發言（llmWithRetry 內建 3 次重試）；全失敗 → fallback 用草稿原文，不阻塞會議 */
@@ -294,7 +274,10 @@ export declare class AiController {
     private getAiWolves;
     private getAiMasons;
     private getAiAlivePlayers;
-    private isWolfReady;
+    /** mason ready：以 engine 真相為準（state.masonReady；與 handleToggleMasonEndTurn 同 map，每夜重置）。
+     * 注意：getDayState().dayReady 是白天「準備投票」狀態，夜間為前一日殘留，不能當 mason 結束回合的依據。
+     * game.ts 目前未以公開讀取口暴露 masonReady（getNightState() 無此欄位），先以結構 cast 直讀；
+     * 引擎日後若加正式讀取口（例如 getNightState() 增欄）應改回之。controller 不再持私有 shadow map。 */
     private isMasonReady;
     /** 引擎是否已因安全上限停止狼會議 */
     private isAborted;
