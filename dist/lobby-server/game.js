@@ -30,7 +30,7 @@ export class GameEngine {
     state;
     timers = [];
     countdownInterval;
-    /** 當日白天訊息序號（白天對話完整保留，無上限）。 */
+    /** 當日白天訊息序號；dayMessages 會因 50 則上限移出舊訊息。 */
     dayMessageSeq = 0;
     constructor(roomCode, players, callbacks, wolfMessageCap = 0) {
         this.roomCode = roomCode;
@@ -262,6 +262,8 @@ export class GameEngine {
             text,
             ...identity,
         });
+        if (this.state.dayMessages.length > 50)
+            this.state.dayMessages.shift();
         this.callbacks.broadcast({ type: 'MESSAGE', from: player.nickname, text, ts: Date.now() });
     }
     /** 人狼私頻（僅狼會議步驟可用、僅存活人狼可見）；累計訊息數，達安全上限 → 停止並報告 */
@@ -656,8 +658,8 @@ export class GameEngine {
                 id,
             });
         }
-        // 白天對話不限上限，完整保留（與 sendDayMessage 一致）。
-        return messages;
+        // 與 sendDayMessage 的 50 則上限保持一致；舊 snapshot 若更大，只保留最新片段。
+        return messages.slice(-50);
     }
     makeDayMessageId(day, seq) {
         return `day-${day}-${seq}`;

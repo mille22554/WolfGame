@@ -22,18 +22,6 @@ import {
 } from './ai-player.js';
 import type { GameEngine, GamePlayer, NightStep, WolfSubphase } from './game.js';
 import { Converter } from 'opencc-js';
-import {
-  buildJudgeMessages,
-  buildMergeMessages,
-  buildSpeechMessages,
-  buildStrategyMessages,
-  extractStyle,
-  formatBoard,
-  PREFECTURE,
-  withNoWait,
-  type NightPromptCtx,
-} from './night-prompts.js';
-import { parseJudge, parseStrategy, strategyBody, MAX_STRATEGY_ATTEMPTS } from './night-parse.js';
 
 /** OpenCC 簡轉繁（cn→tw）單例；expand 發布邊界強制轉換用（prompt 寫「全繁體中文」壓不住模型）。 */
 let openccTw: ((text: string) => string) | null = null;
@@ -50,6 +38,18 @@ export interface AiPlayerDef {
   clientId: string;
   nickname: string;
   characterId: string;
+}
+
+interface WolfDraft {
+  wolf: GamePlayer;
+  speech: string;
+  stance: string; // "投XXX" 或 "資訊不足"
+}
+
+interface MasonDraft {
+  mason: GamePlayer;
+  speech: string;
+  stance: string; // "準備好了" 或 "資訊不足"
 }
 
 export const AI_DAY_CHECKPOINT_SCHEMA_VERSION = 1;
@@ -171,7 +171,7 @@ export interface AiLogEntry {
   clientId: string;
   characterId: string;
   role: string;
-  kind: 'WOLF_SPEECH' | 'JUDGE' | 'WOLF_KILL' | 'SEER_CHECK' | 'GUARD_PROTECT' | 'MASON_TOGGLE' | 'MASON_SPEECH' | 'WOLF_ABORT' | 'DAY_STRATEGY' | 'DAY_SPEECH' | 'DAY_STANCE' | 'DAY_VOTE' | 'EXPAND' | 'WOLF_STRATEGY' | 'MASON_STRATEGY' | 'MEMORY_MERGE';
+  kind: 'WOLF_SPEECH' | 'JUDGE' | 'WOLF_STANCE' | 'WOLF_KILL' | 'SEER_CHECK' | 'GUARD_PROTECT' | 'MASON_TOGGLE' | 'MASON_SPEECH' | 'MASON_STANCE' | 'WOLF_ABORT' | 'DAY_STRATEGY' | 'DAY_SPEECH' | 'DAY_STANCE' | 'DAY_VOTE' | 'EXPAND';
   round: number;
   /** 第幾次嘗試（重試時 >1） */
   attempt: number;
@@ -194,10 +194,6 @@ interface AiEntry {
   def: AiPlayerDef;
   profile: CharacterProfile | null;
   knowledge: AiKnowledge;
-  /** 夜間策略記憶專區（記憶合併結果；錯誤/失敗時保留舊值） */
-  nightMemory: string;
-  /** 白天策略記憶專區（記憶合併結果；錯誤/失敗時保留舊值） */
-  dayMemory: string;
 }
 
 /** 記憶體中的 continuation；刻意只保存 checkpoint 的純資料欄位與 epoch guard。 */
@@ -218,6 +214,8 @@ interface AiDayContinuation {
 
 const MAX_LLM_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
+/** 共有者會議安全上限：白板累計 N 則 MASON_MESSAGE 未收斂 → 停止討論（強制 toggle ON 避免夜間卡死） */
+const MASON_MESSAGE_CAP = 100;
 
 export class AiController {
   private entries = new Map<string, AiEntry>();
@@ -233,10 +231,18 @@ export class AiController {
   private boardCursor: number = 0;
   /** judge 選言序號（WOLF_SPEECH_SELECTED.round；本夜遞增） */
   private selectionSeq: number = 0;
+  /** wolf clientId -> 是否 toggle ready ON（由攔截的 WOLF_READY 訊息維護） */
+  private wolfReadyMap = new Map<string, boolean>();
+  /** wolf clientId -> 當前 stance（"投XXX" / "資訊不足"） */
+  private wolfStanceMap = new Map<string, string>();
   /** 共有者白板（本夜全部 MASON_MESSAGE；每夜重置） */
   private masonBoard: { from: string; text: string }[] = [];
   /** 共有者 judge 選言序號（MASON_SPEECH_SELECTED.round；本夜遞增） */
   private masonSelectionSeq: number = 0;
+  /** mason clientId -> 是否 toggle ready ON（由攔截的 MASON_READY 訊息維護） */
+  private masonReadyMap = new Map<string, boolean>();
+  /** mason clientId -> 當前 stance（"準備好了" / "資訊不足"） */
+  private masonStanceMap = new Map<string, string>();
   /** 白天公頻訊息（本天；AI 知識用） */
   private dayBoard: { from: string; text: string }[] = [];
   /** AI clientId -> 是否準備投票 ON；每次 resume 以 GameEngine 狀態為準重建。 */
@@ -270,8 +276,6 @@ export class AiController {
           privateInfo: '',
           recentMessages: [],
         },
-        nightMemory: '',
-        dayMemory: '',
       });
     }
   }
@@ -757,9 +761,13 @@ export class AiController {
       // 新夜開始：重置白板、游標、judge 序號、ready 追蹤
       if (m.phase === 'NIGHT') {
         this.wolfBoard = [];
+        this.boardCursor = 0;
         this.selectionSeq = 0;
+        this.wolfReadyMap.clear();
         this.masonBoard = [];
         this.masonSelectionSeq = 0;
+        this.masonReadyMap.clear();
+        this.masonStanceMap.clear();
       }
       if (m.phase === 'DAY_DISCUSSION') {
         // Restore barrier：hold 時只更新上面的 phase/day，不碰 day state，也不啟動。
@@ -776,8 +784,14 @@ export class AiController {
       return;
     }
     if (m.type === 'NIGHT_RESULT') return; // 僅 phase 追蹤，無知識變更
-    if (m.type === 'WOLF_READY') return;
-    if (m.type === 'MASON_READY') return;
+    if (m.type === 'WOLF_READY') {
+      if (typeof m.clientId === 'string') this.wolfReadyMap.set(m.clientId, m.ready === true);
+      return;
+    }
+    if (m.type === 'MASON_READY') {
+      if (typeof m.clientId === 'string') this.masonReadyMap.set(m.clientId, m.ready === true);
+      return;
+    }
     if (m.type === 'WOLF_MESSAGE') {
       this.wolfBoard.push({ from: String(m.from ?? ''), text: String(m.text ?? '') });
     }
@@ -785,8 +799,8 @@ export class AiController {
       this.masonBoard.push({ from: String(m.from ?? ''), text: String(m.text ?? '') });
     }
     if (m.type === 'MESSAGE') {
-      // 白天公頻對話完整保留、不限上限（陣列長度即累計計數）
       this.dayBoard.push({ from: String(m.from ?? ''), text: String(m.text ?? '') });
+      if (this.dayBoard.length > 50) this.dayBoard.shift();
       return;
     }
     if (m.type !== 'WOLF_MESSAGE' && m.type !== 'MASON_MESSAGE' && m.type !== 'MESSAGE') return;
@@ -797,174 +811,225 @@ export class AiController {
     }
   }
 
-  // --- 狼會議／共有者會議：統一夜間會議 loop（status-first）---
+  // --- 狼會議（連續對話 loop，規格 §12.3 / §13.6） ---
 
-  /** 組 ctx（送給 buildStrategyMessages 等） */
-  private nightCtx(entry: AiEntry, player: GamePlayer, meeting: 'wolf' | 'mason'): NightPromptCtx {
-    const pId = player.clientId;
-    const alive = (this.game?.getPlayers() ?? []).filter((p) => p.alive).map((p) => p.nickname);
-    const isWolf = meeting === 'wolf';
-    const board = isWolf ? this.wolfBoard : this.masonBoard;
-    return {
-      meeting,
-      nickname: player.nickname,
-      prefecture: PREFECTURE[entry.def.characterId] ?? '東京都',
-      faction: isWolf ? '人狼' : '村人',
-      role: isWolf ? '人狼' : '共有者',
-      partners: [...entry.knowledge.partners],
-      style: extractStyle(entry.profile?.persona ?? ''),
-      dayNo: this.day,
-      alive,
-      targets: isWolf
-        ? (this.game?.getPlayers() ?? [])
-          .filter((p) => p.alive && p.clientId !== pId && p.role !== Role.WEREWOLF && p.role !== Role.MADMAN)
-          .map((p) => p.nickname)
-        : undefined,
-      madman: isWolf ? (entry.knowledge.madman ?? undefined) : undefined,
-      board: board.map((m) => ({ from: m.from, text: m.text })),
-      memory: entry.nightMemory.trim() ? entry.nightMemory.trim() : undefined,
-    };
-  }
-
-  /** 跑一輪策略 prompt：回傳經 validator 驗證的 {status,...}；失敗次數用完視為 wait */
-  private async runNightStrategy(
-    entry: AiEntry,
-    player: GamePlayer,
-    meeting: 'wolf' | 'mason',
-    priority: number,
-    noWait?: boolean,
-  ): Promise<{ status: 'speak' | 'wait' | 'ready'; reason: string; body: string; fullText: string } | null> {
-    const base = buildStrategyMessages(this.nightCtx(entry, player, meeting));
-    const prompts = noWait ? withNoWait(base) : base;
-    for (let attempt = 1; attempt <= MAX_STRATEGY_ATTEMPTS; attempt++) {
-      const response = await chat(prompts, { temperature: 1.0, reasoningEffort: 'medium', priority });
-      const parsed = response ? parseStrategy(response) : { ok: false as const, error: 'null' };
-      this.logEntry(player.clientId, meeting === 'wolf' ? 'WOLF_STRATEGY' : 'MASON_STRATEGY', this.day, attempt, prompts, response, { ok: parsed.ok, error: parsed.ok ? null : parsed.error });
-      if (parsed.ok) return { status: parsed.status, reason: parsed.reason, body: parsed.body, fullText: response! };
-    }
-    return null; // → wait
-  }
-
-  /** 策略 → judge → merge → speech 的完整 nightly 一轮（呼叫端給參與者）；回傳 publish 出去的發言 + 發言者/新 ready 集合 */
-  private async runNightRound(
-    participants: GamePlayer[],
-    meeting: 'wolf' | 'mason',
-    priorityOffset = 0,
-  ): Promise<{ speakerId: string | null; speak: { fullText: string; player: GamePlayer; status: 'speak' } | null }> {
-    if (!this.game) return { speakerId: null, speak: null };
-    // 1. 所有人各自出策略
-    const stratResults = await Promise.all(participants.map(async (p, i) => {
-      const entry = this.entries.get(p.clientId);
-      if (!entry) return { player: p, strat: null as null | { status: 'speak' | 'wait' | 'ready'; reason: string; body: string; fullText: string } };
-      const strat = await this.runNightStrategy(entry, p, meeting, 100 + priorityOffset + i);
-      return { player: p, strat };
-    }));
-    const speakers = stratResults.filter((r): r is { player: GamePlayer; strat: { status: 'speak'; reason: string; body: string; fullText: string } } => r.strat !== null && r.strat.status === 'speak');
-    // 如果這一輪沒人 speak
-    if (speakers.length === 0) return { speakerId: null, speak: null };
-
-    // 2. judge
-    let pick = speakers[0];
-    if (speakers.length >= 2) {
-      const ctx = this.nightCtx(this.entries.get(pick.player.clientId)!, pick.player, meeting);
-      const judgePrompts = buildJudgeMessages(ctx, speakers.map((s) => s.strat.fullText));
-      const response = await chat(judgePrompts, { temperature: 1.0, reasoningEffort: 'medium' });
-      this.logEntry(pick.player.clientId, 'JUDGE', this.day, 1, judgePrompts, response, null);
-      if (response) {
-        const best = parseJudge(response, speakers.length);
-        if (best >= 0) pick = speakers[best];
-      }
-    }
-
-    // 3. memory merge
-    const entry = this.entries.get(pick.player.clientId)!;
-    const mergePrompts = buildMergeMessages(meeting, entry.nightMemory, pick.strat.body || pick.strat.fullText);
-    const merged = await chat(mergePrompts, { temperature: 1.0, reasoningEffort: 'xhigh' });
-    this.logEntry(pick.player.clientId, 'MEMORY_MERGE', this.day, 1, mergePrompts, merged, null);
-    if (merged) entry.nightMemory = merged.trim();
-
-    // 4. speech
-    const speechPrompts = buildSpeechMessages(this.nightCtx(entry, pick.player, meeting), pick.strat.fullText);
-    let speech = '';
-    for (let attempt = 1; attempt <= MAX_LLM_RETRIES; attempt++) {
-      const response = await chat(speechPrompts, { temperature: 1.0, reasoningEffort: 'xhigh' });
-      this.logEntry(pick.player.clientId, meeting === 'wolf' ? 'WOLF_SPEECH' : 'MASON_SPEECH', this.day, attempt, speechPrompts, response, null);
-      if (response && response.trim()) { speech = response.trim(); break; }
-    }
-    if (!speech) speech = strategyBody(pick.strat.fullText);
-
-    return { speakerId: pick.player.clientId, speak: { fullText: speech, player: pick.player, status: 'speak' } };
-  }
-
-  /** 統一的夜間會議 loop（狼 / 共有者） */
-  private async runNightMeeting(meeting: 'wolf' | 'mason', round: number): Promise<void> {
-    const participants = meeting === 'wolf' ? this.getAiWolves() : this.getAiMasons();
-    if (participants.length === 0 || !this.game) return;
-    if (meeting === 'mason' && participants.length < 2) {
-      for (const m of participants) {
-        this.logEntry(m.clientId, 'MASON_TOGGLE', this.day, 1, [], null, null);
-        this.game.handleToggleMasonEndTurn(m.clientId);
-      }
-      return;
-    }
-
-    // 逐輪跑：每輪全部參與者各出策略（validator）；選出單一 speak → merge → speech publish
-    let lastSpeakerId: string | null = null;
-    let guard = 0;
-    let capReached = false;
-    while (!this.destroyed && !this.isAborted() && this.isNightMeetingActive(meeting) && guard < 150) {
-      guard++;
-      const active = participants.filter((p) => p.clientId !== lastSpeakerId);
-      if (this.messageCap > 0 && (meeting === 'wolf' ? this.wolfBoard : this.masonBoard).length >= this.messageCap) {
-        capReached = true;
-        break;
-      }
-      const { speakerId, speak } = await this.runNightRound(active, meeting, guard * 10);
-      if (!speak) {
-        // 沒人 speak：確認沒人還想 wait / ready 後收斂
-        const anyWaitOrReady = true; // 無 speak 即本輪收斂判定：交由 ready/wait 策略決定是否重出
-        break;
-      }
-      // publish
-      if (meeting === 'wolf') {
-        this.game.handleWolfChat(speakerId!, toTraditional(speak.fullText));
-        this.game.broadcastToWolves({ type: 'WOLF_SPEECH_SELECTED', round: this.selectionSeq++, from: speak.player.nickname, text: speak.fullText });
-      } else {
-        this.masonSelectionSeq++;
-        this.game.publishMasonSpeech(speakerId!, toTraditional(speak.fullText), this.masonSelectionSeq);
-      }
-      lastSpeakerId = speakerId;
-    }
-
-    if (this.isAborted()) {
-      this.logEntry('', 'WOLF_ABORT', this.day, 1, [], null, { count: this.game.getNightState().wolfMessageCount });
-      return;
-    }
-    // 熔斷語意：安全上限觸發、會議被強制終止——不做任何 ready/toggle 補償
-    if (capReached) return;
-    // 結束：wolf 全员 toggle ready；mason 全员 toggle ON
-    if (meeting === 'wolf') {
-      for (const w of participants) this.game.handleToggleWolfReady(w.clientId);
-    } else {
-      for (const m of participants) {
-        if (!this.isMasonReady(m.clientId)) this.game.handleToggleMasonEndTurn(m.clientId);
-      }
-    }
-  }
-
-  /** 夜間會議是否仍在對應階段 */
-  private isNightMeetingActive(meeting: 'wolf' | 'mason'): boolean {
-    if (!this.game) return false;
-    if (meeting === 'mason') return this.game.getNightState().nightStep === 'MASON';
-    return this.game.getNightState().wolfSubphase === 'DISCUSSION';
-  }
-
+  /** 狼會議 DISCUSSION：全狼獨立出草稿 → loop（judge 盲選發布 → 其他狼回應 → 收斂判斷） */
   private async runWolfDiscussion(round: number): Promise<void> {
-    return this.runNightMeeting('wolf', round);
+    const wolves = this.getAiWolves();
+    if (wolves.length === 0 || !this.game) return;
+    this.boardCursor = this.wolfBoard.length;
+
+    // ① 所有狼各自獨立出草稿（互不可見）
+    let drafts = await this.generateAllDrafts(wolves, round);
+    if (drafts.length === 0) return; // 全部 LLM 失敗
+
+    // Loop：② judge 盲選發布 → ③ 其他狼回應 → ④ 收斂判斷
+    let guard = 0;
+    while (this.game.getNightState().wolfSubphase === 'DISCUSSION' && !this.isAborted() && !this.destroyed) {
+      if (++guard > 150) break;
+
+      // ② Judge 盲選一篇（LLM 盲評）→ 發布 speech 到白板
+      const selected = await this.judgePickDraft(drafts, round);
+      if (!selected) break;
+      // ②.5 展開：把選中的草稿要點展開成完整發言（重試全失敗 → fallback 草稿原文，不阻塞會議）
+      const selectedEntry = this.entries.get(selected.wolf.clientId);
+      const expanded = selectedEntry ? await this.expandSpeech(selectedEntry, selected.speech, 'wolf') : selected.speech;
+      this.game.handleWolfChat(selected.wolf.clientId, expanded);
+      this.game.broadcastToWolves({
+        type: 'WOLF_SPEECH_SELECTED',
+        round: this.selectionSeq,
+        from: selected.wolf.nickname,
+        text: expanded,
+      });
+      // 記錄發言者的 stance + 本地 ready 追蹤（不呼叫 game.handleToggleWolfReady——會觸發 premature VOTING）
+      // stance 正規化：speech 已點名刀人目標但 stance 漏寫「投」前綴 → 補上，視為已承諾（避免發布者被誤判為資訊不足而強制重出稿）
+      const publishedStance = this.normalizePublishedStance(selected.wolf, expanded, selected.stance, selected.speech);
+      this.wolfStanceMap.set(selected.wolf.clientId, publishedStance);
+      if (publishedStance.startsWith('投')) {
+        this.wolfReadyMap.set(selected.wolf.clientId, true);
+        this.game.broadcastToWolves({ type: 'WOLF_READY', clientId: selected.wolf.clientId, ready: true });
+      }
+
+      // ③ 除發言者外所有狼讀白板 → 各自回應（全併發）
+      const newDrafts: WolfDraft[] = [];
+      await Promise.all(wolves.filter((w) => w.clientId !== selected.wolf.clientId).map(async (w, i) => {
+        if (this.destroyed || this.isAborted()) return;
+        const entry = this.entries.get(w.clientId);
+        if (!entry) return;
+        const resp = await this.wolfRespond(w, entry, expanded, round, 100 + i);
+        if (!this.game) return;
+        if (resp.type === 'vote') {
+          this.wolfStanceMap.set(w.clientId, `投${resp.target}`);
+          this.wolfReadyMap.set(w.clientId, true);
+          this.game.broadcastToWolves({ type: 'WOLF_READY', clientId: w.clientId, ready: true });
+        } else if (resp.type === 'speak') {
+          newDrafts.push({ wolf: w, speech: resp.speech, stance: resp.stance });
+          this.wolfStanceMap.set(w.clientId, resp.stance);
+          this.wolfReadyMap.set(w.clientId, false);
+          this.game.broadcastToWolves({ type: 'WOLF_READY', clientId: w.clientId, ready: false });
+        }
+      }));
+
+      // ④ 收斂判斷：全狼 ready 且沒人想再講
+      const allReady = wolves.every((w) => this.isWolfReady(w.clientId));
+      if (allReady && newDrafts.length === 0) break; // 收斂
+
+      if (newDrafts.length > 0) {
+        drafts = newDrafts; // 下一輪 judge 從新草稿中選
+      } else {
+        // 沒人出新草稿、但有狼「資訊不足」→ 強制那些狼發言
+        const waiting = wolves.filter((w) => !this.isWolfReady(w.clientId));
+        if (waiting.length === 0) break; // 安全：不該發生
+        drafts = await this.generateAllDrafts(waiting, round);
+        if (drafts.length === 0) break; // 全部失敗 → 停止
+      }
+    }
+    // 收斂後：同步 game state（觸發 VOTING 轉換）
+    for (const w of wolves) {
+      if (this.wolfReadyMap.get(w.clientId) === true) {
+        this.game.handleToggleWolfReady(w.clientId);
+      }
+    }
+    if (this.isAborted()) {
+      this.logEntry('', 'WOLF_ABORT', round, 1, [], null, { count: this.game.getNightState().wolfMessageCount });
+    }
   }
 
-  private async generateAllDraftsRemoved(): Promise<never> { throw new Error('removed'); }
+  /** 所有狼獨立出草稿（平行 LLM 呼叫；互不可見；失敗的狼跳過） */
+  private async generateAllDrafts(wolves: GamePlayer[], round: number): Promise<WolfDraft[]> {
+    const results = await Promise.all(wolves.map(async (w, i) => {
+      const entry = this.entries.get(w.clientId);
+      if (!entry) return null;
+      const prompts = this.buildDraftPrompts(entry);
+      const result = await this.llmWithRetry(w.clientId, 'WOLF_SPEECH', round, prompts, (p) =>
+        typeof p.speech === 'string' && p.speech.trim() && typeof p.stance === 'string' ? 'ok' : null, 100 + i);
+      if (result.value === null) return null;
+      return { wolf: w, speech: (result.parsed!.speech as string).trim(), stance: (result.parsed!.stance as string).trim() };
+    }));
+    return results.filter((r): r is WolfDraft => r !== null);
+  }
 
+  /** 組裝 judge 盲評 prompt：system「你是裁判，全盲評分以下發言，不考慮作者」；user 列出所有 speech（編號，不標作者），要求 JSON 回 {"scores":[...],"best":index} */
+  private buildJudgePrompts(
+    speeches: string[],
+    meeting: 'wolf' | 'mason' | 'day' = 'wolf',
+    ratings?: { importance?: number; urgency?: number; impact?: string }[],
+  ): ChatMessage[] {
+    const numbered = speeches.map((s, i) => {
+      const r = ratings?.[i];
+      const tag = r && (r.importance !== undefined || r.urgency !== undefined || r.impact)
+        ? ` [自評：重要性${r.importance ?? '?'}／急迫性${r.urgency ?? '?'}；預期影響：${r.impact ?? '未填'}]`
+        : '';
+      return `[${i + 1}]${tag}: ${s}`;
+    }).join('\n');
+    const sharedCriteria = [
+      `這是發言者私下的行動筆記，稍後會被展開成一篇發言並發到白板上。`,
+      `評分時請一併考慮：`,
+      `- 能否獨立成立：寫「等某人問完」「等那個問題拋出來」的筆記無法直接展開成成立的發言，要扣分。`,
+      `- 言行一致：寫「我不發言」「我沒有要補充」的筆記要扣分。`,
+      `- 是否引用了白板上已發言者的實際內容：有具體引用比泛泛表態更有價值。`,
+      `- 用詞是否日常：抽象比喻（接住、沉下去、裁判位、框架、安全牌）扣分。`,
+    ];
+    const dayOnlyCriteria = [
+      `- 公頻發言不能洩露筆記裡的私頻分工或欺騙計畫；但欺騙本身不扣分（角色本來就會演），只能寫成表面說法。`,
+      `- 有沒有新東西：只是把別人已經講過的話再講一遍，扣分。`,
+      `- 有沒有可核對的內容：說「我覺得他在演」但說不出他哪句話有問題，扣分。要點名、要引用、要講得出根據。`,
+      `  · 例外：占卜師報查驗結果（「昨晚查的誰，結果是狼」）本身就是證據，不需要再講怎麼查的，不用扣分。但「我確定不用再解釋」這類態度廢話照扣。`,
+      `- 有沒有實際動作：「我記住了」「我會注意」不算，除非講清楚記住之後要做什麼（要問誰、要聽哪一句、要投誰）。`,
+      `  · 「我記著，之後再講」必須同時講清楚觸發條件（誰講了什麼、發生了什麼事）。觸發條件必須是具體可能發生的事，「對不上的話」「有問題的話」這種空泛條件不算。`,
+      `- 是不是只定規矩不講遊戲：整篇都在格式要求，沒有對具體玩家下判斷、沒有引用具體發言、沒有推進討論的內容，扣分。`,
+      `  · 例外：定規矩如果有明確產出（例如「每個人一句話拿全場基線」），不扣。但只定規矩不講自己判斷的，扣。`,
+      `- 重要性自評：importance ≤3 或 impact 寫「無」的，優先過濾（除非其他篇更差）。`,
+      `  · 自評與內容不符的扣分：自評高分但內容只是「我要聽」「我記著」的，視為灌水。`,
+      `  · urgency 高的優先：現在不講就來不及的（例如被點名後必須回應、有人要帶錯方向），加分。`,
+    ];
+    const user = [
+      `以下是 ${speeches.length} 篇發言（不標明作者）：`,
+      numbered,
+      ...(meeting === 'day' ? sharedCriteria.concat(dayOnlyCriteria) : sharedCriteria),
+      `請給每篇打分（1-10 分），並選出最佳的一篇。`,
+      `回覆 JSON：{"scores": [n, n, ...], "best": index}`,
+      `（index 從 0 開始）`,
+    ].join('\n');
+    return [
+      { role: 'system', content: '你是裁判，全盲評分以下發言，不考慮作者' },
+      { role: 'user', content: user },
+    ];
+  }
+
+  /** Judge 盲評（LLM）：給所有 speech 打分（1-10），回最高分的 index；LLM 失敗 → 隨機 fallback（不阻塞）。
+   *  LLM 呼叫本身由 llmWithRetry 記錄 log。 */
+  private async judgeScoreIndex(
+    speeches: string[],
+    round: number,
+    meeting: 'wolf' | 'mason' | 'day' = 'wolf',
+    ratings?: { importance?: number; urgency?: number; impact?: string }[],
+  ): Promise<number> {
+    if (speeches.length <= 1) return 0;
+    const prompts = this.buildJudgePrompts(speeches, meeting, ratings);
+    const result = await this.llmWithRetry('', 'JUDGE', round, prompts, (p) =>
+      Array.isArray(p.scores) && p.scores.length === speeches.length ? 'ok' : null);
+    if (result.value !== null && result.parsed) {
+      const scores = (result.parsed.scores as unknown[]).map((s) => (typeof s === 'number' && Number.isFinite(s) ? s : 0));
+      let maxScore = -Infinity;
+      let idx = 0;
+      for (let i = 0; i < scores.length; i++) {
+        if (scores[i] > maxScore) { maxScore = scores[i]; idx = i; }
+      }
+      if (maxScore > 0) return idx;
+    }
+    // LLM 失敗或全 0 分 → 隨機 fallback（不阻塞）
+    return Math.floor(Math.random() * speeches.length);
+  }
+
+  /** Judge 盲選一篇草稿（LLM 全盲評分，不告知作者）→ 回選中的 draft */
+  private async judgePickDraft(drafts: WolfDraft[], round: number): Promise<WolfDraft | null> {
+    if (drafts.length === 0 || !this.game) return null;
+    if (drafts.length === 1) {
+      this.selectionSeq += 1;
+      this.logEntry('', 'JUDGE', round, 1, [], null, { picked: drafts[0].wolf.nickname, from: 1 });
+      return drafts[0];
+    }
+    const idx = await this.judgeScoreIndex(drafts.map((d) => d.speech), round, 'wolf');
+    this.selectionSeq += 1;
+    this.logEntry('', 'JUDGE', round, 1, [], null, { picked: drafts[idx].wolf.nickname, from: drafts.length });
+    return drafts[idx];
+  }
+
+  /** 發布稿 stance 正規化（對齊 spec §12.3：stance 只有「投XXX」或「資訊不足」二值）：
+   *  發布稿或草稿原文任一已明確點名刀人目標時，視為已承諾——補上「投<目標>」；沒有目標才維持原樣（資訊不足）。 */
+  private normalizePublishedStance(wolf: GamePlayer, speech: string, stance: string, fallbackSpeech?: string): string {
+    const s = stance.trim();
+    if (s.startsWith('投')) return s;
+    const targets = (this.game?.getPlayers() ?? [])
+      .filter((p) => p.alive && p.clientId !== wolf.clientId && p.role !== Role.WEREWOLF && p.role !== Role.MADMAN);
+    const named = targets.find((p) => speech.includes(p.nickname) || (fallbackSpeech?.includes(p.nickname) ?? false));
+    return named ? `投${named.nickname}` : s;
+  }
+
+  /** 非發言者狼讀白板後回應：vote / speak / wait */
+  private async wolfRespond(
+    w: GamePlayer,
+    entry: AiEntry,
+    publishedSpeech: string,
+    round: number,
+    priority?: number,
+  ): Promise<{ type: 'vote'; target: string } | { type: 'speak'; speech: string; stance: string } | { type: 'wait' }> {
+    const prompts = this.buildResponsePrompts(entry, publishedSpeech);
+    const result = await this.llmWithRetry(w.clientId, 'WOLF_STANCE', round, prompts, (p) => {
+      if (p.action === 'vote' && typeof p.target === 'string' && p.target) return 'ok';
+      if (p.action === 'speak' && typeof p.speech === 'string' && p.speech.trim() && typeof p.stance === 'string') return 'ok';
+      if (p.action === 'wait') return 'ok';
+      return null;
+    }, priority);
+    if (result.value === null) return { type: 'wait' }; // 失敗 → 視為等待（不阻塞）
+    const p = result.parsed!;
+    if (p.action === 'vote') return { type: 'vote', target: p.target as string };
+    if (p.action === 'speak') return { type: 'speak', speech: (p.speech as string).trim(), stance: (p.stance as string).trim() };
+    return { type: 'wait' };
+  }
+
+  /** 狼會議 VOTING：每隻 AI 狼 LLM 選刀人目標 → 提交 WOLF_KILL（全併發） */
   private async runWolfVoting(round: number): Promise<void> {
     const wolves = this.getAiWolves();
     await Promise.all(wolves.map(async (w, i) => {
@@ -981,10 +1046,134 @@ export class AiController {
     }));
   }
 
-  // --- 共有者會議 ---
+  // --- 共有者會議（連續對話 loop，與狼會議同構） ---
 
+  /** 共有者會議：雙共有者獨立出草稿 → loop（judge 盲選發布 → 另一人回應 → 收斂判斷） */
   private async runMasonDiscussion(): Promise<void> {
-    return this.runNightMeeting('mason', this.day);
+    const masons = this.getAiMasons();
+    if (masons.length === 0 || !this.game) return;
+    if (masons.length < 2) {
+      // 存活共有者不足 2 人：無會議，直接 toggle ON
+      for (const m of masons) {
+        this.logEntry(m.clientId, 'MASON_TOGGLE', this.day, 1, [], null, null);
+        this.game.handleToggleMasonEndTurn(m.clientId);
+      }
+      return;
+    }
+
+    // ① 所有共有者各自獨立出草稿（互不可見）
+    let drafts = await this.generateMasonDrafts(masons);
+    if (drafts.length === 0) {
+      // 全部 LLM 失敗：強制 toggle ON，避免夜間卡死
+      for (const m of masons) this.game.handleToggleMasonEndTurn(m.clientId);
+      return;
+    }
+
+    // Loop：② judge 盲選發布 → ③ 另一共有者回應 → ④ 收斂判斷
+    let guard = 0;
+    while (this.game.getNightState().nightStep === 'MASON' && !this.destroyed) {
+      if (++guard > 150) break;
+      if (this.messageCap > 0 && this.masonBoard.length >= this.messageCap) break; // 安全上限（僅測試）：停止討論
+
+      // ② Judge 盲選一篇（LLM 盲評）→ 發布 speech 到白板
+      const selected = await this.judgePickMasonDraft(drafts);
+      if (!selected) break;
+      // ②.5 展開：把選中的草稿要點展開成完整發言（重試全失敗 → fallback 草稿原文，不阻塞會議）
+      const selectedEntry = this.entries.get(selected.mason.clientId);
+      const expanded = selectedEntry ? await this.expandSpeech(selectedEntry, selected.speech, 'mason') : selected.speech;
+      this.game.publishMasonSpeech(selected.mason.clientId, expanded, this.masonSelectionSeq);
+      // 記錄發言者的 stance（toggle 延後到回應之後，避免引擎提前推進）
+      this.masonStanceMap.set(selected.mason.clientId, selected.stance);
+
+      // ③ 除發言者外所有共有者讀白板 → 各自回應
+      const newDrafts: MasonDraft[] = [];
+      for (const m of masons) {
+        if (this.destroyed) return;
+        if (m.clientId === selected.mason.clientId) continue; // 發言者不讀自己的話
+        const entry = this.entries.get(m.clientId);
+        if (!entry) continue;
+        const resp = await this.masonRespond(m, entry, expanded);
+        if (resp.type === 'vote') {
+          this.masonStanceMap.set(m.clientId, '準備好了');
+          if (!this.isMasonReady(m.clientId)) this.game.handleToggleMasonEndTurn(m.clientId);
+        } else if (resp.type === 'speak') {
+          newDrafts.push({ mason: m, speech: resp.speech, stance: resp.stance });
+          this.masonStanceMap.set(m.clientId, resp.stance);
+          if (this.isMasonReady(m.clientId)) this.game.handleToggleMasonEndTurn(m.clientId); // 發言＝還沒結束，撤回 ready 讓對方有機會回應
+        }
+        // 'wait' → 不出草稿，維持等待
+      }
+
+      // ③.5 發言者 toggle（在回應之後，避免引擎在對方回應前就推進）
+      if (selected.stance === '準備好了' && !this.isMasonReady(selected.mason.clientId)) {
+        this.game.handleToggleMasonEndTurn(selected.mason.clientId);
+      }
+
+      // ④ 收斂判斷：全部共有者 ready
+      const allReady = masons.every((m) => this.isMasonReady(m.clientId));
+      if (allReady) break;
+
+      if (newDrafts.length > 0) {
+        drafts = newDrafts; // 下一輪 judge 從新草稿中選
+      } else {
+        // 沒人出新草稿、但有共有者「資訊不足」→ 強制那些共有者發言
+        const waiting = masons.filter((m) => !this.isMasonReady(m.clientId));
+        if (waiting.length === 0) break; // 安全：不該發生
+        drafts = await this.generateMasonDrafts(waiting);
+        if (drafts.length === 0) break; // 全部失敗 → 停止
+      }
+    }
+    // 討論結束（收斂或安全停止）：確保所有共有者 toggle ON，讓夜間能推進
+    for (const m of masons) {
+      if (!this.isMasonReady(m.clientId)) this.game.handleToggleMasonEndTurn(m.clientId);
+    }
+  }
+
+  /** 所有共有者獨立出草稿（平行 LLM 呼叫；互不可見；失敗的跳過） */
+  private async generateMasonDrafts(masons: GamePlayer[]): Promise<MasonDraft[]> {
+    const results = await Promise.all(masons.map(async (m, i) => {
+      const entry = this.entries.get(m.clientId);
+      if (!entry) return null;
+      const prompts = this.buildMasonDraftPrompts(entry);
+      const result = await this.llmWithRetry(m.clientId, 'MASON_SPEECH', this.day, prompts, (p) =>
+        typeof p.speech === 'string' && p.speech.trim() && typeof p.stance === 'string' ? 'ok' : null, 100 + i);
+      if (result.value === null) return null;
+      return { mason: m, speech: (result.parsed!.speech as string).trim(), stance: (result.parsed!.stance as string).trim() };
+    }));
+    return results.filter((r): r is MasonDraft => r !== null);
+  }
+
+  /** Judge 盲選一篇共有者草稿（LLM 全盲評分，同 wolf judge）→ 回選中的 draft */
+  private async judgePickMasonDraft(drafts: MasonDraft[]): Promise<MasonDraft | null> {
+    if (drafts.length === 0 || !this.game) return null;
+    if (drafts.length === 1) {
+      this.masonSelectionSeq += 1;
+      return drafts[0];
+    }
+    const idx = await this.judgeScoreIndex(drafts.map((d) => d.speech), this.day, 'mason');
+    this.masonSelectionSeq += 1;
+    this.logEntry('', 'JUDGE', this.day, 1, [], null, { picked: drafts[idx].mason.nickname, from: drafts.length, meeting: 'mason' });
+    return drafts[idx];
+  }
+
+  /** 非發言者共有者讀白板後回應：vote / speak / wait */
+  private async masonRespond(
+    m: GamePlayer,
+    entry: AiEntry,
+    publishedSpeech: string,
+  ): Promise<{ type: 'vote'; target: string } | { type: 'speak'; speech: string; stance: string } | { type: 'wait' }> {
+    const prompts = this.buildMasonResponsePrompts(entry, publishedSpeech);
+    const result = await this.llmWithRetry(m.clientId, 'MASON_STANCE', this.day, prompts, (p) => {
+      if (p.action === 'vote' && typeof p.target === 'string' && p.target) return 'ok';
+      if (p.action === 'speak' && typeof p.speech === 'string' && p.speech.trim() && typeof p.stance === 'string') return 'ok';
+      if (p.action === 'wait') return 'ok';
+      return null;
+    });
+    if (result.value === null) return { type: 'wait' }; // 失敗 → 視為等待（不阻塞）
+    const p = result.parsed!;
+    if (p.action === 'vote') return { type: 'vote', target: p.target as string };
+    if (p.action === 'speak') return { type: 'speak', speech: (p.speech as string).trim(), stance: (p.stance as string).trim() };
+    return { type: 'wait' };
   }
 
   // --- 會議／白天討論通用：把選中的草稿要點展開成完整發言 ---
@@ -1359,13 +1548,12 @@ export class AiController {
     return (this.game?.getPlayers() ?? []).filter((p) => p.alive && this.isAi(p.clientId));
   }
 
-  /** mason ready：以 engine 真相為準（state.masonReady；與 handleToggleMasonEndTurn 同 map，每夜重置）。
-   * 注意：getDayState().dayReady 是白天「準備投票」狀態，夜間為前一日殘留，不能當 mason 結束回合的依據。
-   * game.ts 目前未以公開讀取口暴露 masonReady（getNightState() 無此欄位），先以結構 cast 直讀；
-   * 引擎日後若加正式讀取口（例如 getNightState() 增欄）應改回之。controller 不再持私有 shadow map。 */
+  private isWolfReady(clientId: string): boolean {
+    return this.wolfReadyMap.get(clientId) === true;
+  }
+
   private isMasonReady(clientId: string): boolean {
-    const engineState = (this.game as unknown as null | { state?: { masonReady?: Map<string, boolean> } })?.state;
-    return engineState?.masonReady?.get(clientId) === true;
+    return this.masonReadyMap.get(clientId) === true;
   }
 
   /** 引擎是否已因安全上限停止狼會議 */
@@ -1998,17 +2186,7 @@ export class AiController {
         idx = Math.floor(Math.random() * drafts.length);
       }
     } else {
-      // 夜間同款 judge：buildJudgeMessages 全盲評選草稿 → parseJudge（原始 best 為 1-based 篇號，回傳已轉 0-based；-1 失敗 → random fallback）
-      const first = drafts[0];
-      const ctx = this.nightCtx(this.entries.get(first.player.clientId)!, first.player, 'mason');
-      const judgePrompts = buildJudgeMessages(ctx, drafts.map((draft) => draft.speech));
-      const response = await chat(judgePrompts, { temperature: 1.0, reasoningEffort: 'medium' });
-      this.logEntry(first.player.clientId, 'JUDGE', this.day, 1, judgePrompts, response, null);
-      idx = Math.floor(Math.random() * drafts.length);
-      if (response) {
-        const best = parseJudge(response, drafts.length);
-        if (best >= 0 && best < drafts.length) idx = best;
-      }
+      idx = await this.judgeScoreIndex(drafts.map((draft) => draft.speech), this.day, 'day', drafts.map((draft) => ({ importance: draft.importance, urgency: draft.urgency, impact: draft.impact })));
     }
     if (!Number.isInteger(idx) || idx < 0 || idx >= drafts.length) idx = Math.floor(Math.random() * drafts.length);
     this.logEntry('', 'JUDGE', this.day, 1, [], null, { picked: drafts[idx].player.nickname, from: drafts.length, meeting: 'day' });
