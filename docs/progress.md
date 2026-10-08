@@ -55,15 +55,22 @@
 1. **[HIGH] source 落地** → 先修 `ai-controller.ts` 3 個 TS 錯（`wolfReadyMap`／`masonReadyMap` 殘留引用、被刪的 `judgeScoreIndex`），再收尾夜間 loop 替換＋落地測試＋拆 `sendDayMessage` 50 則截斷（對話不限上限；夜間 board 一併驗證無截斷）
 2. **[HIGH] 夜間落地測試** → mock LLM 覆蓋 judge／單人免 judge／validator 重試／wait 重問／收斂接投票／記憶寫入
 3. **[MED] @oracle 審查夜間流程** → 落地後再 commit＋push
-4. **[MED] 白天 prompt 直呼驗證** → 模板待補；白天四步 reasoning effort 逐次指定一併定
+4. **[MED] 白天 prompt 直呼驗證** → 模板待補；白天四步 reasoning effort 逐次指定一併定；另加形狀對照實驗（原形 vs 全塞 system＋策略扮 assistant，看收斂品質說話，不直接搬）
 5. **[LOW] 前端（ubuntu-web/）** → 等外部測試跑通完整一局再開
 6. **[HIGH] oracle-1 安全上限統一熔斷（已改）** → 定案：觸發即凍結受理＋輸出熔斷報告＋進程立即停止（不自動收斂；共有者強制 toggle 已刪）；source 熔斷退出路徑歸 Phase 1
-7. **[HIGH] oracle-2 System 段三方打架（未決）** → §13.5 system 含硬規則 vs §12.3／模板只有身分＋行事風格（code 測試站模板）；二選一：硬規則進模板，或標舊 builder 殘留待決
+7. **[HIGH] oracle-2 System 段三方打架（已改）** → 定案：§13.5 改寫成直呼落地版（system＝兩段，約束散見模板），code／模板不動；另見 system/user 設計討論（下）
 8. **[MED] oracle-3 狼刀全文 vs 最近訊息（未決）** → L317 全文 vs L534／code（`recentMessages` 上限 30 則）；修法＝L317 改最近 30 則
 9. **[MED] oracle-4 B 裝置 SSH 續行（未決）** → `\` 在 PS 5.1 靜默失效（pull＋restart 沒跑還不報錯）；修法＝B 塊收單行，A 塊保留
 10. **[MED] oracle-5 白天掛 source 現況不實（未決）** → code 白天仍是舊 stage machine；二選一：白天各處補【目標／待實作】先誠實標記，或等 code 追平
 11. **[MED] oracle-6 judge 全 0 分邊界（未決）** → spec 有、模板無、code 認 best；定案三方對齊（code 歸 Phase 1）
 12. **[LOW] oracle 小項（未決）** → L334 陣營二字、L649 混合局括號、L723「只有」→摘錄、模板 L247 半句；code 漂移三處（勝利行狂人／合併標題／最佳篇號）＋verbatim 缺口歸 Phase 1
+
+## 設計討論備忘（system／user，2026-10-08）
+
+- 通用設計：system＝立法（身分／紅線／格式，位階高、終端使用者不可見），user＝行政（當次材料＋任務）；judge 無 system（裁判只要材料）。
+- 本專案現狀是對的：身分住 system，任務住 user；靜態指令（規則／任務／提點／回覆要求）故意跟動態資料（進度／記憶）放同一段，保閱讀流與順序效應。
+- 否決案：靜態全塞 system＋策略扮 assistant——三坑：進度進 system 殺 prefix cache（每輪全量重算）；assistant 塞入選策略＝偽造歷史且常認領別人的稿（persona 污染＋斷頭假多輪）；換形狀＝重驗證。列入白天直呼對照實驗，不直接搬。
+- token 成本：AI 自架，不計；不動 prompt 的理由是保已驗證版本，不是省錢。
 
 ## 測試腳本用法
 
